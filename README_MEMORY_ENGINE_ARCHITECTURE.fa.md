@@ -1423,7 +1423,7 @@ Memorist مالک capture، پردازش، retrieval و attachment حافظه م
 
 [Model Context Protocol](https://github.com/modelcontextprotocol) از نظر معماری، این ایده را تقویت کرد که context، toolها و memory باید از طریق interfaceهای صریح، قابل audit و قابل کنترل ارائه شوند، نه از طریق prompt stuffing پنهان. Memorist فعلاً حول integration با Open WebUI ساخته شده است، اما معماری آن برای یک سطح tool-first یا MCP-facing در آینده آماده است.
 
-این مسیر مخصوصاً برای toolهای آینده Memorist مهم است:
+این مسیر مخصوصاً برای future external tool surface مهم است:
 
 ```text
 memorist_search_memory
