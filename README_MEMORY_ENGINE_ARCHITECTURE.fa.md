@@ -1394,3 +1394,117 @@ attachment مصرف کنترل‌شده حافظه در لحظه چت است.
 ```
 
 این معماری می‌خواهد کاری کند که مدل در پروژه‌های طولانی از صفر شروع نکند، اما هم‌زمان هر چیزی را هم کورکورانه به حافظه فعال تبدیل نکند. حافظه باید کمک کند، نه اینکه prompt را آلوده کند؛ باید زمینه بدهد، نه اینکه جای حقیقت بنشیند؛ باید قابل استفاده باشد، نه فقط آرشیو؛ و باید قابل فراموشی باشد، نه انباشت بی‌پایان.
+
+
+
+
+
+
+# موخره: پروژه‌های الهام‌بخش، منابع و جایگاه Memorist
+
+Memorist در خلأ شکل نگرفته است. این پروژه در نسبت با Open WebUI، در مقایسه با سیستم‌های جدید حافظه و context برای agentها، و بر اساس یک نیاز مشخص طراحی شد: ساخت یک موتور حافظه local-first و شاهدبنیاد برای کار طولانی‌مدت انسان با LLM.
+
+این پروژه، مگر در مواردی که مجوزها یا maintainers آن پروژه‌ها صراحتاً گفته باشند، وابسته، تأییدشده یا مشتق رسمی از پروژه‌های زیر نیست. نام آن‌ها در اینجا به‌عنوان نقطه الهام، مرجع مقایسه، سیستم مجاور یا contrast مهم ذکر می‌شود.
+
+## Open WebUI
+
+[Open WebUI](https://github.com/open-webui/open-webui) رابط مادر و هدف اصلی integration این نسخه است. جهت‌گیری local-first، extensible و self-hosted آن باعث شد Memorist به‌جای تبدیل شدن به یک محصول چت مستقل، به شکل یک runtime حافظه همراه طراحی شود.
+
+مرز معماری Memorist عمداً چنین تعریف شده است:
+
+```text
+Open WebUI مالک رابط چت و تجربه مدل اصلی است.
+Memorist مالک capture، پردازش، retrieval و attachment حافظه محلی است.
+```
+
+این جداسازی اجازه می‌دهد Open WebUI همان workbench کاربر باقی بماند و موتور حافظه مستقل از آن تکامل پیدا کند.
+
+## Model Context Protocol
+
+[Model Context Protocol](https://github.com/modelcontextprotocol) از نظر معماری، این ایده را تقویت کرد که context، toolها و memory باید از طریق interfaceهای صریح، قابل audit و قابل کنترل ارائه شوند، نه از طریق prompt stuffing پنهان. Memorist فعلاً حول integration با Open WebUI ساخته شده است، اما معماری آن برای یک سطح tool-first یا MCP-facing در آینده آماده است.
+
+این مسیر مخصوصاً برای toolهای آینده Memorist مهم است:
+
+```text
+memorist_search_memory
+memorist_get_project_context
+memorist_trace_decision
+memorist_explain_attachment
+memorist_forget_memory
+memorist_get_memory_graph
+```
+
+## Codebase-Memory MCP
+
+[Codebase-Memory MCP](https://github.com/DeusData/codebase-memory-mcp) مرجع مقایسه‌ای مهمی برای intelligence محلی و graph-native بود. دامنه آن متفاوت است: codebase را برای agentهای کدنویسی به یک گراف ساختاری پایدار تبدیل می‌کند. Memorist روی مکالمه، حافظه پروژه، ترجیح‌های کاربر، قواعد workflow، historyهای importشده و attachment کنترل‌شده به prompt تمرکز دارد.
+
+اما درس معماری آن مهم است:
+
+```text
+Codebase-Memory ساختار کد را شایسته گراف پایدار می‌داند.
+Memorist ساختار مکالمه را شایسته توپولوژی حافظه پایدار می‌داند.
+```
+
+از این جهت، Codebase-Memory نقش لایه Jakobson در Memorist را شفاف‌تر کرد. اگر Tree-sitter می‌تواند ساختار کد را برای agentهای کدنویسی parse کند، تحلیل جمله‌محور یاکوبسنی می‌تواند ساختار ارتباطی مکالمه را برای کار طولانی‌مدت انسان و LLM parse کند.
+
+## Letta / MemGPT
+
+[Letta](https://github.com/letta-ai/letta)، که پیش‌تر با نام MemGPT شناخته می‌شد، یکی از مراجع مهم در طراحی agentهای stateful و حافظه‌محور است. این پروژه اهمیت نگاه به حافظه به‌عنوان یک substrate عملیاتی را روشن می‌کند، نه صرفاً یک feature تزئینی برای chat history.
+
+تفاوت Memorist در مرز محصولی آن است. Memorist در اصل یک پلتفرم agent خودمختار نیست. Memorist یک runtime حافظه محلی برای chat workbenchهاست و نقش‌ها را صریحاً از هم جدا می‌کند:
+
+```text
+main chat
+preflight planning
+memory extraction
+embedding
+privacy sensitivity
+import reconstruction
+block compaction
+```
+
+این جداسازی نقش‌ها برای audit و privacy در Memorist مرکزی است.
+
+## Zep و Graphiti
+
+[Zep](https://github.com/getzep/zep) و [Graphiti](https://github.com/getzep/graphiti) مرجع‌های مهمی برای حافظه temporal و graph-oriented agentها هستند. آن‌ها نشان می‌دهند که حافظه بلندمدت فقط مسئله vector search نیست؛ روابط زمانی، اتصال entityها و contextهای در حال تغییر اهمیت دارند.
+
+Memorist از یک discipline مشابه اما متمایز استفاده می‌کند:
+
+```text
+حافظه canonical در SQLite یا PostgreSQL زندگی می‌کند.
+graph memory یک projection است.
+FalkorDB نقشه rebuildable حافظه است، نه source of truth.
+```
+
+این تمایز برای forget/residue و rebuild در Memorist حیاتی است.
+
+## Mem0
+
+[Mem0](https://github.com/mem0ai/mem0) مرجع مهمی برای memory layerهای production-oriented در agentهای هوش مصنوعی است. تمرکز آن بر به‌خاطر سپردن ترجیحات کاربر، سازگاری در طول زمان و کاهش context تکراری با مسئله Memorist هم‌پوشانی دارد.
+
+تمایز Memorist در pipeline ارتباط‌محور آن است. Memorist حافظه را فقط با salience detection عمومی استخراج نمی‌کند. ابتدا جمله را از نظر کارکرد ارتباطی تحلیل می‌کند، memory signal را بر اساس function و receiver route می‌کند، و سپس candidateهای شاهدبنیاد می‌سازد.
+
+## Cognee
+
+[Cognee](https://github.com/topoteretes/cognee) یک پلتفرم open-source مجاور برای memory agentهاست که ingestion، ساخت knowledge graph و حافظه پایدار را ترکیب می‌کند. این پروژه بخشی از حرکت کلی به سمت سیستم‌های context graph و graph-augmented memory است.
+
+تمرکز محدودتر Memorist، تبدیل evidence مکالمه به حافظه scoped، نسخه‌دار و قابل audit برای کار با Open WebUI است. در Memorist، گراف یکی از projectionهاست، نه کل سیستم حافظه.
+
+## Memorist چه چیزی اضافه می‌کند
+
+پروژه‌های بالا میدان مقایسه و الهام را شکل دادند، اما معماری Memorist آن‌ها را با فلسفه حافظه خاص خودش ترکیب می‌کند:
+
+```text
+پیام خام شاهد است.
+جمله واحد ارتباطی است.
+تحلیل یاکوبسنی parser مکالمه است.
+Memory signal routing قبل از extraction می‌آید.
+Candidateها تفسیرند، نه حقیقت.
+Memoryها claimهای نسخه‌دار و شاهدبنیادند.
+Graph، embedding، FTS و blockها projection هستند.
+Attachment مصرف کنترل‌شده حافظه است، نه mutation پرامپت.
+Forget باید residue را در projectionهای مختلف بررسی کند.
+```
+
+نتیجه این نیست که Memorist از همه این سیستم‌ها «بهتر» است. ادعای دقیق‌تر این است: Memorist یک موتور حافظه local-first برای کار انسان و LLM را بررسی و پیاده‌سازی می‌کند؛ جایی که معنای ارتباطی مکالمه، شاهد، scope، privacy، correction و مصرف کنترل‌شده حافظه در prompt، نگرانی‌های درجه اول معماری هستند.
