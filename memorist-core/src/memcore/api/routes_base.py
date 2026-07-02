@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -7,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from memcore.config import get_settings
+from memcore.config import Settings, get_settings
 from memcore.models import CreatorType, MessageRole, SessionStatus
 from memcore.openwebui.session_resolution import list_aliases
 from memcore.repositories import (
@@ -260,6 +261,16 @@ def create_message(request: MessageCreateRequest) -> dict[str, Any]:
 
 @router.get("/messages/{message_uuid}", response_model=None)
 def get_message(message_uuid: str) -> dict[str, Any]:
+    settings = get_settings()
+    if _is_full_postgres(settings):
+        with _pg_connection(settings) as connection:
+            message = connection.execute(
+                "SELECT * FROM messages WHERE message_uuid = %s",
+                (message_uuid,),
+            ).fetchone()
+            if message is None:
+                raise HTTPException(status_code=404, detail="message not found")
+            return _jsonable_dict(message)
     with _connection() as connection:
         message = MessageRepository(connection).get_message(message_uuid)
         if message is None:
@@ -269,6 +280,9 @@ def get_message(message_uuid: str) -> dict[str, Any]:
 
 @router.get("/messages/{message_uuid}/lineage", response_model=None)
 def message_lineage(message_uuid: str) -> dict[str, Any]:
+    settings = get_settings()
+    if _is_full_postgres(settings):
+        return _pg_message_lineage(settings, message_uuid)
     with _connection() as connection:
         message = MessageRepository(connection).get_message(message_uuid)
         if message is None:
@@ -329,6 +343,124 @@ def _connection() -> Iterator[Any]:
         yield connection
     finally:
         connection.close()
+
+
+def _is_full_postgres(settings: Settings) -> bool:
+    return settings.runtime_profile == "full" and settings.canonical_store == "postgres"
+
+
+@contextmanager
+def _pg_connection(settings: Settings) -> Iterator[Any]:
+    if not settings.postgres_dsn:
+        raise RuntimeError("postgres_dsn is required for Full Mode base routes")
+    psycopg = importlib.import_module("psycopg")
+    rows = importlib.import_module("psycopg.rows")
+    connection = psycopg.connect(settings.postgres_dsn, row_factory=rows.dict_row)
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
+def _pg_message_lineage(settings: Settings, message_uuid: str) -> dict[str, Any]:
+    with _pg_connection(settings) as connection:
+        message = connection.execute(
+            "SELECT * FROM messages WHERE message_uuid = %s",
+            (message_uuid,),
+        ).fetchone()
+        if message is None:
+            raise HTTPException(status_code=404, detail="message not found")
+        session = connection.execute(
+            "SELECT * FROM sessions WHERE session_uuid = %s",
+            (message["session_uuid"],),
+        ).fetchone()
+        text_units = _pg_rows(
+            connection,
+            "SELECT * FROM text_units WHERE message_uuid = %s ORDER BY unit_index",
+            (message_uuid,),
+        )
+        unit_uuids = [str(row["text_unit_uuid"]) for row in text_units]
+        candidates = _pg_rows_for_values(
+            connection,
+            "memory_candidates",
+            "text_unit_uuid",
+            unit_uuids,
+        )
+        attachments = _pg_rows(
+            connection,
+            "SELECT * FROM memory_context_attachments WHERE input_message_uuid = %s",
+            (message_uuid,),
+        )
+        events = _pg_rows(
+            connection,
+            "SELECT * FROM session_events WHERE session_uuid = %s ORDER BY event_index",
+            (message["session_uuid"],),
+        )
+        return {
+            "session": _jsonable_dict(session) if session else None,
+            "message": _jsonable_dict(message),
+            "message_versions": _pg_rows(
+                connection,
+                "SELECT * FROM message_versions WHERE message_uuid = %s ORDER BY version_number",
+                (message_uuid,),
+            ),
+            "events": events,
+            "text_units": text_units,
+            "gate_decisions": [],
+            "analyses": [],
+            "candidates": candidates,
+            "memories": _pg_memories_for_units(connection, unit_uuids),
+            "attachments": attachments,
+            "delivery_events": [],
+        }
+
+
+def _pg_memories_for_units(connection: Any, unit_uuids: list[str]) -> list[dict[str, Any]]:
+    if not unit_uuids:
+        return []
+    placeholders = ",".join("%s" for _ in unit_uuids)
+    return _pg_rows(
+        connection,
+        f"""
+        SELECT DISTINCT m.*
+        FROM memories m
+        JOIN memory_evidence_links mel ON mel.memory_uuid = m.memory_uuid
+        JOIN memory_candidates mc ON mc.candidate_uuid = mel.candidate_uuid
+        WHERE mc.text_unit_uuid IN ({placeholders})
+        ORDER BY m.created_at
+        """,
+        tuple(unit_uuids),
+    )
+
+
+def _pg_rows(connection: Any, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+    return [_jsonable_dict(row) for row in connection.execute(sql, params).fetchall()]
+
+
+def _pg_rows_for_values(
+    connection: Any,
+    table_name: str,
+    column_name: str,
+    values: list[str],
+) -> list[dict[str, Any]]:
+    if not values:
+        return []
+    placeholders = ",".join("%s" for _ in values)
+    return _pg_rows(
+        connection,
+        f"SELECT * FROM {table_name} WHERE {column_name} IN ({placeholders})",
+        tuple(values),
+    )
+
+
+def _jsonable_dict(row: Any) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in dict(row).items():
+        if hasattr(value, "isoformat"):
+            result[str(key)] = value.isoformat()
+        else:
+            result[str(key)] = value
+    return result
 
 
 def _rows(connection: Any, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
