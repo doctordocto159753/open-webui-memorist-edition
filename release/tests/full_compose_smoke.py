@@ -94,6 +94,8 @@ def _compose(argv: list[str], project_name: str, env: dict[str, str], timeout: i
         cwd=ROOT,
         env=env,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         timeout=timeout,
