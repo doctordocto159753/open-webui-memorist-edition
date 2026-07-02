@@ -1394,3 +1394,116 @@ Attachment is controlled memory consumption at chat time.
 ```
 
 The system is designed so the model does not start from zero in long-running work, while also preventing every piece of old conversation from becoming active truth. Memory should help, not pollute the prompt. It should provide context, not replace truth. It should be usable, not merely archived. And it should be forgettable, not an endless accumulation.
+
+
+# Afterword: Inspirations, References, and Positioning
+
+Memorist did not emerge in isolation. It was shaped through close work with Open WebUI, through comparison with recent memory and agent-context systems, and through a specific design need: to build a local-first, evidence-grounded memory engine for long-running human–LLM work.
+
+This project is not affiliated with, endorsed by, or derived from the projects listed below unless explicitly stated by their own licenses or maintainers. They are acknowledged here as reference points, inspirations, adjacent systems, or important contrasts.
+
+## Open WebUI
+
+[Open WebUI](https://github.com/open-webui/open-webui) is the parent interface and integration target for this edition. Its local-first, extensible, self-hosted orientation shaped the decision to keep Memorist as a companion memory runtime rather than a replacement chat product.
+
+Memorist follows this boundary deliberately:
+
+```text
+Open WebUI owns the chat interface and main model experience.
+Memorist owns local memory capture, processing, retrieval, and attachment.
+```
+
+This separation preserves Open WebUI as the user-facing workbench while allowing the memory engine to evolve independently.
+
+## Model Context Protocol
+
+The [Model Context Protocol](https://github.com/modelcontextprotocol) influenced the broader idea that context, tools, and memory should be exposed through explicit, auditable interfaces rather than hidden prompt stuffing. Memorist is currently implemented around Open WebUI integration, but its architecture is intentionally compatible with a future tool-first or MCP-facing surface.
+
+The MCP direction is especially relevant for future Memorist tools such as:
+
+```text
+memorist_search_memory
+memorist_get_project_context
+memorist_trace_decision
+memorist_explain_attachment
+memorist_forget_memory
+memorist_get_memory_graph
+```
+
+## Codebase-Memory MCP
+
+[Codebase-Memory MCP](https://github.com/DeusData/codebase-memory-mcp) was an important comparative reference for graph-native local intelligence. Its focus is different: it indexes source code into a persistent structural graph for AI coding agents. Memorist focuses on conversation, project memory, user preferences, workflow rules, imported histories, and controlled prompt attachment.
+
+The architectural lesson is still important:
+
+```text
+Codebase-Memory treats code structure as something that deserves a persistent graph.
+Memorist treats conversation structure as something that deserves a persistent memory topology.
+```
+
+In that sense, Codebase-Memory sharpened the role of the Memorist Jakobson layer. If Tree-sitter can parse code structure for coding agents, sentence-level Jakobson analysis can parse communication structure for long-running human–LLM work.
+
+## Letta / MemGPT
+
+[Letta](https://github.com/letta-ai/letta), formerly MemGPT, is a major reference point for stateful agents and memory-aware agent design. It helped clarify the importance of treating memory as an operational substrate rather than a cosmetic chat-history feature.
+
+Memorist differs in its product boundary. It is not primarily an autonomous agent platform. It is a local companion memory runtime for chat workbenches, with explicit separation between:
+
+```text
+main chat
+preflight planning
+memory extraction
+embedding
+privacy sensitivity
+import reconstruction
+block compaction
+```
+
+This role separation is central to Memorist’s audit and privacy model.
+
+## Zep and Graphiti
+
+[Zep](https://github.com/getzep/zep) and [Graphiti](https://github.com/getzep/graphiti) are important references for temporal and graph-oriented agent memory. They demonstrate that long-term memory is not only a vector-search problem; temporal relationships, entity links, and evolving context matter.
+
+Memorist adopts a related but distinct discipline:
+
+```text
+Canonical memory lives in SQLite or PostgreSQL.
+Graph memory is a projection.
+FalkorDB is a rebuildable memory map, not the source of truth.
+```
+
+This distinction is central to Memorist’s forget/residue and rebuild logic.
+
+## Mem0
+
+[Mem0](https://github.com/mem0ai/mem0) is a relevant reference for production-oriented memory layers for AI agents. Its emphasis on remembering user preferences, adapting over time, and reducing repeated context work overlaps with Memorist’s problem space.
+
+Memorist’s differentiator is its communication-first extraction pipeline. Rather than treating memory extraction as generic salience detection, Memorist starts with sentence-level communicative analysis, routes memory signals by function and receiver, and only then produces evidence-linked candidates.
+
+## Cognee
+
+[Cognee](https://github.com/topoteretes/cognee) is an adjacent open-source memory platform that combines ingestion, knowledge graph construction, and persistent agent memory. It is relevant as part of the broader movement toward graph-augmented context systems.
+
+Memorist’s narrower focus is the transformation of conversational evidence into scoped, versioned, auditable memory for Open WebUI-oriented work. Its graph layer is one projection among several, not the whole memory system.
+
+## What Memorist adds
+
+The projects above informed the field of comparison, but Memorist’s architecture combines them with a specific memory philosophy:
+
+```text
+Raw messages are evidence.
+Sentences are communicative units.
+Jakobson analysis is the conversation parser.
+Memory signal routing precedes extraction.
+Candidates are interpretations, not truths.
+Memories are versioned, evidence-linked claims.
+Graphs, embeddings, FTS, and blocks are projections.
+Attachments are controlled memory use, not prompt mutation.
+Forget must include residue checks across projections.
+```
+
+The result is not a general claim that Memorist is “better” than these systems. It is a narrower claim: Memorist explores a local-first memory engine for human–LLM work where conversational meaning, evidence, scope, privacy, correction, and controlled prompt use are first-class architectural concerns.
+
+
+
