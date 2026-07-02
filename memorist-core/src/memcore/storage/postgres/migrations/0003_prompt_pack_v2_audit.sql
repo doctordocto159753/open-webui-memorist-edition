@@ -43,6 +43,22 @@ ON prompt_execution_runs(workspace_uuid, project_uuid, session_uuid, created_at)
 CREATE INDEX IF NOT EXISTS idx_prompt_execution_runs_message
 ON prompt_execution_runs(message_uuid, created_at);
 
+CREATE TABLE IF NOT EXISTS memory_block_build_runs (
+    block_build_run_uuid TEXT PRIMARY KEY,
+    block_uuid TEXT NOT NULL REFERENCES memory_blocks(block_uuid),
+    builder_version TEXT NOT NULL,
+    source_snapshot_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    trigger_type TEXT NOT NULL,
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    raw_output_ijson TEXT,
+    validation_errors_ijson TEXT,
+    error_text TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    schema_version INTEGER NOT NULL DEFAULT 1
+);
+
 ALTER TABLE jakobson_analysis_runs ADD COLUMN IF NOT EXISTS prompt_execution_uuid TEXT;
 ALTER TABLE memory_signal_routes ADD COLUMN IF NOT EXISTS prompt_execution_uuid TEXT;
 ALTER TABLE memory_candidates ADD COLUMN IF NOT EXISTS prompt_execution_uuid TEXT;
