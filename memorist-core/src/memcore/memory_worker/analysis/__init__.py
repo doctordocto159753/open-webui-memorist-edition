@@ -1,0 +1,1 @@
+"""Structured linguistic analysis stage."""

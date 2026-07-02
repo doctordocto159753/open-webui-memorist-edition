@@ -1,0 +1,31 @@
+services:
+  memorist-core:
+    build:
+      context: ./memorist-core
+    env_file:
+      - .env.example
+    environment:
+      MEMORIST_DB_PATH: /data/memorist.sqlite
+      MEMORIST_OBJECT_STORE_PATH: /data/objects
+      MEMORIST_GRAPH_BACKEND: disabled
+      MEMORIST_ENABLE_OPENWEBUI_ADAPTER: "true"
+    ports:
+      - "${MEMORIST_PORT:-8777}:8777"
+    volumes:
+      - memorist-smoke-core-data:/data
+
+  open-webui:
+    image: ${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.9.6}
+    ports:
+      - "${OPENWEBUI_PORT:-3000}:8080"
+    environment:
+      WEBUI_AUTH: "false"
+    volumes:
+      - openwebui-smoke-data:/app/backend/data
+      - ./open-webui-integration/memorist:/memorist-integration:ro
+    depends_on:
+      - memorist-core
+
+volumes:
+  memorist-smoke-core-data:
+  openwebui-smoke-data:

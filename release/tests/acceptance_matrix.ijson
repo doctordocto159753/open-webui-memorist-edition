@@ -1,0 +1,46 @@
+{
+  "release_candidate": "v0.2.0-beta.1-candidate",
+  "required_gates": [
+    "ruff",
+    "mypy",
+    "pytest_core",
+    "model_control_tests",
+    "memory_worker_prompt_pack_test",
+    "version_consistency",
+    "source_package_scan",
+    "openwebui_contract_tests",
+    "daily_use_smoke",
+    "heavy_import_ci_small",
+    "heritage_roundtrip",
+    "forget_residue",
+    "consistency_check",
+    "recovery_tests",
+    "rc_package_schema",
+    "package_forbidden_scan"
+  ],
+  "manual_or_optional_checks": [
+    "heavy_import_small_heavy",
+    "heavy_import_local_heavy",
+    "openwebui_container_smoke"
+  ],
+  "placeholder_not_release_evidence": [
+    "lite_smoke",
+    "full_smoke",
+    "import_smoke",
+    "privacy_smoke",
+    "preflight_smoke"
+  ],
+  "manual_checks": [
+    "UI first-run wizard",
+    "Memorist icon visible",
+    "Open WebUI branding preserved",
+    "Settings are understandable",
+    "Import wizard understandable",
+    "Cost warning clear",
+    "Forget warning clear",
+    "Diagnostics useful",
+    "Docs match actual package",
+    "Restart behavior understandable",
+    "Optional pinned Open WebUI container smoke"
+  ]
+}

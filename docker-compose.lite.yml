@@ -1,0 +1,25 @@
+services:
+  memorist-core:
+    build:
+      context: ./memorist-core
+    env_file:
+      - .env.example
+    environment:
+      MEMORIST_RUNTIME_PROFILE: lite
+      MEMORIST_CANONICAL_STORE: sqlite
+      MEMORIST_DB_PATH: /data/memorist.sqlite
+      MEMORIST_OBJECT_STORE_PATH: /data/objects
+      MEMORIST_GRAPH_BACKEND: disabled
+      MEMORIST_HOT_SCHEDULER: disabled
+      MEMORIST_ATTACHMENT_MAX_TOKENS: ${MEMORIST_ATTACHMENT_MAX_TOKENS:-1800}
+      MEMORIST_ATTACHMENT_CONTEXT_RATIO: ${MEMORIST_ATTACHMENT_CONTEXT_RATIO:-0.10}
+      MEMORIST_ATTACHMENT_MIN_TOKENS: ${MEMORIST_ATTACHMENT_MIN_TOKENS:-256}
+      MEMORIST_ATTACHMENT_RESERVED_COMPLETION_TOKENS: ${MEMORIST_ATTACHMENT_RESERVED_COMPLETION_TOKENS:-1024}
+      MEMORIST_ATTACHMENT_FALLBACK_CONTEXT_WINDOW: ${MEMORIST_ATTACHMENT_FALLBACK_CONTEXT_WINDOW:-8192}
+    ports:
+      - "${MEMORIST_PORT:-8777}:8777"
+    volumes:
+      - memorist-core-data:/data
+
+volumes:
+  memorist-core-data:

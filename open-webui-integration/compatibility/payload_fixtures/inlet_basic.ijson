@@ -1,0 +1,1 @@
+{"conversation_id":"chat-1","model":"llama3","model_context_window":8192,"messages":[{"role":"system","content":"parent system"},{"role":"user","id":"u1","content":"hello"}],"metadata":{"client_session_nonce":"nonce-1"}}

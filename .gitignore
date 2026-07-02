@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual environments and package state
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Local configuration and data
+.env
+.env.*
+!.env.example
+data/
+memorist-core/data/
+memorist-core/eval-runs/
+memorist-core/perf-runs/
+*.sqlite
+*.sqlite-*
+*.log
+
+# Generated release outputs
+release/rc/*.zip
+release/rc/*.sha256
+release/rc/memorist-openwebui-*/
+release/build/
+release/artifacts/logs/
+release/source/
+
+# Editors and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

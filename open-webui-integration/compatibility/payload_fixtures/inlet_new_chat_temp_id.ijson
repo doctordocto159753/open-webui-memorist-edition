@@ -1,0 +1,1 @@
+{"temporary_chat_id":"tmp-chat-1","model":"small-local","model_context_window":4096,"messages":[{"role":"user","id":"u1","content":"first message before stable chat id"}],"metadata":{"client_session_nonce":"nonce-temp-1"}}

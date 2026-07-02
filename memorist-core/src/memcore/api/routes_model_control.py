@@ -1,0 +1,188 @@
+from __future__ import annotations
+
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Query
+
+from memcore.config import get_settings
+from memcore.model_control.registry import provider_for_profile
+from memcore.model_control.repository import (
+    ModelControlRepository,
+    PrivacyAcknowledgementRequired,
+    built_in_default,
+    public_profile,
+)
+from memcore.model_control.roles import list_role_specs
+from memcore.model_control.schemas import (
+    CostEstimateRequest,
+    ModelProfileCreate,
+    ModelProfilePatch,
+    ModelRoleDefaultSet,
+    PrivacyAcknowledgementRequest,
+    ProfileTestRequest,
+)
+from memcore.model_control.security import sanitize_error_message
+from memcore.storage.migrations import apply_migrations
+from memcore.storage.sqlite import connect
+
+router = APIRouter(prefix="/memcore/model-control", tags=["Model Control Plane"])
+
+
+@router.get("/roles", response_model=None)
+def list_roles() -> dict[str, Any]:
+    return {"items": list_role_specs()}
+
+
+@router.get("/profiles", response_model=None)
+def list_profiles(role: str | None = Query(default=None)) -> dict[str, Any]:
+    with _connection() as connection:
+        try:
+            profiles = ModelControlRepository(connection).list_profiles(role)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return {"items": [public_profile(profile) for profile in profiles]}
+
+
+@router.post("/profiles", response_model=None)
+def create_profile(request: ModelProfileCreate) -> dict[str, Any]:
+    with _connection() as connection:
+        try:
+            profile = ModelControlRepository(connection).create_profile(request)
+            return public_profile(profile)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.get("/profiles/{model_profile_uuid}", response_model=None)
+def get_profile(model_profile_uuid: str) -> dict[str, Any]:
+    with _connection() as connection:
+        profile = ModelControlRepository(connection).get_profile(model_profile_uuid)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="model profile not found")
+        return public_profile(profile)
+
+
+@router.patch("/profiles/{model_profile_uuid}", response_model=None)
+def patch_profile(model_profile_uuid: str, request: ModelProfilePatch) -> dict[str, Any]:
+    with _connection() as connection:
+        try:
+            profile = ModelControlRepository(connection).patch_profile(model_profile_uuid, request)
+            return public_profile(profile)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/profiles/{model_profile_uuid}/test", response_model=None)
+def test_profile(model_profile_uuid: str, request: ProfileTestRequest) -> dict[str, Any]:
+    with _connection() as connection:
+        repository = ModelControlRepository(connection)
+        profile = repository.get_profile(model_profile_uuid)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="model profile not found")
+        provider = provider_for_profile(profile)
+        health = provider.health_check(timeout_seconds=request.timeout_ms / 1000)
+        repository.record_health_event(model_profile_uuid, health)
+        return {
+            "model_profile_uuid": model_profile_uuid,
+            "health": health.model_dump(mode="json"),
+        }
+
+
+@router.get("/defaults", response_model=None)
+def get_defaults(
+    role: str | None = None,
+    workspace_uuid: str | None = None,
+    project_uuid: str | None = None,
+) -> dict[str, Any]:
+    with _connection() as connection:
+        repository = ModelControlRepository(connection)
+        if role is not None:
+            try:
+                resolved = repository.resolve_default(role, workspace_uuid, project_uuid)
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return {"item": resolved or built_in_default(role)}
+        return {
+            "items": [
+                {
+                    "role": row["role"],
+                    "model_profile_uuid": row["model_profile_uuid"],
+                    "workspace_uuid": row["workspace_uuid"],
+                    "project_uuid": row["project_uuid"],
+                    "created_at": row["created_at"],
+                }
+                for row in connection.execute(
+                    """
+                    SELECT *
+                    FROM model_role_defaults
+                    ORDER BY role, COALESCE(workspace_uuid, ''), COALESCE(project_uuid, '')
+                    """
+                )
+            ]
+        }
+
+
+@router.post("/defaults", response_model=None)
+def set_default(request: ModelRoleDefaultSet) -> dict[str, Any]:
+    with _connection() as connection:
+        try:
+            return ModelControlRepository(connection).set_default(
+                request.role,
+                request.model_profile_uuid,
+                workspace_uuid=request.workspace_uuid,
+                project_uuid=request.project_uuid,
+            )
+        except PrivacyAcknowledgementRequired as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.get("/usage", response_model=None)
+def get_usage() -> dict[str, Any]:
+    with _connection() as connection:
+        return ModelControlRepository(connection).usage_summary()
+
+
+@router.get("/health", response_model=None)
+def get_model_control_health() -> dict[str, Any]:
+    with _connection() as connection:
+        return ModelControlRepository(connection).health()
+
+
+@router.get("/privacy", response_model=None)
+def get_privacy_matrix() -> dict[str, Any]:
+    with _connection() as connection:
+        return ModelControlRepository(connection).privacy_matrix()
+
+
+@router.post("/privacy/acknowledge", response_model=None)
+def acknowledge_privacy(request: PrivacyAcknowledgementRequest) -> dict[str, Any]:
+    with _connection() as connection:
+        try:
+            return ModelControlRepository(connection).acknowledge_privacy(request)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/estimate-cost", response_model=None)
+def estimate_cost(request: CostEstimateRequest) -> dict[str, Any]:
+    with _connection() as connection:
+        try:
+            return ModelControlRepository(connection).estimate_cost(request)
+        except ValueError as error:
+            detail = sanitize_error_message(str(error))
+            raise HTTPException(status_code=400, detail=detail) from error
+
+
+@contextmanager
+def _connection() -> Iterator[Any]:
+    settings = get_settings()
+    connection = connect(settings.db_path)
+    try:
+        apply_migrations(connection)
+        yield connection
+    finally:
+        connection.close()

@@ -1,0 +1,45 @@
+{
+  "release_candidate": "v0.2.0-beta.1-candidate",
+  "required_real_gates": [
+    "ruff",
+    "mypy",
+    "pytest_core",
+    "model_control_tests",
+    "memory_worker_prompt_pack_test",
+    "version_consistency",
+    "source_package_scan",
+    "openwebui_contract_tests",
+    "daily_use_smoke",
+    "heavy_import_ci_small",
+    "heritage_roundtrip",
+    "forget_residue",
+    "consistency_check",
+    "recovery_tests",
+    "rc_package_schema",
+    "package_forbidden_scan"
+  ],
+  "manual_or_optional_checks": [
+    "heavy_import_small_heavy",
+    "heavy_import_local_heavy",
+    "openwebui_container_smoke"
+  ],
+  "placeholder_not_release_evidence": [
+    "lite_smoke",
+    "full_smoke",
+    "smoke_import",
+    "smoke_privacy",
+    "smoke_preflight"
+  ],
+  "manual_checks": [
+    "Start Lite package",
+    "Verify health endpoint",
+    "Install Open WebUI filter/function from local files",
+    "Create new chat without stable chat ID and confirm alias promotion after stable ID appears",
+    "Confirm original user prompt remains unchanged",
+    "Confirm memory context appears as separate untrusted message",
+    "Run optional pinned Open WebUI container smoke",
+    "Export and verify rich Heritage package",
+    "Run privacy erasure preview and execute in a disposable DB",
+    "Restart and confirm local data persists"
+  ]
+}

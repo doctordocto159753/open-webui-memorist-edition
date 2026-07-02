@@ -1,0 +1,10 @@
+﻿{
+  "name": "memorist-memory-filter",
+  "version": "0.2.0-beta.1",
+  "type": "openwebui-filter",
+  "local_only": true,
+  "entrypoint": "memorist_memory_filter.py",
+  "requires_trusted_server_side_code": true,
+  "permissions": ["http://localhost", "http://memorist-core", "http://host.docker.internal"],
+  "description": "Fail-open Memorist preflight memory attachment filter for Open WebUI."
+}

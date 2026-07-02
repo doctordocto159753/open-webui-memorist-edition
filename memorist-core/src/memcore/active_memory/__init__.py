@@ -1,0 +1,1 @@
+"""Active Memory Block materialization."""

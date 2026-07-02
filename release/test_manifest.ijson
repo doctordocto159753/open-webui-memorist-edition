@@ -1,0 +1,249 @@
+{
+  "tests": [
+    {
+      "name": "ruff",
+      "path": "memorist-core",
+      "classification": "real",
+      "may_block_release": true,
+      "reason": "Runs uv-managed ruff over core source and tests via make check."
+    },
+    {
+      "name": "mypy",
+      "path": "memorist-core/src/memcore",
+      "classification": "real",
+      "may_block_release": true,
+      "reason": "Runs strict mypy over packaged core source via make check."
+    },
+    {
+      "name": "pytest_core",
+      "path": "memorist-core/tests",
+      "classification": "real",
+      "may_block_release": true,
+      "reason": "Exercises health, config, migrations, repositories, memory, retrieval, governance, import, security, Open WebUI integration, daily-use hardening, and heavy-import readiness."
+    },
+    {
+      "name": "model_control_tests",
+      "path": "memorist-core/tests/test_model_control_plane.py",
+      "classification": "real",
+      "may_block_release": true,
+      "reason": "Verifies model roles, profile CRUD, privacy acknowledgement, defaults, usage, preflight fail-open, extraction lifecycle, embedding re-index marking, OpenAPI, UI contract, and docs."
+    },
+    {
+      "name": "memory_worker_prompt_pack_test",
+      "path": "memorist-core/tests/test_memory_worker_prompt_pack.py",
+      "classification": "real",
+      "may_block_release": true,
+      "reason": "Blocks release unless all memory-worker system prompts are registered, output contracts validate, safety constraints hold, and invocation hashes are persisted."
+    },
+    {
+      "name": "version_consistency",
+      "path": "release/tests/version_consistency.py",
+      "classification": "real",
+      "may_block_release": true,
+      "reason": "Verifies source/package/schema metadata, RC internal VERSION.ijson, checksum, README version line, and stale historical package references."
+    },
+    {
+      "name": "source_package_scan",
+      "path": "release/tests/source_package_scan.py",
+      "classification": "real",
+      "may_block_release": true,
+      "reason": "Builds the source ZIP, generates source-package-manifest.ijson, excludes dirty runtime artifacts, and scans the source package."
+    },
+    {
+      "name": "openwebui_contract_tests",
+      "path": "open-webui-integration/memorist/tests",
+      "classification": "real",
+      "may_block_release": true,
+      "reason": "Exercises Filter inlet/outlet parser contract, fail-open behavior, attachment separation, and idempotent capture fixtures."
+    },
+    {
+      "name": "daily_use_smoke",
+      "path": "release/tests/daily_use_smoke.py",
+      "classification": "real",
+      "may_block_release": true,
+      "reason": "Runs a real local FastAPI smoke covering health, base APIs, Open WebUI capture, adaptive budget, and diagnostics via make smoke-daily."
+    },
+    {
+      "name": "heavy_import_ci_small",
+      "path": "release/tests/heavy_import_smoke.py --mode ci-small",
+      "classification": "real",
+      "may_block_release": true,
+      "reason": "CI-sized heavy import gate using synthetic Open WebUI archive, actor-batched commit, duplicate re-import, live capture, and consistency check."
+    },
+    {
+      "name": "heritage_roundtrip",
+      "path": "release/tests/heritage_roundtrip.py",
+      "classification": "real",
+      "may_block_release": true,
+      "reason": "Runs rich Heritage export/verify/restore/tamper checks over workspace, session, messages, memory lineage, attachments, import metadata, privacy receipt, and FTS rebuild."
+    },
+    {
+      "name": "forget_residue",
+      "path": "release/tests/forget_residue.py",
+      "classification": "real",
+      "may_block_release": true,
+      "reason": "Runs preview/confirm/execute forget flow and verifies multi-layer memory-derived residue is removed without returning raw content in receipts."
+    },
+    {
+      "name": "consistency_check",
+      "path": "release/tests/consistency_check.py",
+      "classification": "real",
+      "may_block_release": true,
+      "reason": "Runs the consistency checker, writes I-JSON/Markdown reports, and audits remaining direct-write locations."
+    },
+    {
+      "name": "recovery_tests",
+      "path": "release/tests/recovery_tests.py",
+      "classification": "real",
+      "may_block_release": true,
+      "reason": "Exercises SQLite backup and recovery of interrupted import, privacy, and job operations."
+    },
+    {
+      "name": "rc_package_schema",
+      "path": "release/tests/rc_package_schema.py",
+      "classification": "real",
+      "may_block_release": true,
+      "reason": "Opens the generated RC ZIP and verifies VERSION.ijson schema_version, package manifest, forbidden-file scan, and checksum digest."
+    },
+    {
+      "name": "package_forbidden_scan",
+      "path": "release.scan_forbidden_files",
+      "classification": "real",
+      "may_block_release": true,
+      "reason": "Scans release package for cache artifacts, local DB/env files, pyc files, and secret-like content."
+    },
+    {
+      "name": "heavy_import_small_heavy",
+      "path": "release/tests/heavy_import_smoke.py --mode small-heavy",
+      "classification": "manual-real",
+      "may_block_release": false,
+      "reason": "Local stress profile for 1k synthetic conversations; not counted as CI release evidence."
+    },
+    {
+      "name": "heavy_import_local_heavy",
+      "path": "release/tests/heavy_import_smoke.py --mode local-heavy",
+      "classification": "manual-real",
+      "may_block_release": false,
+      "reason": "Operator-only 10k-conversation heavy import profile; skipped unless explicitly run."
+    },
+    {
+      "name": "openwebui_container_smoke",
+      "path": "release/tests/openwebui_container_smoke.py",
+      "classification": "manual-only",
+      "may_block_release": false,
+      "reason": "Optional pinned Open WebUI container smoke; default report is skipped, not passed, because Filter installation remains manual for beta."
+    },
+    {
+      "name": "full_postgres_canonical_smoke",
+      "path": "release/tests/full_postgres_canonical_smoke.py",
+      "classification": "manual-real",
+      "may_block_release": false,
+      "reason": "External PostgreSQL canonical-source smoke; required for Full beta certification, skipped gates block Full certification but not Lite baseline."
+    },
+    {
+      "name": "full_postgres_job_concurrency",
+      "path": "release/tests/full_postgres_job_concurrency.py",
+      "classification": "manual-real",
+      "may_block_release": false,
+      "reason": "External PostgreSQL SKIP LOCKED jobs/outbox concurrency smoke; required for Full beta certification."
+    },
+    {
+      "name": "full_scheduler_live_chat_preemption",
+      "path": "release/tests/full_scheduler_live_chat_preemption.py",
+      "classification": "manual-real",
+      "may_block_release": false,
+      "reason": "External Full scheduler smoke proving hot-lane preemption with durable PostgreSQL jobs."
+    },
+    {
+      "name": "full_import_live_chat_smoke",
+      "path": "release/tests/full_import_live_chat_smoke.py",
+      "classification": "manual-real",
+      "may_block_release": false,
+      "reason": "External Full import/live-chat smoke proving import does not starve hot capture."
+    },
+    {
+      "name": "full_falkordb_projection_smoke",
+      "path": "release/tests/full_falkordb_projection_smoke.py",
+      "classification": "manual-real",
+      "may_block_release": false,
+      "reason": "External FalkorDB projection smoke; required for graph Full certification."
+    },
+    {
+      "name": "full_falkordb_rebuild_smoke",
+      "path": "release/tests/full_falkordb_rebuild_smoke.py",
+      "classification": "manual-real",
+      "may_block_release": false,
+      "reason": "External FalkorDB rebuild smoke from PostgreSQL canonical state."
+    },
+    {
+      "name": "full_graph_retrieval_smoke",
+      "path": "release/tests/full_graph_retrieval_smoke.py",
+      "classification": "manual-real",
+      "may_block_release": false,
+      "reason": "External graph-aware retrieval smoke with scope and forget filters."
+    },
+    {
+      "name": "full_graph_down_fallback",
+      "path": "release/tests/full_graph_down_fallback.py",
+      "classification": "manual-real",
+      "may_block_release": false,
+      "reason": "External degraded-mode smoke proving chat/retrieval fallback when FalkorDB is down."
+    },
+    {
+      "name": "full_graph_forget_residue_smoke",
+      "path": "release/tests/full_graph_forget_residue_smoke.py",
+      "classification": "manual-real",
+      "may_block_release": false,
+      "reason": "External graph forget/residue smoke; required for trusted Full certification."
+    },
+    {
+      "name": "full_sqlite_to_postgres_migration_smoke",
+      "path": "release/tests/full_sqlite_to_postgres_migration_smoke.py",
+      "classification": "manual-real",
+      "may_block_release": false,
+      "reason": "External SQLite-to-PostgreSQL migration smoke preserving UUIDs and lineage."
+    },
+    {
+      "name": "full_compose_smoke",
+      "path": "release/tests/full_compose_smoke.py",
+      "classification": "manual-real",
+      "may_block_release": false,
+      "reason": "External docker-compose.full.yml smoke; required for certified Full Mode."
+    },
+    {
+      "name": "lite_smoke",
+      "path": "release/tests/smoke_lite.py",
+      "classification": "placeholder",
+      "may_block_release": false,
+      "reason": "Static smoke marker; does not start the product path."
+    },
+    {
+      "name": "full_smoke",
+      "path": "release/tests/smoke_full.py",
+      "classification": "manual-only",
+      "may_block_release": false,
+      "reason": "Full graph startup remains a manual/local compose check for v0.2.0-beta.1."
+    },
+    {
+      "name": "smoke_import",
+      "path": "release/tests/smoke_import.py",
+      "classification": "placeholder",
+      "may_block_release": false,
+      "reason": "Replaced by heavy_import_ci_small for release gating."
+    },
+    {
+      "name": "smoke_privacy",
+      "path": "release/tests/smoke_privacy.py",
+      "classification": "placeholder",
+      "may_block_release": false,
+      "reason": "Replaced by forget_residue for release gating."
+    },
+    {
+      "name": "smoke_preflight",
+      "path": "release/tests/smoke_preflight.py",
+      "classification": "placeholder",
+      "may_block_release": false,
+      "reason": "Static preflight marker; pytest attachment/filter tests are the real gate."
+    }
+  ]
+}

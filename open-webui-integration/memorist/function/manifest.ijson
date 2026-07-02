@@ -1,0 +1,9 @@
+﻿{
+  "name": "memorist-status-function",
+  "version": "0.2.0-beta.1",
+  "type": "openwebui-function",
+  "local_only": true,
+  "entrypoint": "memorist_status_function.py",
+  "requires_trusted_server_side_code": true,
+  "description": "Sanitized Memorist Core status helper for Open WebUI."
+}

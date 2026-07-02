@@ -1,0 +1,6 @@
+﻿Python dependencies: see memorist-core/pyproject.toml and uv.lock
+Docker images:
+- ghcr.io/open-webui/open-webui:main
+- falkordb/falkordb:latest
+Node/frontend dependencies: none bundled by Memorist package
+Dependency vulnerability scan: not run; tooling unavailable in this local baseline.

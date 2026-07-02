@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memorist-core"
+version = "0.2.0b1"
+description = "Local-first Memorist core service foundation."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [
+  { name = "Memorist Contributors" }
+]
+dependencies = [
+  "fastapi>=0.111,<1.0",
+  "psycopg[binary]>=3.2,<4.0",
+  "pydantic>=2.7,<3.0",
+  "pydantic-settings>=2.3,<3.0",
+  "uvicorn[standard]>=0.30,<1.0"
+]
+
+[dependency-groups]
+dev = [
+  "httpx>=0.27,<0.28",
+  "mypy>=1.10,<2.0",
+  "pytest>=8.2,<9.0",
+  "pytest-asyncio>=0.23,<1.0",
+  "ruff>=0.5,<1.0"
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memcore"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "SIM", "UP"]
+
+[tool.mypy]
+mypy_path = "src"
+packages = ["memcore"]
+python_version = "3.12"
+strict = true

@@ -1,0 +1,80 @@
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.9.6
+    profiles:
+      - ui
+    environment:
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-change-me-local-only}
+      MEMORIST_CORE_URL: http://memorist-core:8777
+    ports:
+      - "${OPEN_WEBUI_PORT:-3000}:8080"
+    volumes:
+      - openwebui-data:/app/backend/data
+    depends_on:
+      memorist-core:
+        condition: service_started
+
+  memorist-core:
+    build:
+      context: ./memorist-core
+    env_file:
+      - .env.example
+    environment:
+      MEMORIST_RUNTIME_PROFILE: full
+      MEMORIST_MODE: full
+      MEMORIST_CANONICAL_STORE: postgres
+      MEMORIST_POSTGRES_DSN: postgresql://memorist:memorist@postgres:5432/memorist
+      MEMORIST_OBJECT_STORE_PATH: /data/objects
+      MEMORIST_IMPORT_STAGING: /data/imports
+      MEMORIST_EXPORT_DIR: /data/exports
+      MEMORIST_GRAPH_BACKEND: falkordb
+      MEMORIST_FALKORDB_URL: redis://falkordb:6379
+      MEMORIST_HOT_SCHEDULER: in_memory
+      MEMORIST_ENABLE_GRAPH_PROJECTION: "true"
+      MEMORIST_ATTACHMENT_MAX_TOKENS: ${MEMORIST_ATTACHMENT_MAX_TOKENS:-1800}
+      MEMORIST_ATTACHMENT_CONTEXT_RATIO: ${MEMORIST_ATTACHMENT_CONTEXT_RATIO:-0.10}
+      MEMORIST_ATTACHMENT_MIN_TOKENS: ${MEMORIST_ATTACHMENT_MIN_TOKENS:-256}
+      MEMORIST_ATTACHMENT_RESERVED_COMPLETION_TOKENS: ${MEMORIST_ATTACHMENT_RESERVED_COMPLETION_TOKENS:-1024}
+      MEMORIST_ATTACHMENT_FALLBACK_CONTEXT_WINDOW: ${MEMORIST_ATTACHMENT_FALLBACK_CONTEXT_WINDOW:-8192}
+    ports:
+      - "${MEMORIST_PORT:-8777}:8777"
+    volumes:
+      - memorist-objects:/data/objects
+      - memorist-imports:/data/imports
+      - memorist-exports:/data/exports
+    depends_on:
+      postgres:
+        condition: service_healthy
+      falkordb:
+        condition: service_started
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: memorist
+      POSTGRES_USER: memorist
+      POSTGRES_PASSWORD: ${MEMORIST_POSTGRES_PASSWORD:-memorist}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memorist -d memorist"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "${MEMORIST_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - memorist-postgres-data:/var/lib/postgresql/data
+
+  falkordb:
+    image: falkordb/falkordb:latest
+    ports:
+      - "${MEMORIST_FALKORDB_PORT:-6379}:6379"
+    volumes:
+      - falkordb-data:/data
+
+volumes:
+  openwebui-data:
+  memorist-postgres-data:
+  falkordb-data:
+  memorist-objects:
+  memorist-imports:
+  memorist-exports:

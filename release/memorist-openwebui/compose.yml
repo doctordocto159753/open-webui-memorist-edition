@@ -1,0 +1,80 @@
+﻿services:
+  memorist-core:
+    profiles: ["lite", "full", "dev"]
+    build:
+      context: ../../memorist-core
+    environment:
+      MEMORIST_LOCAL_ONLY: ${MEMORIST_LOCAL_ONLY:-true}
+      MEMORIST_DB_PATH: ${MEMORIST_DB_PATH:-/data/memorist.sqlite}
+      MEMORIST_OBJECT_STORE_PATH: ${MEMORIST_OBJECT_STORE:-/objects}
+      MEMORIST_GRAPH_BACKEND: ${MEMORIST_GRAPH_BACKEND:-disabled}
+      MEMORIST_FALKORDB_URL: ${MEMORIST_FALKORDB_URL:-redis://falkordb:6379}
+      MEMORIST_PREFLIGHT_ENABLED: ${MEMORIST_PREFLIGHT_ENABLED:-true}
+      MEMORIST_PREFLIGHT_TIMEOUT_MS: ${MEMORIST_PREFLIGHT_TIMEOUT_MS:-1200}
+      MEMORIST_ATTACHMENT_TOKEN_BUDGET: ${MEMORIST_ATTACHMENT_TOKEN_BUDGET:-1800}
+      MEMORIST_ATTACHMENT_MAX_TOKENS: ${MEMORIST_ATTACHMENT_MAX_TOKENS:-1800}
+      MEMORIST_ATTACHMENT_CONTEXT_RATIO: ${MEMORIST_ATTACHMENT_CONTEXT_RATIO:-0.10}
+      MEMORIST_ATTACHMENT_MIN_TOKENS: ${MEMORIST_ATTACHMENT_MIN_TOKENS:-256}
+      MEMORIST_ATTACHMENT_RESERVED_COMPLETION_TOKENS: ${MEMORIST_ATTACHMENT_RESERVED_COMPLETION_TOKENS:-1024}
+      MEMORIST_ATTACHMENT_FALLBACK_CONTEXT_WINDOW: ${MEMORIST_ATTACHMENT_FALLBACK_CONTEXT_WINDOW:-8192}
+      MEMORIST_FAIL_OPEN: ${MEMORIST_FAIL_OPEN:-true}
+    ports:
+      - "${MEMORIST_PORT:-8777}:8777"
+    volumes:
+      - memorist-data:/data
+      - memorist-objects:/objects
+      - memorist-import-staging:/imports
+      - memorist-exports:/exports
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8777/memcore/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  open-webui:
+    profiles: ["lite", "full", "dev"]
+    image: ${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.9.6}
+    environment:
+      MEMORIST_CORE_URL: ${MEMORIST_CORE_URL:-http://memorist-core:8777}
+      MEMORIST_ENABLED: "true"
+      MEMORIST_PREFLIGHT_ENABLED: ${MEMORIST_PREFLIGHT_ENABLED:-true}
+      MEMORIST_PREFLIGHT_TIMEOUT_MS: ${MEMORIST_PREFLIGHT_TIMEOUT_MS:-1200}
+      MEMORIST_ATTACHMENT_TOKEN_BUDGET: ${MEMORIST_ATTACHMENT_TOKEN_BUDGET:-1800}
+      MEMORIST_ATTACHMENT_MAX_TOKENS: ${MEMORIST_ATTACHMENT_MAX_TOKENS:-1800}
+      MEMORIST_FAIL_OPEN: ${MEMORIST_FAIL_OPEN:-true}
+    ports:
+      - "${OPEN_WEBUI_PORT:-3000}:8080"
+    volumes:
+      - openwebui-data:/app/backend/data
+      - ../../open-webui-integration/memorist:/memorist-integration:ro
+    depends_on:
+      memorist-core:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=2)"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  falkordb:
+    profiles: ["full", "graph"]
+    image: falkordb/falkordb:latest
+    ports:
+      - "6379:6379"
+    volumes:
+      - falkordb-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  openwebui-data:
+  memorist-data:
+  memorist-objects:
+  falkordb-data:
+  memorist-import-staging:
+  memorist-exports:
