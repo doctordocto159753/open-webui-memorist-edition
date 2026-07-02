@@ -38,7 +38,7 @@ class GraphProjectionService:
             {
                 "graph_backend": self.settings.graph_backend,
                 "fallback": "postgres_retrieval" if status["status"] == "degraded" else None,
-                "outbox_lag": None,
+                "outbox_lag": self._outbox_lag() if self.settings.canonical_store == "postgres" else None,
                 "drift_detectable": True,
             }
         )
@@ -53,7 +53,11 @@ class GraphProjectionService:
                 degraded=True,
                 last_error_sanitized=status["error_sanitized"],
             )
-        return GraphProjectionResult(projected=0)
+        if self.settings.canonical_store != "postgres" or not self.settings.postgres_dsn:
+            return GraphProjectionResult(projected=0)
+
+        result = self._project_pending_postgres()
+        return result
 
     def rebuild(self) -> dict[str, Any]:
         if self.settings.canonical_store != "postgres":
@@ -126,6 +130,18 @@ class GraphProjectionService:
                             f"MemoryVersion:{row['memory_version_uuid']}",
                         ),
                     )
+                    cursor.execute(
+                        """
+                        UPDATE graph_projection_outbox
+                        SET status = 'projected',
+                            last_error_sanitized = NULL,
+                            updated_at = now()
+                        WHERE source_type = 'memory'
+                          AND source_uuid = %s
+                          AND status IN ('pending', 'retry')
+                        """,
+                        (row["memory_uuid"],),
+                    )
             connection.commit()
         except Exception as error:
             connection.rollback()
@@ -146,6 +162,41 @@ class GraphProjectionService:
             "skipped": skipped,
         }
 
+    def _project_pending_postgres(self) -> GraphProjectionResult:
+        rebuild = self.rebuild()
+        if rebuild.get("status") != "ok":
+            return GraphProjectionResult(
+                projected=int(rebuild.get("projected") or 0),
+                failed=1,
+                degraded=rebuild.get("status") == "degraded",
+                last_error_sanitized=str(
+                    rebuild.get("error_sanitized") or rebuild.get("reason") or "graph projection failed"
+                )[:240],
+            )
+        return GraphProjectionResult(projected=int(rebuild.get("projected") or 0))
+
+    def _outbox_lag(self) -> int | None:
+        if not self.settings.postgres_dsn:
+            return None
+        try:
+            psycopg = importlib.import_module("psycopg")
+            connection = psycopg.connect(self.settings.postgres_dsn)
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT count(*)
+                        FROM graph_projection_outbox
+                        WHERE status IN ('pending', 'retry')
+                        """
+                    )
+                    row = cursor.fetchone()
+                    return int(row[0]) if row else 0
+            finally:
+                connection.close()
+        except Exception:
+            return None
+
 
 _ACTIVE_MEMORY_GRAPH_ROWS_SQL = """
 SELECT
@@ -154,12 +205,12 @@ SELECT
     s.session_uuid,
     msg.message_uuid,
     tu.text_unit_uuid AS unit_uuid,
-    jsa.annotation_uuid,
-    msr.route_uuid,
+    COALESCE(jsa.annotation_uuid, 'no-annotation:' || tu.text_unit_uuid) AS annotation_uuid,
+    COALESCE(msr.route_uuid, 'no-route:' || mc.candidate_uuid) AS route_uuid,
     mc.candidate_uuid,
     mem.memory_uuid,
     mv.memory_version_uuid,
-    jsa.dominant_function,
+    COALESCE(jsa.dominant_function, 'memory') AS dominant_function,
     jsa.receiver_value,
     jsa.context_value,
     jsa.code_value,
@@ -184,7 +235,7 @@ LEFT JOIN projects p
     ON p.project_uuid = s.project_uuid
 JOIN text_units tu
     ON tu.text_unit_uuid = ce.text_unit_uuid
-JOIN jakobson_sentence_annotations jsa
+LEFT JOIN jakobson_sentence_annotations jsa
     ON jsa.annotation_uuid = ce.annotation_uuid
 LEFT JOIN memory_signal_routes msr
     ON msr.route_uuid = ce.route_uuid
