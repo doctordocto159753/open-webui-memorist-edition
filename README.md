@@ -627,3 +627,4 @@ The generated package manifest records each included file with path, size, SHA-2
 - Open WebUI contract: `open-webui-integration/compatibility/openwebui_contract.md`
 - Test manifest: `release/test_manifest.ijson`
 - Known limitations: `KNOWN_LIMITATIONS.md`
+"# open-webui-memorist-edition" 
