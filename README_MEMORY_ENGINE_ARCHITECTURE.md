@@ -1419,7 +1419,7 @@ This separation preserves Open WebUI as the user-facing workbench while allowing
 
 The [Model Context Protocol](https://github.com/modelcontextprotocol) influenced the broader idea that context, tools, and memory should be exposed through explicit, auditable interfaces rather than hidden prompt stuffing. Memorist is currently implemented around Open WebUI integration, but its architecture is intentionally compatible with a future tool-first or MCP-facing surface.
 
-The MCP direction is especially relevant for future Memorist tools such as:
+The MCP direction is especially relevant for future external tool surface such as:
 
 ```text
 memorist_search_memory
