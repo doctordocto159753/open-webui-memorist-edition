@@ -41,7 +41,7 @@ class FalkorGraphProjector:
 
     def delete_erased_source(self, source_uuid: str) -> None:
         self.client.graph_query(
-            f"MATCH (n {{uuid: {_quote(source_uuid)}}}) SET n.status = 'erased', n.text = null"
+            f"MATCH (n {{uuid: {_quote(source_uuid)}}}) DETACH DELETE n"
         )
 
     def jakobson_annotation_query(self, annotation: dict[str, Any]) -> str:
