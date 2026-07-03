@@ -163,7 +163,7 @@ def _copy_table(
     with postgres.cursor() as cursor:
         for row in rows:
             values = [
-                _map_value(row[source], source, target)
+                _map_value(row, source, target)
                 for source, target in mapped_columns
             ]
             insert_sql = (
@@ -202,9 +202,24 @@ def _column_mapping(source_columns: list[str], target_columns: set[str]) -> list
     return mapping
 
 
-def _map_value(value: Any, source_column: str, target_column: str) -> Any:
+def _map_value(row: sqlite3.Row, source_column: str, target_column: str) -> Any:
+    value = row[source_column]
+    if target_column == "updated_at" and value is None:
+        try:
+            created_at = row["created_at"]
+        except (IndexError, KeyError):
+            created_at = None
+        if created_at is not None:
+            return created_at
     if value is None:
         return None
+    if target_column in {"is_deleted"}:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int):
+            return value != 0
+        if isinstance(value, str):
+            return value.lower() in {"1", "true", "t", "yes"}
     if source_column.endswith("_ijson") and target_column.endswith("_jsonb"):
         return json.dumps(load_ijson(str(value)), separators=(",", ":"))
     return value
@@ -218,3 +233,4 @@ def _sqlite_table_exists(connection: sqlite3.Connection, table_name: str) -> boo
         ).fetchone()
         is not None
     )
+

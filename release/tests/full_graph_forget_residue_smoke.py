@@ -53,13 +53,13 @@ def run() -> dict[str, Any]:
                     (
                         f"MATCH (m:Memory {{uuid:'{ids['memory_uuid']}'}})"
                         f"-[:HAS_VERSION]->(v:MemoryVersion {{uuid:'{ids['memory_version_uuid']}'}}) "
-                        "WHERE m.status = 'active' AND v.status = 'current' RETURN 'ACTIVE_PATH'"
+                        "WHERE m.status = 'active' AND v.status = 'current' RETURN m.uuid"
                     ),
                 )
                 receipt = _write_receipt(connection, namespace, ids)
             finally:
                 connection.close()
-            if "ACTIVE_PATH" in active_path_response:
+            if ids["memory_uuid"] in active_path_response:
                 return failed_result(
                     NAME,
                     "active_graph_residue",
