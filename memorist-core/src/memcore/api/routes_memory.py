@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from memcore.config import Settings, get_settings
 from memcore.memory_worker.graph import GraphProjectionRunner
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
+from memcore.memory_worker.postgres import PostgresMemoryWorkerPipeline
 from memcore.models import new_uuid, utc_now
 from memcore.repositories import MessageRepository
 from memcore.repositories.memory_worker import (
@@ -220,7 +221,9 @@ def get_memory_evidence(memory_uuid: str) -> list[dict[str, Any]]:
 def process_message(message_uuid: str) -> dict[str, object]:
     settings = get_settings()
     if _is_full_postgres(settings):
-        return _pg_process_message(settings, message_uuid)
+        with _pg_connection(settings) as connection:
+            with connection.transaction():
+                return PostgresMemoryWorkerPipeline(connection, settings).process_message(message_uuid)
     with _connection() as connection:
         return MemoryWorkerPipeline(connection, settings).process_message(message_uuid)
 
@@ -260,7 +263,7 @@ def _pg_connection(settings: Settings) -> Iterator[Any]:
         connection.close()
 
 
-def _pg_process_message(settings: Settings, message_uuid: str) -> dict[str, object]:
+def _pg_process_message_smoke(settings: Settings, message_uuid: str) -> dict[str, object]:
     with _pg_connection(settings) as connection:
         with connection.transaction():
             message = connection.execute(
