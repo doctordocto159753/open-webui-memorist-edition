@@ -6,7 +6,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-from memcore.config import get_settings
+from memcore.config import Settings, get_settings
+from memcore.model_control.postgres_repository import PostgresModelControlRepository
 from memcore.model_control.registry import provider_for_profile
 from memcore.model_control.repository import (
     ModelControlRepository,
@@ -25,6 +26,7 @@ from memcore.model_control.schemas import (
 )
 from memcore.model_control.security import sanitize_error_message
 from memcore.storage.migrations import apply_migrations
+from memcore.storage.postgres.migrations import apply_postgres_migrations
 from memcore.storage.sqlite import connect
 
 router = APIRouter(prefix="/memcore/model-control", tags=["Model Control Plane"])
@@ -39,7 +41,7 @@ def list_roles() -> dict[str, Any]:
 def list_profiles(role: str | None = Query(default=None)) -> dict[str, Any]:
     with _connection() as connection:
         try:
-            profiles = ModelControlRepository(connection).list_profiles(role)
+            profiles = _repository(connection).list_profiles(role)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return {"items": [public_profile(profile) for profile in profiles]}
@@ -49,7 +51,7 @@ def list_profiles(role: str | None = Query(default=None)) -> dict[str, Any]:
 def create_profile(request: ModelProfileCreate) -> dict[str, Any]:
     with _connection() as connection:
         try:
-            profile = ModelControlRepository(connection).create_profile(request)
+            profile = _repository(connection).create_profile(request)
             return public_profile(profile)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -58,7 +60,7 @@ def create_profile(request: ModelProfileCreate) -> dict[str, Any]:
 @router.get("/profiles/{model_profile_uuid}", response_model=None)
 def get_profile(model_profile_uuid: str) -> dict[str, Any]:
     with _connection() as connection:
-        profile = ModelControlRepository(connection).get_profile(model_profile_uuid)
+        profile = _repository(connection).get_profile(model_profile_uuid)
         if profile is None:
             raise HTTPException(status_code=404, detail="model profile not found")
         return public_profile(profile)
@@ -68,7 +70,7 @@ def get_profile(model_profile_uuid: str) -> dict[str, Any]:
 def patch_profile(model_profile_uuid: str, request: ModelProfilePatch) -> dict[str, Any]:
     with _connection() as connection:
         try:
-            profile = ModelControlRepository(connection).patch_profile(model_profile_uuid, request)
+            profile = _repository(connection).patch_profile(model_profile_uuid, request)
             return public_profile(profile)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -77,7 +79,7 @@ def patch_profile(model_profile_uuid: str, request: ModelProfilePatch) -> dict[s
 @router.post("/profiles/{model_profile_uuid}/test", response_model=None)
 def test_profile(model_profile_uuid: str, request: ProfileTestRequest) -> dict[str, Any]:
     with _connection() as connection:
-        repository = ModelControlRepository(connection)
+        repository = _repository(connection)
         profile = repository.get_profile(model_profile_uuid)
         if profile is None:
             raise HTTPException(status_code=404, detail="model profile not found")
@@ -97,7 +99,7 @@ def get_defaults(
     project_uuid: str | None = None,
 ) -> dict[str, Any]:
     with _connection() as connection:
-        repository = ModelControlRepository(connection)
+        repository = _repository(connection)
         if role is not None:
             try:
                 resolved = repository.resolve_default(role, workspace_uuid, project_uuid)
@@ -128,7 +130,7 @@ def get_defaults(
 def set_default(request: ModelRoleDefaultSet) -> dict[str, Any]:
     with _connection() as connection:
         try:
-            return ModelControlRepository(connection).set_default(
+            return _repository(connection).set_default(
                 request.role,
                 request.model_profile_uuid,
                 workspace_uuid=request.workspace_uuid,
@@ -143,26 +145,26 @@ def set_default(request: ModelRoleDefaultSet) -> dict[str, Any]:
 @router.get("/usage", response_model=None)
 def get_usage() -> dict[str, Any]:
     with _connection() as connection:
-        return ModelControlRepository(connection).usage_summary()
+        return _repository(connection).usage_summary()
 
 
 @router.get("/health", response_model=None)
 def get_model_control_health() -> dict[str, Any]:
     with _connection() as connection:
-        return ModelControlRepository(connection).health()
+        return _repository(connection).health()
 
 
 @router.get("/privacy", response_model=None)
 def get_privacy_matrix() -> dict[str, Any]:
     with _connection() as connection:
-        return ModelControlRepository(connection).privacy_matrix()
+        return _repository(connection).privacy_matrix()
 
 
 @router.post("/privacy/acknowledge", response_model=None)
 def acknowledge_privacy(request: PrivacyAcknowledgementRequest) -> dict[str, Any]:
     with _connection() as connection:
         try:
-            return ModelControlRepository(connection).acknowledge_privacy(request)
+            return _repository(connection).acknowledge_privacy(request)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -171,15 +173,47 @@ def acknowledge_privacy(request: PrivacyAcknowledgementRequest) -> dict[str, Any
 def estimate_cost(request: CostEstimateRequest) -> dict[str, Any]:
     with _connection() as connection:
         try:
-            return ModelControlRepository(connection).estimate_cost(request)
+            return _repository(connection).estimate_cost(request)
         except ValueError as error:
             detail = sanitize_error_message(str(error))
             raise HTTPException(status_code=400, detail=detail) from error
 
 
+def _is_full_postgres(settings: Settings) -> bool:
+    return settings.runtime_profile == "full" and settings.canonical_store == "postgres"
+
+
+def _repository(connection: Any) -> ModelControlRepository | PostgresModelControlRepository:
+    settings = get_settings()
+    if _is_full_postgres(settings):
+        return PostgresModelControlRepository(connection)
+    return ModelControlRepository(connection)
+
+
 @contextmanager
 def _connection() -> Iterator[Any]:
     settings = get_settings()
+    if _is_full_postgres(settings):
+        if not settings.postgres_dsn:
+            raise RuntimeError("postgres_dsn is required for Full Mode model-control routes")
+        psycopg = __import__("psycopg")
+        rows = __import__("psycopg.rows").rows
+        migration_connection = psycopg.connect(settings.postgres_dsn)
+        try:
+            apply_postgres_migrations(migration_connection)
+        finally:
+            migration_connection.close()
+        connection = psycopg.connect(settings.postgres_dsn, row_factory=rows.dict_row)
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return
+
     connection = connect(settings.db_path)
     try:
         apply_migrations(connection)
