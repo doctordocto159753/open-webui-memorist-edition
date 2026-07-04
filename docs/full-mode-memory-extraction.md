@@ -33,3 +33,52 @@ Memory extraction writes pending `memory_upserted` events to `graph_projection_o
 ## Local fake provider smoke test
 
 CI and local smoke tests can run `tests/support/fake_openai_provider.py`, which exposes an OpenAI-compatible `/v1/chat/completions` endpoint and returns deterministic structured JSON matching the Prompt Pack v2 Jakobson schema.
+
+## Configuring API-backed extraction through Model Control
+
+In Full Mode, the Model Control API writes profiles and defaults to PostgreSQL, the same canonical tables read by `PostgresMemoryWorkerPipeline`. Normal setup does not require manual SQL inserts.
+
+Example OpenAI-compatible/FreeLLMAPI profile:
+
+```bash
+curl -X POST http://localhost:8777/memcore/model-control/profiles \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "profile_name": "FreeLLMAPI memory extraction",
+    "provider_type": "openai_compatible",
+    "model_name": "memorist-memory-extractor",
+    "role": "memory_extraction",
+    "endpoint_url": "http://host.docker.internal:31415/v1",
+    "endpoint_is_local": true,
+    "supports_json_mode": true,
+    "supports_structured_output": true,
+    "secret_strategy": "env_var",
+    "secret_env_var_name": "FREELLMAPI_API_KEY",
+    "privacy_acknowledged": true
+  }'
+```
+
+Then set it as the memory extraction default:
+
+```bash
+curl -X POST http://localhost:8777/memcore/model-control/defaults \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "role": "memory_extraction",
+    "model_profile_uuid": "PROFILE_UUID_FROM_CREATE_RESPONSE"
+  }'
+```
+
+Verify what the memory worker will resolve:
+
+```bash
+curl 'http://localhost:8777/memcore/model-control/defaults?role=memory_extraction'
+```
+
+After this, `/memcore/memory-worker/process-message/{message_uuid}` uses the configured profile and should record `provider_type=openai_compatible` plus a non-null `model_profile_uuid` in `memory_processing_runs`, `prompt_execution_runs`, and `model_usage_events`.
+
+API keys must be supplied through the named environment variable. The API stores only `secret_env_var_name`; raw keys must not be included in `endpoint_url`, profile metadata, cost, quality, latency, or privacy payloads.
+
+## Follow-up: admin UI
+
+There is not yet a dedicated Open WebUI/embedded admin surface for creating memory extraction profiles. Follow-up task: add a Model Control admin panel that can create/test profiles, acknowledge privacy, set `memory_extraction` defaults, and show the resolved Full Mode profile without requiring curl.
