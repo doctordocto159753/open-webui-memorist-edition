@@ -18,3 +18,10 @@ def test_processing_nodes_component_is_registered_and_settings_mounted() -> None
     assert 'element: "memorist-processing-nodes-settings"' in surfaces
     assert "document.createElement(route.element)" in surfaces
     assert 'customElements.define("memorist-processing-nodes-settings"' in component
+
+
+def test_processing_nodes_exposes_model_capability_controls() -> None:
+    component = PROCESSING_NODES.read_text(encoding="utf-8")
+
+    assert "supports_json_mode" in component
+    assert "supports_structured_output" in component

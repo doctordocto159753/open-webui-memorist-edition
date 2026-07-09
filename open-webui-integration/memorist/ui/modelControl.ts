@@ -19,6 +19,10 @@ export type ModelControlProfile = {
   model_name: string;
   endpoint_url?: string | null;
   endpoint_is_local: boolean;
+  supports_structured_output?: boolean;
+  supports_json_mode?: boolean;
+  supports_embeddings?: boolean;
+  embedding_dimension?: number | null;
   cost_profile?: Record<string, unknown>;
   latency_profile_data?: Record<string, unknown>;
   quality_profile_data?: Record<string, unknown>;
