@@ -14,7 +14,7 @@ The old PostgreSQL smoke helper is retained only as an explicit helper named `_p
 
 The production Full/Postgres process-message route now uses `memory-intelligence-v2` and `memorist-memory-worker-prompt-pack-v2`. It resolves the `memory_extraction` model-control default, calls an OpenAI-compatible provider for profiles with `provider_type=openai_compatible` or `openai_compatible_llm`, validates structured JSON through the Prompt Pack v2 Jakobson schema, and records `prompt_execution_runs` plus `model_usage_events`.
 
-A local OpenAI-compatible endpoint such as FreeLLMAPI can be configured with a model profile using an endpoint URL like:
+Configure a model profile for any OpenAI-compatible endpoint by providing that endpoint's base `/v1` URL, for example:
 
 ```text
 http://host.docker.internal:31415/v1
@@ -38,13 +38,13 @@ CI and local smoke tests can run `tests/support/fake_openai_provider.py`, which 
 
 In Full Mode, the Model Control API writes profiles and defaults to PostgreSQL, the same canonical tables read by `PostgresMemoryWorkerPipeline`. Normal setup does not require manual SQL inserts.
 
-Example OpenAI-compatible/FreeLLMAPI profile:
+Example OpenAI-compatible profile:
 
 ```bash
 curl -X POST http://localhost:8777/memcore/model-control/profiles \
   -H 'Content-Type: application/json' \
   -d '{
-    "profile_name": "FreeLLMAPI memory extraction",
+    "profile_name": "Local memory extraction",
     "provider_type": "openai_compatible",
     "model_name": "memorist-memory-extractor",
     "role": "memory_extraction",
@@ -53,7 +53,7 @@ curl -X POST http://localhost:8777/memcore/model-control/profiles \
     "supports_json_mode": true,
     "supports_structured_output": true,
     "secret_strategy": "env_var",
-    "secret_env_var_name": "FREELLMAPI_API_KEY",
+    "secret_env_var_name": "MEMORIST_PROCESSING_API_KEY",
     "privacy_acknowledged": true
   }'
 ```
@@ -78,6 +78,16 @@ curl 'http://localhost:8777/memcore/model-control/defaults?role=memory_extractio
 After this, `/memcore/memory-worker/process-message/{message_uuid}` uses the configured profile and should record `provider_type=openai_compatible` plus a non-null `model_profile_uuid` in `memory_processing_runs`, `prompt_execution_runs`, and `model_usage_events`.
 
 API keys must be supplied through the named environment variable. The API stores only `secret_env_var_name`; raw keys must not be included in `endpoint_url`, profile metadata, cost, quality, latency, or privacy payloads.
+
+## Optional OpenAI-compatible endpoint examples
+
+Any service that implements the OpenAI-compatible chat completions API can be used as the endpoint for an `openai_compatible` model profile. FreeLLMAPI is one possible OpenAI-compatible endpoint, not a special provider type. If you use it locally, keep the same generic profile shape and set the endpoint URL and secret environment variable for your deployment.
+
+Example local FreeLLMAPI endpoint URL:
+
+```text
+http://host.docker.internal:31415/v1
+```
 
 ## Follow-up: admin UI
 
