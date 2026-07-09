@@ -49,6 +49,16 @@ def test_model_control_roles(client_and_db: tuple[TestClient, Path]) -> None:
     assert roles["embedding"]["lifecycle"].startswith("asynchronous")
 
 
+def test_processing_nodes_selectable_roles_exclude_openwebui_main_chat() -> None:
+    source = (ROOT / "open-webui-integration/memorist/ui/processingNodes.ts").read_text()
+
+    assert "MEMORIST_PROCESSING_NODE_SELECTABLE_ROLES" in source
+    assert 'role !== "main_chat_observed"' in source
+    assert "MEMORIST_PROCESSING_NODE_SELECTABLE_ROLES.map" in source
+    assert "MEMORIST_MODEL_ROLES.map((role) => `<option" not in source
+    assert "Selected in Open WebUI; Memorist observes metadata only." in source
+
+
 def test_model_control_profile_crud(
     client_and_db: tuple[TestClient, Path],
     openai_compatible_server: str,

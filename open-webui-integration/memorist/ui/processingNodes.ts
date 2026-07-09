@@ -5,6 +5,12 @@ export const MEMORIST_PROCESSING_NODES_ROUTE = "/settings/memorist/processing-no
 
 type HealthByProfile = Record<string, ModelControlHealthEvent | undefined>;
 
+export const MEMORIST_PROCESSING_NODE_SELECTABLE_ROLES = MEMORIST_MODEL_ROLES.filter(
+  (role) => role !== "main_chat_observed",
+);
+
+const MAIN_CHAT_OBSERVED_NOTE = "Selected in Open WebUI; Memorist observes metadata only.";
+
 type ProcessingNodesState = {
   profiles: ModelControlProfile[];
   defaults: ModelControlDefault[];
@@ -124,7 +130,8 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
     return `<form class="profile-form" data-action="save-profile">
       <h2>${this.state.editingProfileUuid ? "Edit profile" : "Create profile"}</h2>
       <label>Name <input name="profile_name" value="${escapeHtml(String(form.profile_name || ""))}"></label>
-      <label>Role <select name="role">${MEMORIST_MODEL_ROLES.map((role) => `<option value="${role}" ${form.role === role ? "selected" : ""}>${role}</option>`).join("")}</select></label>
+      <label>Role <select name="role">${MEMORIST_PROCESSING_NODE_SELECTABLE_ROLES.map((role) => `<option value="${role}" ${form.role === role ? "selected" : ""}>${role}</option>`).join("")}</select></label>
+      <p class="hint"><strong>Main chat:</strong> ${MAIN_CHAT_OBSERVED_NOTE}</p>
       <label>Provider <select name="provider_type">${PROVIDER_TYPES.map((provider) => `<option value="${provider}" ${form.provider_type === provider ? "selected" : ""}>${provider}</option>`).join("")}</select></label>
       <label>Model <input name="model_name" required value="${escapeHtml(String(form.model_name || ""))}"></label>
       <label>Endpoint URL <input name="endpoint_url" placeholder="http://localhost:11434" value="${escapeHtml(String(form.endpoint_url || ""))}"></label>
@@ -133,7 +140,7 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
       <label>Secret env var <input name="secret_env_var_name" value="${escapeHtml(String(form.secret_env_var_name || ""))}"></label>
       <div class="actions"><button type="submit" ${this.state.saving ? "disabled" : ""}>${this.state.saving ? "Saving…" : "Save profile"}</button><button type="button" data-action="cancel-edit">Cancel</button></div>
       <h2>Role default</h2>
-      <label>Role <select name="default_role">${MEMORIST_MODEL_ROLES.map((role) => `<option value="${role}">${role}</option>`).join("")}</select></label>
+      <label>Role <select name="default_role">${MEMORIST_PROCESSING_NODE_SELECTABLE_ROLES.map((role) => `<option value="${role}">${role}</option>`).join("")}</select></label>
       <label>Default profile <select name="default_profile_uuid">${profileOptions}</select></label>
       <button type="button" data-action="set-default">Set role default</button>
     </form>`;
