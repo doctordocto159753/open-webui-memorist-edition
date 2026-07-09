@@ -10,6 +10,12 @@ export const MEMORIST_PROCESSING_NODE_SELECTABLE_ROLES = MEMORIST_MODEL_ROLES.fi
 );
 
 const MAIN_CHAT_OBSERVED_NOTE = "Selected in Open WebUI; Memorist observes metadata only.";
+const PRIVACY_ACK_REQUIRED_LABEL = "Privacy acknowledgement required";
+const PRIVACY_ACK_REQUIRED_ERROR = "Privacy acknowledgement required before assigning this remote profile as a role default.";
+
+function requiresPrivacyAcknowledgement(profile: Pick<ModelControlProfile, "endpoint_is_local" | "privacy_acknowledged_at">): boolean {
+  return profile.endpoint_is_local === false && !profile.privacy_acknowledged_at;
+}
 
 type ProcessingNodesState = {
   profiles: ModelControlProfile[];
@@ -130,7 +136,11 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
 
   private formHtml(): string {
     const form = this.state.form;
-    const profileOptions = this.state.profiles.map((profile) => `<option value="${profile.model_profile_uuid}">${escapeHtml(profile.profile_name || profile.model_name)} (${escapeHtml(profile.role)})</option>`).join("");
+    const profileOptions = this.state.profiles.map((profile) => {
+      const privacyAckRequired = requiresPrivacyAcknowledgement(profile);
+      const label = `${profile.profile_name || profile.model_name} (${profile.role})${privacyAckRequired ? ` — ${PRIVACY_ACK_REQUIRED_LABEL}` : ""}`;
+      return `<option value="${profile.model_profile_uuid}" ${privacyAckRequired ? "disabled" : ""}>${escapeHtml(label)}</option>`;
+    }).join("");
     return `<form class="profile-form" data-action="save-profile">
       <h2>${this.state.editingProfileUuid ? "Edit profile" : "Create profile"}</h2>
       <label>Name <input name="profile_name" value="${escapeHtml(String(form.profile_name || ""))}"></label>
@@ -204,6 +214,11 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
     const role = (this.querySelector('[name="default_role"]') as HTMLSelectElement | null)?.value as MemoristModelRole | undefined;
     const modelProfileUuid = (this.querySelector('[name="default_profile_uuid"]') as HTMLSelectElement | null)?.value;
     if (!role || !modelProfileUuid) return;
+    const profile = this.state.profiles.find((item) => item.model_profile_uuid === modelProfileUuid);
+    if (profile && requiresPrivacyAcknowledgement(profile)) {
+      this.setState({ error: PRIVACY_ACK_REQUIRED_ERROR });
+      return;
+    }
     try {
       await this.client.setModelControlDefault({ role, model_profile_uuid: modelProfileUuid } satisfies ModelControlRoleDefaultSet);
       await this.refresh();

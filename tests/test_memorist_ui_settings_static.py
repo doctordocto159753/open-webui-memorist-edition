@@ -25,3 +25,16 @@ def test_processing_nodes_exposes_model_capability_controls() -> None:
 
     assert "supports_json_mode" in component
     assert "supports_structured_output" in component
+
+
+def test_processing_nodes_blocks_unacknowledged_remote_role_defaults() -> None:
+    component = PROCESSING_NODES.read_text(encoding="utf-8")
+
+    assert 'privacy_acknowledged_at' in component
+    assert 'endpoint_is_local === false' in component
+    assert 'Privacy acknowledgement required' in component
+    assert 'privacyAckRequired ? "disabled"' in component
+    assert 'requiresPrivacyAcknowledgement(profile)' in component
+    assert 'setState({ error: PRIVACY_ACK_REQUIRED_ERROR })' in component
+    assert 'setModelControlDefault({ role, model_profile_uuid: modelProfileUuid }' in component
+    assert component.index('setState({ error: PRIVACY_ACK_REQUIRED_ERROR })') < component.index('setModelControlDefault({ role, model_profile_uuid: modelProfileUuid }')
