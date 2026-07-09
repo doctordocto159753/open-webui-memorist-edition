@@ -17,6 +17,7 @@ export type ModelControlProfile = {
   role: MemoristModelRole;
   provider_type: string;
   model_name: string;
+  endpoint_url?: string | null;
   endpoint_is_local: boolean;
   cost_profile?: Record<string, unknown>;
   latency_profile_data?: Record<string, unknown>;
@@ -24,7 +25,21 @@ export type ModelControlProfile = {
   privacy_profile?: Record<string, unknown>;
   privacy_acknowledged_at?: string | null;
   secret_configured: boolean;
+  is_enabled?: boolean;
 };
+
+export const PROVIDER_TYPES = [
+  "disabled",
+  "deterministic",
+  "openai_compatible",
+  "openai_compatible_llm",
+  "openai_compatible_embedding",
+  "ollama",
+  "ollama_llm",
+  "ollama_embedding",
+  "local_embedding",
+  "unknown",
+] as const;
 
 export const MODEL_CONTROL_TABS = [
   "Overview",

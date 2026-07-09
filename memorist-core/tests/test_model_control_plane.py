@@ -572,6 +572,9 @@ def test_ui_model_settings_contract() -> None:
     client = (ROOT / "open-webui-integration/memorist/ui/memoristClient.ts").read_text(
         encoding="utf-8"
     )
+    processing_nodes = (
+        ROOT / "open-webui-integration/memorist/ui/processingNodes.ts"
+    ).read_text(encoding="utf-8")
 
     assert "main_chat_observed" in model_control
     assert "memory_extraction" in model_control
@@ -582,6 +585,9 @@ def test_ui_model_settings_contract() -> None:
     assert "modelControlProfiles" in client
     assert "/model-control/privacy" in client
     assert "/costs/model-roles" in client
+    assert "/settings/memorist/processing-nodes" in processing_nodes
+    assert "customElements.define" in processing_nodes
+    assert "acknowledgeModelControlPrivacy" in processing_nodes
 
 
 def test_docs_include_model_roles() -> None:

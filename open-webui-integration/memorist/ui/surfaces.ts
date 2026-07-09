@@ -10,6 +10,7 @@
   "PrivacyTab",
   "DiagnosticsTab",
   "SettingsTab",
+  "MemoristProcessingNodesSettings",
 ] as const;
 
 export type MemoristSurface = typeof MEMORIST_UI_SURFACES[number];
@@ -33,3 +34,7 @@ export function destructiveActionsRequireConfirmation(action: string): boolean {
 export function sanitizeUiText(value: string): string {
   return value.replace(/<script/gi, "&lt;script").replace(/onerror=/gi, "data-blocked=");
 }
+
+export const MEMORIST_SETTINGS_ROUTES = {
+  processingNodes: "/settings/memorist/processing-nodes",
+} as const;
