@@ -48,14 +48,20 @@ Settings → Memorist → Processing Nodes
 
 Create a processing node for the provider that should run `memory_extraction`. For an OpenAI-compatible node, fill in these required fields:
 
-- **Node name**: a human-readable name, such as `FreeLLMAPI memory extraction`.
+- **Node name**: `Local memory extraction`.
 - **Provider type**: `OpenAI-compatible`.
-- **Base endpoint URL**: the provider `/v1` base URL, such as `http://host.docker.internal:31415/v1` for a local FreeLLMAPI endpoint.
+- **Base endpoint URL**: the provider `/v1` base URL, such as `http://host.docker.internal:31415/v1` for a local endpoint, or another OpenAI-compatible `/v1` base URL.
 - **Model name**: the provider model identifier to call for memory extraction.
 - **Endpoint locality**: mark whether the endpoint is local or remote.
 - **Secret strategy**: select environment-variable secret storage.
-- **Secret environment variable name**: the env var that contains the API key, such as `FREELLMAPI_API_KEY`; do not paste raw API keys into profile fields.
+- **Secret environment variable name**: `MEMORIST_PROCESSING_API_KEY`; do not paste raw API keys into profile fields.
 - **Capabilities**: enable JSON mode and structured output when the provider supports them.
+
+### Optional OpenAI-compatible endpoint examples
+
+The endpoint can be any provider that implements the OpenAI-compatible API shape required by Memorist. FreeLLMAPI is only one possible OpenAI-compatible endpoint; if you use it locally, configure the same generic fields above with a FreeLLMAPI `/v1` base URL such as `http://host.docker.internal:31415/v1` and keep the API key in `MEMORIST_PROCESSING_API_KEY`.
+
+Other local gateways, self-hosted runtimes, or remote OpenAI-compatible services can use their own `/v1` base URLs as long as they support the configured model and structured-response capabilities.
 
 ### Create, edit, and test a profile
 
@@ -87,13 +93,13 @@ API keys must be supplied through the named environment variable. Model Control 
 
 Use curl only for development, automation, or troubleshooting when the admin UI is unavailable. The UI path above is the primary setup path for operators.
 
-Create an OpenAI-compatible/FreeLLMAPI profile:
+Create an OpenAI-compatible profile:
 
 ```bash
 curl -X POST http://localhost:8777/memcore/model-control/profiles \
   -H 'Content-Type: application/json' \
   -d '{
-    "profile_name": "FreeLLMAPI memory extraction",
+    "profile_name": "Local memory extraction",
     "provider_type": "openai_compatible",
     "model_name": "memorist-memory-extractor",
     "role": "memory_extraction",
@@ -102,7 +108,7 @@ curl -X POST http://localhost:8777/memcore/model-control/profiles \
     "supports_json_mode": true,
     "supports_structured_output": true,
     "secret_strategy": "env_var",
-    "secret_env_var_name": "FREELLMAPI_API_KEY",
+    "secret_env_var_name": "MEMORIST_PROCESSING_API_KEY",
     "privacy_acknowledged": true
   }'
 ```
