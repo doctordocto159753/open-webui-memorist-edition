@@ -30,7 +30,22 @@ Memory/query text
   -> embedding default changes mark old records stale
 ```
 
-## APIs
+
+## Admin UI setup
+
+The primary operator path for Model Control configuration is the Open WebUI admin surface:
+
+```text
+Settings → Memorist → Processing Nodes
+```
+
+Use this screen to create and manage processing-node profiles, test provider connectivity, acknowledge privacy for remote endpoints, and assign role defaults. For OpenAI-compatible processing nodes, provide the node name, provider type, `/v1` base endpoint URL, model name, endpoint locality, environment-variable secret strategy, secret environment variable name, and JSON/structured-output capability flags.
+
+Profiles can be edited from the processing-node list and should be tested before assignment. Remote endpoints must receive a privacy acknowledgement before they can become defaults. Role defaults are assigned from **Settings → Memorist → Processing Nodes → Role defaults**; for Full Mode extraction, assign the tested profile to `memory_extraction`.
+
+The HTTP APIs below remain available for developers, automation, and troubleshooting, but they are not the primary setup path once the admin UI is implemented.
+
+## Developer APIs
 
 ```http
 GET  /memcore/model-control/roles
