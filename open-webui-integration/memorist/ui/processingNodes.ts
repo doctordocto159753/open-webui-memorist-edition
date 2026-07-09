@@ -1,4 +1,4 @@
-import { MemoristClient, type ModelControlDefault, type ModelControlHealthEvent, type ModelControlRoleDefaultSet, type PrivacyAcknowledgementRequest } from "./memoristClient";
+import { MemoristClient, type ModelControlDefault, type ModelControlHealthEvent, type ModelControlProfileCreate, type ModelControlRoleDefaultSet, type PrivacyAcknowledgementRequest } from "./memoristClient";
 import { MEMORIST_MODEL_ROLES, PROVIDER_TYPES, type MemoristModelRole, type ModelControlProfile, roleHelpText, rolePrivacyBadge } from "./modelControl";
 
 export const MEMORIST_PROCESSING_NODES_ROUTE = "/settings/memorist/processing-nodes";
@@ -12,6 +12,11 @@ export const MEMORIST_PROCESSING_NODE_SELECTABLE_ROLES = MEMORIST_MODEL_ROLES.fi
 const MAIN_CHAT_OBSERVED_NOTE = "Selected in Open WebUI; Memorist observes metadata only.";
 const PRIVACY_ACK_REQUIRED_LABEL = "Privacy acknowledgement required";
 const PRIVACY_ACK_REQUIRED_ERROR = "Privacy acknowledgement required before assigning this remote profile as a role default.";
+const DISABLED_PROFILE_DEFAULT_ERROR = "Disabled profiles cannot be assigned as role defaults.";
+
+function isProcessingNodeProfile(profile: Pick<ModelControlProfile, "role">): boolean {
+  return profile.role !== "main_chat_observed";
+}
 
 function requiresPrivacyAcknowledgement(profile: Pick<ModelControlProfile, "endpoint_is_local" | "privacy_acknowledged_at">): boolean {
   return profile.endpoint_is_local === false && !profile.privacy_acknowledged_at;
@@ -87,7 +92,8 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
   }
 
   render(): void {
-    const rows = this.state.profiles.map((profile) => this.profileRow(profile)).join("");
+    const processingNodeProfiles = this.state.profiles.filter(isProcessingNodeProfile);
+    const rows = processingNodeProfiles.map((profile) => this.profileRow(profile)).join("");
     this.innerHTML = `
       <section class="memorist-processing-nodes" data-route="${MEMORIST_PROCESSING_NODES_ROUTE}">
         <header>
@@ -102,8 +108,8 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
         </div>
         <div class="grid-wrap">
           <table>
-            <thead><tr>${["Profile", "Role", "Provider", "Endpoint", "Model", "Local/Remote", "Privacy", "Enabled", "Default", "Health", "Actions"].map((heading) => `<th>${heading}</th>`).join("")}</tr></thead>
-            <tbody>${rows || `<tr><td colspan="11">No model-control profiles have been configured.</td></tr>`}</tbody>
+            <thead><tr>${["Profile", "Role", "Provider", "Endpoint", "Model", "Local/Remote", "Privacy", "Secret", "Enabled", "Default", "Health", "Actions"].map((heading) => `<th>${heading}</th>`).join("")}</tr></thead>
+            <tbody>${rows || `<tr><td colspan="12">No Memorist processing-node profiles have been configured.</td></tr>`}</tbody>
           </table>
         </div>
         ${this.formHtml()}
@@ -123,6 +129,7 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
       <td>${escapeHtml(profile.model_name)}</td>
       <td>${profile.endpoint_is_local ? "Local" : "Remote"}</td>
       <td><span class="badge ${privacy}">${escapeHtml(privacy)}</span></td>
+      <td>${profile.secret_configured ? "Env var configured" : "No secret configured"}</td>
       <td>${profile.is_enabled ? "Enabled" : "Disabled"}</td>
       <td>${isDefaultFor.length ? isDefaultFor.map(escapeHtml).join(", ") : "—"}</td>
       <td>${health ? `${escapeHtml(health.status)}${health.latency_ms == null ? "" : ` (${health.latency_ms} ms)`}` : escapeHtml(this.state.testState[profile.model_profile_uuid] || "Not tested")}</td>
@@ -136,10 +143,12 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
 
   private formHtml(): string {
     const form = this.state.form;
-    const profileOptions = this.state.profiles.map((profile) => {
+    const profileOptions = this.state.profiles.filter(isProcessingNodeProfile).map((profile) => {
       const privacyAckRequired = requiresPrivacyAcknowledgement(profile);
-      const label = `${profile.profile_name || profile.model_name} (${profile.role})${privacyAckRequired ? ` — ${PRIVACY_ACK_REQUIRED_LABEL}` : ""}`;
-      return `<option value="${profile.model_profile_uuid}" ${privacyAckRequired ? "disabled" : ""}>${escapeHtml(label)}</option>`;
+      const disabledProfile = profile.is_enabled === false;
+      const disabledReason = privacyAckRequired ? PRIVACY_ACK_REQUIRED_LABEL : disabledProfile ? "Profile disabled" : "";
+      const label = `${profile.profile_name || profile.model_name} (${profile.role})${disabledReason ? ` — ${disabledReason}` : ""}`;
+      return `<option value="${profile.model_profile_uuid}" ${privacyAckRequired || disabledProfile ? "disabled" : ""}>${escapeHtml(label)}</option>`;
     }).join("");
     return `<form class="profile-form" data-action="save-profile">
       <h2>${this.state.editingProfileUuid ? "Edit profile" : "Create profile"}</h2>
@@ -155,7 +164,8 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
       <label><input type="checkbox" name="supports_structured_output" ${form.supports_structured_output ? "checked" : ""}> Supports structured output</label>
       <label><input type="checkbox" name="supports_embeddings" ${form.supports_embeddings ? "checked" : ""}> Supports embeddings</label>
       <label>Embedding dimension <input name="embedding_dimension" type="number" min="1" step="1" inputmode="numeric" value="${form.embedding_dimension == null ? "" : escapeHtml(String(form.embedding_dimension))}"></label>
-      <label>Secret env var <input name="secret_env_var_name" value="${escapeHtml(String(form.secret_env_var_name || ""))}"></label>
+      <label>Secret env var name <input name="secret_env_var_name" placeholder="MEMORIST_PROCESSING_API_KEY" value="${escapeHtml(String(form.secret_env_var_name || ""))}"></label>
+      <p class="hint">Enter an environment variable name only, never a raw API key. ${this.state.editingProfileUuid && form.secret_configured ? "Leave blank to keep the existing configured secret reference." : ""}</p>
       <div class="actions"><button type="submit" ${this.state.saving ? "disabled" : ""}>${this.state.saving ? "Saving…" : "Save profile"}</button><button type="button" data-action="cancel-edit">Cancel</button></div>
       <h2>Role default</h2>
       <label>Role <select name="default_role">${MEMORIST_PROCESSING_NODE_SELECTABLE_ROLES.map((role) => `<option value="${role}">${role}</option>`).join("")}</select></label>
@@ -183,7 +193,7 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
   private async saveProfile(event: Event): Promise<void> {
     event.preventDefault();
     const form = new FormData(event.target as HTMLFormElement);
-    const payload = {
+    const payload: ModelControlProfileCreate = {
       profile_name: stringOrNull(form.get("profile_name")),
       role: form.get("role") as MemoristModelRole,
       provider_type: String(form.get("provider_type")),
@@ -198,6 +208,10 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
       secret_strategy: stringOrNull(form.get("secret_env_var_name")) ? "env_var" : "none",
       secret_env_var_name: stringOrNull(form.get("secret_env_var_name")),
     };
+    if (this.state.editingProfileUuid && !payload.secret_env_var_name) {
+      delete payload.secret_strategy;
+      delete payload.secret_env_var_name;
+    }
     this.setState({ saving: true, error: null });
     try {
       if (this.state.editingProfileUuid) await this.client.patchModelControlProfile(this.state.editingProfileUuid, payload);
@@ -215,6 +229,14 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
     const modelProfileUuid = (this.querySelector('[name="default_profile_uuid"]') as HTMLSelectElement | null)?.value;
     if (!role || !modelProfileUuid) return;
     const profile = this.state.profiles.find((item) => item.model_profile_uuid === modelProfileUuid);
+    if (profile && !isProcessingNodeProfile(profile)) {
+      this.setState({ error: MAIN_CHAT_OBSERVED_NOTE });
+      return;
+    }
+    if (profile?.is_enabled === false) {
+      this.setState({ error: DISABLED_PROFILE_DEFAULT_ERROR });
+      return;
+    }
     if (profile && requiresPrivacyAcknowledgement(profile)) {
       this.setState({ error: PRIVACY_ACK_REQUIRED_ERROR });
       return;

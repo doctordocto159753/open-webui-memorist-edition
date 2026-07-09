@@ -14,7 +14,7 @@ The old PostgreSQL smoke helper is retained only as an explicit helper named `_p
 
 The production Full/Postgres process-message route now uses `memory-intelligence-v2` and `memorist-memory-worker-prompt-pack-v2`. It resolves the `memory_extraction` model-control default, calls an OpenAI-compatible provider for profiles with `provider_type=openai_compatible` or `openai_compatible_llm`, validates structured JSON through the Prompt Pack v2 Jakobson schema, and records `prompt_execution_runs` plus `model_usage_events`.
 
-A local OpenAI-compatible endpoint such as FreeLLMAPI can be configured with a model profile using an endpoint URL like:
+A local OpenAI-compatible endpoint can be configured with a model profile using a `/v1` endpoint URL like:
 
 ```text
 http://host.docker.internal:31415/v1
@@ -36,7 +36,7 @@ CI and local smoke tests can run `tests/support/fake_openai_provider.py`, which 
 
 ## Configuring API-backed extraction through Model Control
 
-In Full Mode, Model Control writes profiles and defaults to PostgreSQL, the same canonical tables read by `PostgresMemoryWorkerPipeline`. Once the admin UI is available, the UI is the primary setup path for API-backed extraction; manual SQL inserts are not required.
+In Full Mode, Model Control writes profiles and defaults to PostgreSQL, the same canonical tables read by `PostgresMemoryWorkerPipeline`. The Processing Nodes admin UI is the primary setup path for API-backed extraction; manual SQL inserts are not required.
 
 ### Primary setup path: admin UI
 
