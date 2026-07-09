@@ -9,15 +9,18 @@ Remote providers can receive role-specific data:
 - Embedding providers may receive memory text or query text.
 - Optional privacy/block/import roles may receive derived memory summaries or historical import fragments.
 
-The privacy matrix is available at:
+The privacy matrix is exposed in the admin UI at:
+
+```text
+Settings → Memorist → Processing Nodes → Privacy
+```
+
+Before a non-local endpoint can become a default, open the remote processing node, review the Model Control privacy disclosure, acknowledge the remote risk level, and confirm the role-specific data categories that may be sent. For `memory_extraction`, that may include captured user/assistant text or sentence units.
+
+Developer-only API fallback:
 
 ```sh
 curl http://localhost:8777/memcore/model-control/privacy
-```
-
-Before a non-local endpoint can become a default, call:
-
-```sh
 curl -X POST http://localhost:8777/memcore/model-control/privacy/acknowledge \
   -H "Content-Type: application/json" \
   -d '{"model_profile_uuid":"...","acknowledged_risk_level":"external","acknowledged_data_sent":{"sends_raw_user_text":true}}'
