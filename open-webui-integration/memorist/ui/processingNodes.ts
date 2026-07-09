@@ -33,6 +33,10 @@ const EMPTY_FORM: ProcessingNodesState["form"] = {
   is_enabled: true,
   secret_strategy: "none",
   secret_env_var_name: "",
+  supports_json_mode: false,
+  supports_structured_output: false,
+  supports_embeddings: false,
+  embedding_dimension: null,
 };
 
 export class MemoristProcessingNodesSettings extends HTMLElement {
@@ -137,6 +141,10 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
       <label>Endpoint URL <input name="endpoint_url" placeholder="http://localhost:11434" value="${escapeHtml(String(form.endpoint_url || ""))}"></label>
       <label><input type="checkbox" name="endpoint_is_local" ${form.endpoint_is_local !== false ? "checked" : ""}> Endpoint is local</label>
       <label><input type="checkbox" name="is_enabled" ${form.is_enabled !== false ? "checked" : ""}> Enabled</label>
+      <label><input type="checkbox" name="supports_json_mode" ${form.supports_json_mode ? "checked" : ""}> Supports JSON mode</label>
+      <label><input type="checkbox" name="supports_structured_output" ${form.supports_structured_output ? "checked" : ""}> Supports structured output</label>
+      <label><input type="checkbox" name="supports_embeddings" ${form.supports_embeddings ? "checked" : ""}> Supports embeddings</label>
+      <label>Embedding dimension <input name="embedding_dimension" type="number" min="1" step="1" inputmode="numeric" value="${form.embedding_dimension == null ? "" : escapeHtml(String(form.embedding_dimension))}"></label>
       <label>Secret env var <input name="secret_env_var_name" value="${escapeHtml(String(form.secret_env_var_name || ""))}"></label>
       <div class="actions"><button type="submit" ${this.state.saving ? "disabled" : ""}>${this.state.saving ? "Saving…" : "Save profile"}</button><button type="button" data-action="cancel-edit">Cancel</button></div>
       <h2>Role default</h2>
@@ -173,6 +181,10 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
       endpoint_url: stringOrNull(form.get("endpoint_url")),
       endpoint_is_local: form.get("endpoint_is_local") === "on",
       is_enabled: form.get("is_enabled") === "on",
+      supports_json_mode: form.get("supports_json_mode") === "on",
+      supports_structured_output: form.get("supports_structured_output") === "on",
+      supports_embeddings: form.get("supports_embeddings") === "on",
+      embedding_dimension: numberOrNull(form.get("embedding_dimension")),
       secret_strategy: stringOrNull(form.get("secret_env_var_name")) ? "env_var" : "none",
       secret_env_var_name: stringOrNull(form.get("secret_env_var_name")),
     };
@@ -240,6 +252,13 @@ if (typeof customElements !== "undefined" && !customElements.get("memorist-proce
 function stringOrNull(value: FormDataEntryValue | null): string | null {
   const text = String(value || "").trim();
   return text.length ? text : null;
+}
+
+function numberOrNull(value: FormDataEntryValue | null): number | null {
+  const text = String(value || "").trim();
+  if (!text.length) return null;
+  const parsed = Number(text);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function errorMessage(error: unknown): string {
