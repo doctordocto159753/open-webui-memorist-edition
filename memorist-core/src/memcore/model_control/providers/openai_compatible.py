@@ -25,25 +25,78 @@ class OpenAICompatibleLLMProvider:
         endpoint_url: str,
         model_name: str,
         secret_env_var_name: str | None = None,
+        supports_json_mode: bool = False,
+        supports_structured_output: bool = False,
+        requires_structured_extraction: bool = False,
     ) -> None:
         self.endpoint_url = endpoint_url.rstrip("/")
         self.model_name = model_name
         self.secret_env_var_name = secret_env_var_name
+        self.supports_json_mode = supports_json_mode
+        self.supports_structured_output = supports_structured_output
+        self.requires_structured_extraction = requires_structured_extraction
 
     def health_check(self, timeout_seconds: float = 1.0) -> ProviderHealth:
         started = perf_counter()
-        detail: str | None
+        status = "error"
+        detail: str | None = None
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": 'Return exactly {"memorist_provider_test":"ok"} as JSON.',
+                }
+            ],
+            "max_tokens": 16,
+        }
+        supports_json_format = self.supports_json_mode or self.supports_structured_output
+        if supports_json_format:
+            payload["response_format"] = {"type": "json_object"}
         try:
             request = urllib.request.Request(
-                _openai_url(self.endpoint_url, "models"),
+                _openai_url(self.endpoint_url, "chat/completions"),
+                data=json.dumps(payload).encode("utf-8"),
                 headers=_headers(self.secret_env_var_name),
-                method="GET",
+                method="POST",
             )
             with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-                status = "ok" if 200 <= response.status < 300 else "error"
-                detail = f"HTTP {response.status}"
+                response_body = response.read().decode("utf-8")
+                data = json.loads(response_body)
+                if not 200 <= response.status < 300:
+                    detail = f"HTTP {response.status}"
+                else:
+                    content = _extract_chat_content(data)
+                    if content is None:
+                        detail = "Missing choices[0].message.content"
+                    else:
+                        marker = json.loads(content) if isinstance(content, str) else content
+                        if (
+                            isinstance(marker, dict)
+                            and marker.get("memorist_provider_test") == "ok"
+                        ):
+                            status = "ok"
+                            detail = _health_detail_for_success(
+                                response.status,
+                                supports_json_format=bool(supports_json_format),
+                                requires_structured_extraction=self.requires_structured_extraction,
+                            )
+                        else:
+                            detail = "Provider health marker mismatch"
+        except json.JSONDecodeError as error:
+            detail = f"Malformed JSON response: {sanitize_error_message(str(error))}"
+        except urllib.error.HTTPError as error:
+            error_detail = _read_http_error_detail(error)
+            if supports_json_format and _looks_like_response_format_rejection(error_detail):
+                detail = (
+                    "Provider rejected JSON response_format; disable Supports JSON mode or "
+                    "choose a compatible model."
+                )
+            else:
+                detail = sanitize_error_message(
+                    error_detail or f"HTTP {error.code}: {error.reason}"
+                )
         except (urllib.error.URLError, TimeoutError, OSError) as error:
-            status = "error"
             detail = sanitize_error_message(str(error))
         return ProviderHealth(
             status=status,
@@ -148,6 +201,21 @@ class OllamaProvider(OpenAICompatibleLLMProvider):
         )
 
 
+def _extract_chat_content(data: object) -> object | None:
+    if not isinstance(data, dict):
+        return None
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return None
+    message = first_choice.get("message")
+    if not isinstance(message, dict):
+        return None
+    return message.get("content")
+
+
 def _headers(secret_env_var_name: str | None) -> dict[str, str]:
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     if secret_env_var_name:
@@ -165,3 +233,34 @@ def _openai_url(endpoint_url: str, path: str) -> str:
 
 def _elapsed_ms(started: float) -> int:
     return int((perf_counter() - started) * 1000)
+
+
+def _health_detail_for_success(
+    http_status: int,
+    *,
+    supports_json_format: bool,
+    requires_structured_extraction: bool,
+) -> str:
+    if requires_structured_extraction and not supports_json_format:
+        return (
+            f"HTTP {http_status}; chat completions validated; warning: this profile does not "
+            "declare Supports JSON mode or Supports structured output and may be unsuitable "
+            "for structured memory tasks. Enable one of those capabilities or choose a "
+            "compatible model."
+        )
+    return f"HTTP {http_status}; chat completions validated"
+
+
+def _read_http_error_detail(error: urllib.error.HTTPError) -> str:
+    try:
+        body = error.read().decode("utf-8", errors="replace")
+    except OSError:
+        body = ""
+    return f"HTTP {error.code}: {body}" if body else f"HTTP {error.code}: {error.reason}"
+
+
+def _looks_like_response_format_rejection(detail: str) -> bool:
+    lowered = detail.lower()
+    return "response_format" in lowered or (
+        "json" in lowered and any(term in lowered for term in ("unsupported", "reject", "invalid"))
+    )
