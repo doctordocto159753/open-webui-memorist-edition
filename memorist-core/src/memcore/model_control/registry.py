@@ -10,13 +10,17 @@ from memcore.model_control.providers import (
     OllamaLLMProvider,
     OpenAICompatibleEmbeddingProvider,
     OpenAICompatibleLLMProvider,
+    UnavailableProvider,
 )
+from memcore.model_control.providers import ProviderHealth
 from memcore.models import ModelProfile, ModelRole
 
 
 def provider_for_profile(profile: ModelProfile | dict[str, object] | None) -> ModelProvider:
     if profile is None:
         return DisabledProvider()
+    if _get(profile, "is_enabled") is False:
+        return DisabledProvider(str(_get(profile, "model_name") or "disabled"))
     provider_type = _get(profile, "provider_type") or _get(profile, "provider") or "disabled"
     model_name = str(_get(profile, "model_name") or "disabled")
     endpoint_url = _get(profile, "endpoint_url")
@@ -69,8 +73,26 @@ def provider_for_profile(profile: ModelProfile | dict[str, object] | None) -> Mo
             return DisabledProvider(model_name)
         return OllamaEmbeddingProvider(str(endpoint_url), model_name)
     if provider_type == "unknown":
-        return DisabledProvider(model_name)
-    return DisabledProvider(model_name)
+        return UnavailableProvider(model_name, str(provider_type), "unknown provider type")
+    return UnavailableProvider(
+        model_name,
+        str(provider_type),
+        f"unknown provider type: {provider_type}",
+    )
+
+
+def test_profile_health(
+    profile: ModelProfile | dict[str, object] | None,
+    timeout_seconds: float = 1.0,
+) -> ProviderHealth:
+    """Run the profile-appropriate health test.
+
+    LLM-oriented roles use chat completions, embedding roles and explicit embedding
+    providers use embeddings, deterministic profiles return local success, disabled
+    profiles return disabled, and unknown provider types return an error.
+    """
+    provider = provider_for_profile(profile)
+    return provider.health_check(timeout_seconds=timeout_seconds)
 
 
 def _get(profile: ModelProfile | dict[str, object], key: str) -> object | None:

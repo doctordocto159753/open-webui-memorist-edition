@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from memcore.config import Settings, get_settings
 from memcore.model_control.postgres_repository import PostgresModelControlRepository
-from memcore.model_control.registry import provider_for_profile
+from memcore.model_control.registry import test_profile_health
 from memcore.model_control.repository import (
     ModelControlRepository,
     PrivacyAcknowledgementRequired,
@@ -83,8 +83,7 @@ def test_profile(model_profile_uuid: str, request: ProfileTestRequest) -> dict[s
         profile = repository.get_profile(model_profile_uuid)
         if profile is None:
             raise HTTPException(status_code=404, detail="model profile not found")
-        provider = provider_for_profile(profile)
-        health = provider.health_check(timeout_seconds=request.timeout_ms / 1000)
+        health = test_profile_health(profile, timeout_seconds=request.timeout_ms / 1000)
         repository.record_health_event(model_profile_uuid, health)
         return {
             "model_profile_uuid": model_profile_uuid,

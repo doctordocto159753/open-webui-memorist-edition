@@ -1041,3 +1041,128 @@ def _assert_ok(response: Any) -> dict[str, Any]:
     payload = response.json()
     assert isinstance(payload, dict)
     return payload
+
+def test_profile_health_routes_roles_and_provider_types(openai_compatible_server: str) -> None:
+    from memcore.model_control.registry import test_profile_health
+
+    llm_roles = [
+        "preflight",
+        "memory_extraction",
+        "import_reconstruction",
+        "high_confidence_extraction",
+        "block_compaction",
+        "privacy_sensitivity",
+    ]
+    for role in llm_roles:
+        _OpenAICompatibleHandler.get_paths = []
+        _OpenAICompatibleHandler.post_paths = []
+        health = test_profile_health(
+            {
+                "provider_type": "openai_compatible_llm",
+                "model_name": "mock-chat",
+                "role": role,
+                "endpoint_url": openai_compatible_server,
+                "supports_json_mode": True,
+            }
+        )
+        assert health.status == "ok"
+        assert health.provider_type == "openai_compatible_llm"
+        assert _OpenAICompatibleHandler.post_paths == ["/v1/chat/completions"]
+        assert _OpenAICompatibleHandler.get_paths == []
+
+    _OpenAICompatibleHandler.post_paths = []
+    embedding_health = test_profile_health(
+        {
+            "provider_type": "openai_compatible_llm",
+            "model_name": "mock-embedding",
+            "role": "embedding",
+            "endpoint_url": openai_compatible_server,
+            "embedding_dimension": 3,
+        }
+    )
+    assert embedding_health.status == "ok"
+    assert embedding_health.provider_type == "openai_compatible_embedding"
+    assert _OpenAICompatibleHandler.post_paths == ["/v1/embeddings"]
+
+    _OpenAICompatibleHandler.post_paths = []
+    explicit_embedding_health = test_profile_health(
+        {
+            "provider_type": "openai_compatible_embedding",
+            "model_name": "mock-embedding",
+            "role": "memory_extraction",
+            "endpoint_url": openai_compatible_server,
+            "embedding_dimension": 3,
+        }
+    )
+    assert explicit_embedding_health.status == "ok"
+    assert explicit_embedding_health.provider_type == "openai_compatible_embedding"
+    assert _OpenAICompatibleHandler.post_paths == ["/v1/embeddings"]
+
+
+def test_profile_health_handles_deterministic_disabled_and_unknown() -> None:
+    from memcore.model_control.registry import test_profile_health
+
+    deterministic = test_profile_health(
+        {"provider_type": "deterministic", "model_name": "local", "role": "preflight"}
+    )
+    assert deterministic.status == "ok"
+    assert deterministic.local_only_safe is True
+    assert deterministic.detail == "deterministic local provider"
+
+    disabled = test_profile_health(
+        {
+            "provider_type": "openai_compatible_llm",
+            "model_name": "disabled-model",
+            "role": "preflight",
+            "endpoint_url": "http://127.0.0.1:9",
+            "is_enabled": False,
+        }
+    )
+    assert disabled.status == "disabled"
+    assert disabled.provider_type == "disabled"
+    assert disabled.local_only_safe is True
+
+    unknown = test_profile_health(
+        {"provider_type": "unknown", "model_name": "mystery", "role": "preflight"}
+    )
+    assert unknown.status == "error"
+    assert unknown.provider_type == "unknown"
+    assert unknown.detail == "unknown provider type"
+
+
+def test_profile_test_persists_unknown_health_event(
+    client_and_db: tuple[TestClient, Path],
+) -> None:
+    client, db_path = client_and_db
+    created = _assert_ok(
+        client.post(
+            "/memcore/model-control/profiles",
+            json={
+                "provider_type": "unknown",
+                "model_name": "mystery",
+                "role": "preflight",
+            },
+        )
+    )
+
+    profile_uuid = created["model_profile_uuid"]
+    response = _assert_ok(
+        client.post(f"/memcore/model-control/profiles/{profile_uuid}/test", json={})
+    )
+
+    assert response["health"]["status"] == "error"
+    assert response["health"]["provider_type"] == "unknown"
+    with _db(db_path) as connection:
+        event = connection.execute(
+            """
+            SELECT status, provider_type, model_name, detail_sanitized
+            FROM model_health_events
+            WHERE model_profile_uuid = ?
+            """,
+            (profile_uuid,),
+        ).fetchone()
+        assert event is not None
+        assert event["status"] == "error"
+        assert event["provider_type"] == "unknown"
+        assert event["model_name"] == "mystery"
+        assert event["detail_sanitized"] == "unknown provider type"
