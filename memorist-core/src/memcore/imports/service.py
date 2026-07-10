@@ -13,7 +13,7 @@ from memcore.imports.reconstruction.content_parts import visible_text
 from memcore.imports.reconstruction.graph import branch_count
 from memcore.imports.reconstruction.normalizer import normalize_conversation
 from memcore.imports.repositories import ImportRepository, strip_none
-from memcore.imports.staging import sha256_file, stage_import_source
+from memcore.imports.staging import sha256_file, stage_import_source, stage_trusted_upload_file
 from memcore.models import CreatorType, MessageRole, new_uuid, utc_now
 from memcore.repositories import (
     MessageRepository,
@@ -56,6 +56,48 @@ class ImportService:
             run["import_run_uuid"],
             {"total_files": len(artifacts), "status": "staged"},
         )
+
+    def upload_staged_file(
+        self,
+        staged_path: str,
+        archive_sha256: str,
+        original_filename: str,
+        mode: str = "inspect",
+        options: dict[str, Any] | None = None,
+        target_workspace_uuid: str | None = None,
+        target_project_uuid: str | None = None,
+    ) -> dict[str, Any]:
+        run = self.repository.create_run(
+            archive_sha256,
+            mode,
+            {
+                **(options or {}),
+                "original_filename": original_filename,
+                "upload_contract": "multipart",
+            },
+            target_workspace_uuid=target_workspace_uuid,
+            target_project_uuid=target_project_uuid,
+        )
+        try:
+            artifacts = stage_trusted_upload_file(
+                staged_path,
+                self.object_store_path,
+                run["import_run_uuid"],
+                original_filename,
+                archive_sha256,
+            )
+            for artifact in artifacts:
+                self.repository.add_artifact(run["import_run_uuid"], artifact)
+            return self.repository.update_run(
+                run["import_run_uuid"],
+                {"total_files": len(artifacts), "status": "staged"},
+            )
+        except Exception:
+            shutil.rmtree(
+                Path(self.object_store_path) / "imports" / run["import_run_uuid"],
+                ignore_errors=True,
+            )
+            raise
 
     def inspect(self, import_run_uuid: str) -> dict[str, Any]:
         artifacts = self._staged_artifacts(import_run_uuid)

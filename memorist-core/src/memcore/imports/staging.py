@@ -1,5 +1,6 @@
 import hashlib
 import mimetypes
+import re
 import shutil
 import zipfile
 from pathlib import Path
@@ -95,3 +96,43 @@ def _artifact_role(filename: str) -> str:
     if lowered.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4")):
         return "generated_media"
     return "unknown"
+
+
+def sanitize_upload_filename(filename: str | None) -> str:
+    """Return a display-only filename that cannot influence storage paths."""
+    name = Path((filename or "upload").replace("\\", "/")).name
+    name = re.sub(r"[^A-Za-z0-9._ -]", "_", name).strip(" .")
+    return name[:180] or "upload"
+
+def stage_trusted_upload_file(
+    source_path: str | Path,
+    staging_root: str | Path,
+    import_run_uuid: str,
+    original_filename: str,
+    sha256: str,
+) -> list[StagedArtifact]:
+    """Stage a browser-uploaded file that has already been streamed to a trusted temp path."""
+    source = Path(source_path)
+    suffix = source.suffix.lower()
+    safe_name = sanitize_upload_filename(original_filename)
+    if suffix == ".zip":
+        return stage_archive(str(source), staging_root, import_run_uuid)
+    if suffix not in {".json", ".jsonl"}:
+        raise ImportSecurityError("unsupported import source; expected .zip, .json, or .jsonl")
+    size_bytes = source.stat().st_size
+    if size_bytes > MAX_EXPANDED_BYTES:
+        raise ImportSecurityError("standalone import source exceeds expanded size limit")
+    object_dir = Path(staging_root) / "imports" / import_run_uuid / "objects"
+    object_dir.mkdir(parents=True, exist_ok=True)
+    target_path = object_dir / f"artifact-000000{suffix}"
+    shutil.move(str(source), target_path)
+    return [
+        StagedArtifact(
+            relative_path=safe_name,
+            object_store_path=str(target_path),
+            artifact_role="conversation_data",
+            detected_media_type=mimetypes.guess_type(safe_name)[0] or "application/json",
+            size_bytes=size_bytes,
+            sha256=sha256,
+        )
+    ]
