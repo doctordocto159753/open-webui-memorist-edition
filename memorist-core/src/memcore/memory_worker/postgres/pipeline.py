@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from memcore.config import Settings
 from memcore.memory_worker.contracts import PIPELINE_VERSION, PROMPT_BUNDLE_VERSION
 from memcore.memory_worker.gating import DeterministicGate
+from memcore.memory_worker.identity import build_processing_identity
 from memcore.memory_worker.prompts import render_prompt, validate_prompt_execution
 from memcore.memory_worker.prompts.versions import (
     JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
@@ -23,7 +24,6 @@ from memcore.memory_worker.providers.openai_compatible import (
 from memcore.memory_worker.segmentation.sentence_segmenter import SentenceSegmenter
 from memcore.model_control.security import sanitize_error_message
 from memcore.models import new_uuid, utc_now
-from memcore.repositories.memory_worker import canonical_text_hash
 from memcore.validators.ijson import canonical_hash_ijson
 
 
@@ -61,8 +61,17 @@ class PostgresMemoryWorkerPipeline:
             provider_type = "deterministic"
             model_profile_uuid = None
             model_name = "deterministic_extraction"
-        content_hash = canonical_text_hash(raw_text)
-        run = self._get_or_create_run(message, content_hash, model_profile_uuid, provider_type)
+        identity = build_processing_identity(
+            target_message_uuid=message_uuid,
+            raw_text=raw_text,
+            model_target={
+                "model_profile_uuid": model_profile_uuid,
+                "provider_type": provider_type,
+                "model_name": model_name,
+            },
+        )
+        content_hash = identity.input_content_hash
+        run = self._get_or_create_run(message, identity, model_profile_uuid, provider_type)
         if run["status"] == "succeeded":
             return self._summary(message_uuid, str(run["processing_run_uuid"]), True)
         self.connection.execute(
@@ -180,7 +189,7 @@ class PostgresMemoryWorkerPipeline:
     def _get_or_create_run(
         self,
         message: dict[str, Any],
-        content_hash: str,
+        identity: Any,
         model_profile_uuid: str | None,
         provider_type: str,
     ) -> dict[str, Any]:
@@ -189,14 +198,20 @@ class PostgresMemoryWorkerPipeline:
             SELECT * FROM memory_processing_runs
             WHERE message_uuid = %s AND pipeline_version = %s AND prompt_bundle_version = %s
               AND input_content_hash = %s AND COALESCE(model_profile_uuid, '') = COALESCE(%s, '')
+              AND COALESCE(provider_type, '') = COALESCE(%s, '')
+              AND COALESCE(prompt_id, '') = COALESCE(%s, '')
+              AND COALESCE(prompt_version, '') = COALESCE(%s, '')
             ORDER BY created_at LIMIT 1
             """,
             (
                 message["message_uuid"],
-                PIPELINE_VERSION,
-                PROMPT_BUNDLE_VERSION,
-                content_hash,
+                identity.pipeline_version,
+                identity.prompt_bundle_version,
+                identity.input_content_hash,
                 model_profile_uuid,
+                provider_type,
+                identity.prompt_id,
+                identity.prompt_version,
             ),
         ).fetchone()
         if existing is not None:
@@ -212,14 +227,18 @@ class PostgresMemoryWorkerPipeline:
                 run_uuid,
                 message["session_uuid"],
                 message["message_uuid"],
-                PIPELINE_VERSION,
-                PROMPT_BUNDLE_VERSION,
-                content_hash,
+                identity.pipeline_version,
+                identity.prompt_bundle_version,
+                identity.input_content_hash,
                 utc_now(),
                 model_profile_uuid,
                 provider_type,
-                content_hash,
+                identity.input_content_hash,
             ),
+        )
+        self.connection.execute(
+            "UPDATE memory_processing_runs SET prompt_id = %s, prompt_version = %s WHERE processing_run_uuid = %s",
+            (identity.prompt_id, identity.prompt_version, run_uuid),
         )
         return dict(
             self.connection.execute(

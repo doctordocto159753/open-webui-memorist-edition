@@ -531,7 +531,7 @@ class ImportService:
                         issue_code="conversation_commit_failed",
                         message=(
                             "Conversation failed during bounded commit: "
-                            f"{type(error).__name__}"
+                            f"{type(error).__name__}: {error}"
                         ),
                         details={"source_conversation_id": row["source_conversation_id"]},
                     ),

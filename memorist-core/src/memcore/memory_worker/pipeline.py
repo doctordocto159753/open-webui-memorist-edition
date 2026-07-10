@@ -11,12 +11,11 @@ from memcore.memory_worker.contracts import (
     JOB_MEMORY_ANALYSIS,
     JOB_MEMORY_CONSOLIDATION,
     JOB_MEMORY_GATING,
-    PIPELINE_VERSION,
-    PROMPT_BUNDLE_VERSION,
 )
 from memcore.memory_worker.extraction.extractor import CandidateExtractor
 from memcore.memory_worker.gating import DeterministicGate
 from memcore.memory_worker.graph import GraphProjectionRunner
+from memcore.memory_worker.identity import build_processing_identity
 from memcore.memory_worker.jakobson.service import (
     DeterministicJakobsonProvider,
     JakobsonAnalysisService,
@@ -43,7 +42,6 @@ from memcore.repositories.memory_worker import (
     MemoryCandidateRepository,
     MemoryProcessingRunRepository,
     TextUnitRepository,
-    canonical_text_hash,
 )
 
 
@@ -76,12 +74,26 @@ class MemoryWorkerPipeline:
         if message is None:
             raise RepositoryError(f"Message not found: {message_uuid}")
         raw_text = message.raw_text or ""
+        extraction_profile = self._resolve_memory_extraction_profile(model_target)
+        identity = build_processing_identity(
+            target_message_uuid=message.message_uuid,
+            raw_text=raw_text,
+            model_target=extraction_profile,
+            model_role=str(
+                extraction_profile.get("model_role") or ModelRole.IMPORT_RECONSTRUCTION.value
+            ),
+        )
         run = self.runs.get_or_create_run(
             session_uuid=message.session_uuid,
             message_uuid=message.message_uuid,
-            pipeline_version=PIPELINE_VERSION,
-            prompt_bundle_version=PROMPT_BUNDLE_VERSION,
-            input_content_hash=canonical_text_hash(raw_text),
+            pipeline_version=identity.pipeline_version,
+            prompt_bundle_version=identity.prompt_bundle_version,
+            input_content_hash=identity.input_content_hash,
+            prompt_id=identity.prompt_id,
+            prompt_version=identity.prompt_version,
+            model_profile_uuid=identity.model_profile_uuid,
+            provider_type=identity.provider_type,
+            input_hash=identity.input_content_hash,
         )
         if run.status is ProcessingRunStatus.SUCCEEDED:
             return self._completed_result(run.processing_run_uuid, message_uuid)
@@ -90,7 +102,6 @@ class MemoryWorkerPipeline:
         units = self._unitize(message, raw_text)
         self.messages.mark_processing_status(message_uuid, ProcessingStatus.UNITIZED)
 
-        extraction_profile = self._resolve_memory_extraction_profile(model_target)
         extraction_profile_uuid = _optional_string(extraction_profile.get("model_profile_uuid"))
         if extraction_profile["provider_type"] == "disabled":
             ModelControlRepository(self.connection).record_usage_event(
