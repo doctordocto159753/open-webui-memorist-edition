@@ -39,9 +39,9 @@ The primary operator path for Model Control configuration is the Open WebUI admi
 Settings → Memorist → Processing Nodes
 ```
 
-Use this screen to create and manage processing-node profiles, test provider connectivity, acknowledge privacy for remote endpoints, and assign role defaults. For OpenAI-compatible processing nodes, provide the node name, provider type, `/v1` base endpoint URL, model name, endpoint locality, environment-variable secret strategy, secret environment variable name, and JSON/structured-output capability flags.
+Use this screen to create and manage processing-node profiles, test real role capability, acknowledge privacy for remote endpoints, and assign role defaults. For OpenAI-compatible processing nodes, provide the node name, provider type, `/v1` base endpoint URL, model name, endpoint locality, environment-variable secret strategy, secret environment variable name, and JSON/structured-output capability flags. FreeLLMAPI is an example of a generic OpenAI-compatible endpoint, not a dedicated provider path.
 
-Profiles can be edited from the processing-node list and should be tested before assignment. Remote endpoints must receive a privacy acknowledgement before they can become defaults. Role defaults are assigned from **Settings → Memorist → Processing Nodes → Role defaults**; for Full Mode extraction, assign the tested profile to `memory_extraction`.
+Profiles can be edited from the processing-node list and should be tested before assignment. **Test** validates the configured role capability, not just endpoint reachability: LLM roles are exercised with `POST /v1/chat/completions`, and the `embedding` role is exercised with `POST /v1/embeddings`. `GET /v1/models` is optional diagnostic metadata only and is not the success gate. When `supports_json_mode` or `supports_structured_output` is enabled, the test actively verifies JSON response support with `response_format: {"type": "json_object"}`. Remote endpoints must receive a privacy acknowledgement before they can become defaults. Role defaults are assigned from **Settings → Memorist → Processing Nodes → Role defaults**; for Full Mode extraction, assign the tested profile to `memory_extraction`.
 
 The HTTP APIs below remain available for developers, automation, and troubleshooting, but they are not the primary setup path once the admin UI is implemented.
 
@@ -63,4 +63,4 @@ POST /memcore/model-control/estimate-cost
 GET  /memcore/costs/model-roles
 ```
 
-Remote profiles must be acknowledged before default assignment. Secrets are environment references only; raw keys are rejected.
+Remote profiles must be acknowledged before default assignment. Secrets are environment references only; the named secret environment variable must exist in the Memorist backend container/process environment. Raw API keys are rejected, are not persisted, and are not returned by Model Control APIs.
