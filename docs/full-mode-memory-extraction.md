@@ -14,7 +14,7 @@ The old PostgreSQL smoke helper is retained only as an explicit helper named `_p
 
 The production Full/Postgres process-message route now uses `memory-intelligence-v2` and `memorist-memory-worker-prompt-pack-v2`. It resolves the `memory_extraction` model-control default, calls an OpenAI-compatible provider for profiles with `provider_type=openai_compatible` or `openai_compatible_llm`, validates structured JSON through the Prompt Pack v2 Jakobson schema, and records `prompt_execution_runs` plus `model_usage_events`.
 
-Configure a model profile for any OpenAI-compatible endpoint by providing that endpoint's base `/v1` URL, for example:
+A local OpenAI-compatible endpoint can be configured with a model profile using a `/v1` endpoint URL like:
 
 ```text
 http://host.docker.internal:31415/v1
@@ -36,9 +36,64 @@ CI and local smoke tests can run `tests/support/fake_openai_provider.py`, which 
 
 ## Configuring API-backed extraction through Model Control
 
-In Full Mode, the Model Control API writes profiles and defaults to PostgreSQL, the same canonical tables read by `PostgresMemoryWorkerPipeline`. Normal setup does not require manual SQL inserts.
+In Full Mode, Model Control writes profiles and defaults to PostgreSQL, the same canonical tables read by `PostgresMemoryWorkerPipeline`. The Processing Nodes admin UI is the primary setup path for API-backed extraction; manual SQL inserts are not required.
 
-Example OpenAI-compatible profile:
+### Primary setup path: admin UI
+
+Open the Memorist admin settings in Open WebUI:
+
+```text
+Settings → Memorist → Processing Nodes
+```
+
+Create a processing node for the provider that should run `memory_extraction`. For an OpenAI-compatible node, fill in these required fields:
+
+- **Node name**: `Local memory extraction`.
+- **Provider type**: `OpenAI-compatible`.
+- **Base endpoint URL**: the provider `/v1` base URL, such as `http://host.docker.internal:31415/v1` for a local endpoint, or another OpenAI-compatible `/v1` base URL.
+- **Model name**: the provider model identifier to call for memory extraction.
+- **Endpoint locality**: mark whether the endpoint is local or remote.
+- **Secret strategy**: select environment-variable secret storage.
+- **Secret environment variable name**: `MEMORIST_PROCESSING_API_KEY`; do not paste raw API keys into profile fields.
+- **Capabilities**: enable JSON mode and structured output when the provider supports them.
+
+### Optional OpenAI-compatible endpoint examples
+
+The endpoint can be any provider that implements the OpenAI-compatible API shape required by Memorist. FreeLLMAPI is only one possible OpenAI-compatible endpoint; if you use it locally, configure the same generic fields above with a FreeLLMAPI `/v1` base URL such as `http://host.docker.internal:31415/v1` and keep the API key in `MEMORIST_PROCESSING_API_KEY`.
+
+Other local gateways, self-hosted runtimes, or remote OpenAI-compatible services can use their own `/v1` base URLs as long as they support the configured model and structured-response capabilities.
+
+### Create, edit, and test a profile
+
+1. Select **Create processing node** from **Settings → Memorist → Processing Nodes**.
+2. Enter the OpenAI-compatible fields above and save the node as a Model Control profile.
+3. To change a provider, open the profile from the processing-node list, edit the endpoint, model, locality, secret env-var name, or capability flags, and save again.
+4. Use **Test profile** before assigning the profile as a default. The test should verify that Memorist can reach the endpoint, resolve the configured secret environment variable, receive a compatible response, and validate structured JSON when structured output is enabled.
+5. Review the resolved profile details after saving. For Full Mode extraction, the worker should resolve this profile for the `memory_extraction` role.
+
+### Acknowledge privacy for remote endpoints
+
+Local endpoints can be used without remote-provider acknowledgement. For any endpoint marked remote, the UI must show the Model Control privacy disclosure before the profile can become a role default. Review the role-specific data that may be sent, acknowledge the remote risk level, and confirm that `memory_extraction` may send captured user/assistant text or sentence units to that endpoint.
+
+Acknowledgement records the profile, risk level, and data categories in Model Control. It does not store raw API keys, and it does not change the rule that secrets must come from environment variables.
+
+### Assign role defaults
+
+After the profile is saved, tested, and privacy-acknowledged when required:
+
+1. Open **Settings → Memorist → Processing Nodes → Role defaults**.
+2. Choose the role, usually `memory_extraction` for Full Mode memory extraction.
+3. Select the tested processing node profile.
+4. Save the default assignment.
+5. Confirm the resolved default shown by the UI. After this, `/memcore/memory-worker/process-message/{message_uuid}` uses the configured profile and should record `provider_type=openai_compatible` plus a non-null `model_profile_uuid` in `memory_processing_runs`, `prompt_execution_runs`, and `model_usage_events`.
+
+API keys must be supplied through the named environment variable. Model Control stores only `secret_env_var_name`; raw keys must not be included in endpoint URLs, profile metadata, cost, quality, latency, privacy payloads, or diagnostics.
+
+### Developer-only curl fallback, non-primary
+
+Use curl only for development, automation, or troubleshooting when the admin UI is unavailable. The UI path above is the primary setup path for operators.
+
+Create an OpenAI-compatible profile:
 
 ```bash
 curl -X POST http://localhost:8777/memcore/model-control/profiles \
@@ -58,7 +113,7 @@ curl -X POST http://localhost:8777/memcore/model-control/profiles \
   }'
 ```
 
-Then set it as the memory extraction default:
+Set it as the memory extraction default:
 
 ```bash
 curl -X POST http://localhost:8777/memcore/model-control/defaults \
@@ -74,21 +129,3 @@ Verify what the memory worker will resolve:
 ```bash
 curl 'http://localhost:8777/memcore/model-control/defaults?role=memory_extraction'
 ```
-
-After this, `/memcore/memory-worker/process-message/{message_uuid}` uses the configured profile and should record `provider_type=openai_compatible` plus a non-null `model_profile_uuid` in `memory_processing_runs`, `prompt_execution_runs`, and `model_usage_events`.
-
-API keys must be supplied through the named environment variable. The API stores only `secret_env_var_name`; raw keys must not be included in `endpoint_url`, profile metadata, cost, quality, latency, or privacy payloads.
-
-## Optional OpenAI-compatible endpoint examples
-
-Any service that implements the OpenAI-compatible chat completions API can be used as the endpoint for an `openai_compatible` model profile. FreeLLMAPI is one possible OpenAI-compatible endpoint, not a special provider type. If you use it locally, keep the same generic profile shape and set the endpoint URL and secret environment variable for your deployment.
-
-Example local FreeLLMAPI endpoint URL:
-
-```text
-http://host.docker.internal:31415/v1
-```
-
-## Follow-up: admin UI
-
-There is not yet a dedicated Open WebUI/embedded admin surface for creating memory extraction profiles. Follow-up task: add a Model Control admin panel that can create/test profiles, acknowledge privacy, set `memory_extraction` defaults, and show the resolved Full Mode profile without requiring curl.
