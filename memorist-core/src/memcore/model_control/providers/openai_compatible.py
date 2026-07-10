@@ -25,34 +25,32 @@ class OpenAICompatibleLLMProvider:
         endpoint_url: str,
         model_name: str,
         secret_env_var_name: str | None = None,
-        supports_json_mode: bool = False,
         supports_structured_output: bool = False,
-        requires_structured_extraction: bool = False,
+        supports_json_mode: bool = False,
     ) -> None:
         self.endpoint_url = endpoint_url.rstrip("/")
         self.model_name = model_name
         self.secret_env_var_name = secret_env_var_name
-        self.supports_json_mode = supports_json_mode
         self.supports_structured_output = supports_structured_output
-        self.requires_structured_extraction = requires_structured_extraction
+        self.supports_json_mode = supports_json_mode
 
     def health_check(self, timeout_seconds: float = 1.0) -> ProviderHealth:
         started = perf_counter()
         status = "error"
-        detail: str | None = None
-        payload = {
+        detail: str | None
+        payload: dict[str, object] = {
             "model": self.model_name,
             "messages": [
                 {
-                    "role": "user",
-                    "content": 'Return exactly {"memorist_provider_test":"ok"} as JSON.',
-                }
+                    "role": "system",
+                    "content": "Memorist connectivity test. Reply only with valid JSON.",
+                },
+                {"role": "user", "content": '{"memorist_provider_test":"ok"}'},
             ],
-            "max_tokens": 16,
         }
-        supports_json_format = self.supports_json_mode or self.supports_structured_output
-        if supports_json_format:
+        if self.supports_json_mode or self.supports_structured_output:
             payload["response_format"] = {"type": "json_object"}
+
         try:
             request = urllib.request.Request(
                 _openai_url(self.endpoint_url, "chat/completions"),
@@ -70,32 +68,16 @@ class OpenAICompatibleLLMProvider:
                     if content is None:
                         detail = "Missing choices[0].message.content"
                     else:
-                        marker = json.loads(content) if isinstance(content, str) else content
-                        if (
-                            isinstance(marker, dict)
-                            and marker.get("memorist_provider_test") == "ok"
-                        ):
+                        marker = json.loads(content)
+                        if marker.get("memorist_provider_test") == "ok":
                             status = "ok"
-                            detail = _health_detail_for_success(
-                                response.status,
-                                supports_json_format=bool(supports_json_format),
-                                requires_structured_extraction=self.requires_structured_extraction,
-                            )
+                            detail = f"HTTP {response.status}; chat completions validated"
                         else:
                             detail = "Provider health marker mismatch"
         except json.JSONDecodeError as error:
             detail = f"Malformed JSON response: {sanitize_error_message(str(error))}"
         except urllib.error.HTTPError as error:
-            error_detail = _read_http_error_detail(error)
-            if supports_json_format and _looks_like_response_format_rejection(error_detail):
-                detail = (
-                    "Provider rejected JSON response_format; disable Supports JSON mode or "
-                    "choose a compatible model."
-                )
-            else:
-                detail = sanitize_error_message(
-                    error_detail or f"HTTP {error.code}: {error.reason}"
-                )
+            detail = sanitize_error_message(f"HTTP {error.code}: {error.reason}")
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             detail = sanitize_error_message(str(error))
         return ProviderHealth(
@@ -201,7 +183,7 @@ class OllamaProvider(OpenAICompatibleLLMProvider):
         )
 
 
-def _extract_chat_content(data: object) -> object | None:
+def _extract_chat_content(data: object) -> str | None:
     if not isinstance(data, dict):
         return None
     choices = data.get("choices")
@@ -213,7 +195,8 @@ def _extract_chat_content(data: object) -> object | None:
     message = first_choice.get("message")
     if not isinstance(message, dict):
         return None
-    return message.get("content")
+    content = message.get("content")
+    return content if isinstance(content, str) and content else None
 
 
 def _headers(secret_env_var_name: str | None) -> dict[str, str]:
