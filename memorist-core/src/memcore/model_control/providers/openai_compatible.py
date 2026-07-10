@@ -28,6 +28,8 @@ class OpenAICompatibleLLMProvider:
         supports_json_mode: bool = False,
         supports_structured_output: bool = False,
         requires_structured_extraction: bool = False,
+        supports_structured_output: bool = False,
+        supports_json_mode: bool = False,
     ) -> None:
         self.endpoint_url = endpoint_url.rstrip("/")
         self.model_name = model_name
@@ -35,6 +37,8 @@ class OpenAICompatibleLLMProvider:
         self.supports_json_mode = supports_json_mode
         self.supports_structured_output = supports_structured_output
         self.requires_structured_extraction = requires_structured_extraction
+        self.supports_structured_output = supports_structured_output
+        self.supports_json_mode = supports_json_mode
 
     def health_check(self, timeout_seconds: float = 1.0) -> ProviderHealth:
         started = perf_counter()
@@ -53,6 +57,20 @@ class OpenAICompatibleLLMProvider:
         supports_json_format = self.supports_json_mode or self.supports_structured_output
         if supports_json_format:
             payload["response_format"] = {"type": "json_object"}
+        detail: str | None
+        payload: dict[str, object] = {
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Memorist connectivity test. Reply only with valid JSON.",
+                },
+                {"role": "user", "content": '{"memorist_provider_test":"ok"}'},
+            ],
+        }
+        if self.supports_json_mode or self.supports_structured_output:
+            payload["response_format"] = {"type": "json_object"}
+
         try:
             request = urllib.request.Request(
                 _openai_url(self.endpoint_url, "chat/completions"),
@@ -81,6 +99,10 @@ class OpenAICompatibleLLMProvider:
                                 supports_json_format=bool(supports_json_format),
                                 requires_structured_extraction=self.requires_structured_extraction,
                             )
+                        marker = json.loads(content)
+                        if marker.get("memorist_provider_test") == "ok":
+                            status = "ok"
+                            detail = f"HTTP {response.status}; chat completions validated"
                         else:
                             detail = "Provider health marker mismatch"
         except json.JSONDecodeError as error:
@@ -96,6 +118,7 @@ class OpenAICompatibleLLMProvider:
                 detail = sanitize_error_message(
                     error_detail or f"HTTP {error.code}: {error.reason}"
                 )
+            detail = sanitize_error_message(f"HTTP {error.code}: {error.reason}")
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             detail = sanitize_error_message(str(error))
         return ProviderHealth(
@@ -202,6 +225,7 @@ class OllamaProvider(OpenAICompatibleLLMProvider):
 
 
 def _extract_chat_content(data: object) -> object | None:
+def _extract_chat_content(data: object) -> str | None:
     if not isinstance(data, dict):
         return None
     choices = data.get("choices")
@@ -214,6 +238,8 @@ def _extract_chat_content(data: object) -> object | None:
     if not isinstance(message, dict):
         return None
     return message.get("content")
+    content = message.get("content")
+    return content if isinstance(content, str) and content else None
 
 
 def _headers(secret_env_var_name: str | None) -> dict[str, str]:
@@ -249,6 +275,11 @@ def _health_detail_for_success(
             "compatible model."
         )
     return f"HTTP {http_status}; chat completions validated"
+            f"HTTP {http_status}; warning: this profile does not declare Supports JSON mode or "
+            "Supports structured output and may be unsuitable for structured memory tasks. "
+            "Enable one of those capabilities or choose a compatible model."
+        )
+    return f"HTTP {http_status}"
 
 
 def _read_http_error_detail(error: urllib.error.HTTPError) -> str:

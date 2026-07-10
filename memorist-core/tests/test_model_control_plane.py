@@ -162,6 +162,10 @@ def test_openai_compatible_health_check_warns_without_structured_flags(
     assert "may be unsuitable for structured memory tasks" in health.detail
 
 
+    assert health.detail == "HTTP 200"
+    assert handler.last_payload["response_format"] == {"type": "json_object"}
+
+
 def test_openai_compatible_health_check_reports_json_mode_unsupported(
     openai_json_mode_server: tuple[str, type[BaseHTTPRequestHandler]],
 ) -> None:
@@ -672,48 +676,48 @@ def test_docs_include_model_roles() -> None:
     assert "embedding" in architecture
 
 
+def test_openai_compatible_health_check_uses_chat_completions_not_models(
+    openai_compatible_server: str,
+) -> None:
+    _OpenAICompatibleHandler.get_paths = []
+    _OpenAICompatibleHandler.post_paths = []
 
-@pytest.fixture
-def openai_json_mode_server() -> Iterator[tuple[str, type[BaseHTTPRequestHandler]]]:
-    class JsonModeHandler(BaseHTTPRequestHandler):
-        reject_response_format = False
-        last_payload: dict[str, Any] = {}
+    health = OpenAICompatibleLLMProvider(
+        openai_compatible_server,
+        "mock-chat",
+        supports_json_mode=True,
+    ).health_check()
 
-        def do_POST(self) -> None:  # noqa: N802
-            if self.path != "/v1/chat/completions":
-                self.send_response(404)
-                self.end_headers()
-                return
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            type(self).last_payload = payload
-            if type(self).reject_response_format and "response_format" in payload:
-                body = json.dumps({"error": "response_format is unsupported"}).encode("utf-8")
-                self.send_response(400)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-                return
-            content = json.dumps({"memorist_provider_test": "ok"})
-            body = json.dumps({"choices": [{"message": {"content": content}}]}).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+    assert health.status == "ok"
+    assert _OpenAICompatibleHandler.get_paths == []
+    assert _OpenAICompatibleHandler.post_paths == ["/v1/chat/completions"]
 
-        def log_message(self, format: str, *args: Any) -> None:
-            return
 
-    server = HTTPServer(("127.0.0.1", 0), JsonModeHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_address[1]}", JsonModeHandler
-    finally:
-        server.shutdown()
-        thread.join(timeout=2)
+def test_openai_compatible_health_check_rejects_malformed_json() -> None:
+    class MalformedJSONHandler(_HealthCheckHandler):
+        response_content = "not-json"
+
+    with _served(MalformedJSONHandler) as endpoint_url:
+        health = OpenAICompatibleLLMProvider(
+            endpoint_url,
+            "mock-chat",
+            supports_json_mode=True,
+        ).health_check()
+
+    assert health.status == "error"
+    assert health.detail is not None
+    assert "Malformed JSON" in health.detail
+
+
+def test_openai_compatible_health_check_reports_wrong_model() -> None:
+    with _served(_HealthCheckHandler) as endpoint_url:
+        health = OpenAICompatibleLLMProvider(endpoint_url, "wrong-chat").health_check()
+
+    assert health.status == "error"
+    assert health.model_name == "wrong-chat"
+    assert health.detail is not None
+    assert "HTTP 400" in health.detail
+
 
 @pytest.fixture
 def openai_compatible_server() -> Iterator[str]:
@@ -728,7 +732,11 @@ def openai_compatible_server() -> Iterator[str]:
 
 
 class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
+    get_paths: list[str] = []
+    post_paths: list[str] = []
+
     def do_GET(self) -> None:  # noqa: N802
+        self.__class__.get_paths.append(self.path)
         if self.path == "/v1/models":
             body = json.dumps({"data": [{"id": "mock-chat"}]}).encode("utf-8")
             self.send_response(200)
@@ -741,14 +749,19 @@ class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self) -> None:  # noqa: N802
+        self.__class__.post_paths.append(self.path)
         if self.path == "/v1/chat/completions":
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            prompt = payload.get("messages", [{}])[0].get("content", "")
-            if "memorist_provider_test" in prompt:
-                content = json.dumps({"memorist_provider_test": "ok"})
-            else:
-                content = json.dumps({"not": "a valid preflight output"})
+            if payload.get("model") != "mock-chat":
+                body = json.dumps({"error": {"message": "model not found"}}).encode("utf-8")
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            content = json.dumps({"memorist_provider_test": "ok"})
             body = json.dumps({"choices": [{"message": {"content": content}}]}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -761,6 +774,42 @@ class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: Any) -> None:
         return
+
+
+class _HealthCheckHandler(_OpenAICompatibleHandler):
+    response_content = json.dumps({"memorist_provider_test": "ok"})
+
+    def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/v1/chat/completions":
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            if payload.get("model") != "mock-chat":
+                body = json.dumps({"error": {"message": "model not found"}}).encode("utf-8")
+                self.send_response(400)
+            else:
+                body = json.dumps(
+                    {"choices": [{"message": {"content": self.response_content}}]}
+                ).encode("utf-8")
+                self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+
+@contextmanager
+def _served(handler: type[BaseHTTPRequestHandler]) -> Iterator[str]:
+    server = HTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
 
 
 def _create_profile(
