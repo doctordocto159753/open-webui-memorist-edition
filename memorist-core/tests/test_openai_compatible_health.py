@@ -69,6 +69,30 @@ def test_openai_compatible_health_check_reports_json_mode_unsupported(
     )
 
 
+def test_openai_compatible_health_check_redacts_auth_failure(
+    openai_json_mode_server: tuple[str, type[BaseHTTPRequestHandler]],
+) -> None:
+    endpoint, handler = openai_json_mode_server
+    handler.auth_failure_body = (
+        "Authorization failed for Bearer abc.def.ghi; "
+        "api_key=sk-test-token token=plain-token secret: super-secret "
+        "url=https://user:pass@example.test/v1?token=query-token"
+    )
+    provider = OpenAICompatibleLLMProvider(endpoint, "mock-chat")
+
+    health = provider.health_check()
+
+    assert health.status == "error"
+    assert health.detail is not None
+    assert "HTTP 401" in health.detail
+    _assert_no_fake_secret_material(health.detail)
+    assert "Bearer [redacted]" in health.detail
+    assert "api_key=[redacted]" in health.detail
+    assert "token=[redacted]" in health.detail
+    assert "secret: [redacted]" in health.detail
+    assert "https://example.test/v1?token=%5Bredacted%5D" in health.detail
+
+
 def test_openai_compatible_health_check_reports_missing_secret_env_var(
     monkeypatch: pytest.MonkeyPatch,
     openai_json_mode_server: tuple[str, type[BaseHTTPRequestHandler]],
@@ -85,9 +109,7 @@ def test_openai_compatible_health_check_reports_missing_secret_env_var(
     health = provider.health_check()
 
     assert health.status == "error"
-    assert health.detail == (
-        f"Secret environment variable {secret_env_var_name} is not set"
-    )
+    assert health.detail == (f"Secret environment variable {secret_env_var_name} is not set")
     assert handler.last_payload == {}
 
 
@@ -95,6 +117,7 @@ def test_openai_compatible_health_check_reports_missing_secret_env_var(
 def openai_json_mode_server() -> Iterator[tuple[str, type[BaseHTTPRequestHandler]]]:
     class JsonModeHandler(BaseHTTPRequestHandler):
         reject_response_format = False
+        auth_failure_body: str | None = None
         last_payload: dict[str, Any] = {}
 
         def do_POST(self) -> None:  # noqa: N802
@@ -105,6 +128,14 @@ def openai_json_mode_server() -> Iterator[tuple[str, type[BaseHTTPRequestHandler
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
             type(self).last_payload = payload
+            if type(self).auth_failure_body is not None:
+                body = type(self).auth_failure_body.encode("utf-8")
+                self.send_response(401)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if type(self).reject_response_format and "response_format" in payload:
                 body = json.dumps({"error": "response_format is unsupported"}).encode("utf-8")
                 self.send_response(400)
@@ -132,3 +163,15 @@ def openai_json_mode_server() -> Iterator[tuple[str, type[BaseHTTPRequestHandler
     finally:
         server.shutdown()
         thread.join(timeout=2)
+
+
+def _assert_no_fake_secret_material(text: str) -> None:
+    for secret in (
+        "abc.def.ghi",
+        "sk-test-token",
+        "plain-token",
+        "super-secret",
+        "user:pass",
+        "query-token",
+    ):
+        assert secret not in text

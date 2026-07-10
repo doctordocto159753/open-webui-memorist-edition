@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
@@ -55,7 +56,10 @@ def endpoint_contains_secret(endpoint_url: str | None) -> bool:
     parts = urlsplit(endpoint_url)
     if parts.username or parts.password:
         return True
-    return any(is_secret_key(key) for key, _value in parse_qsl(parts.query, keep_blank_values=True))
+    return any(
+        _is_secret_fragment_key(key)
+        for key, _value in parse_qsl(parts.query, keep_blank_values=True)
+    )
 
 
 def endpoint_is_local(endpoint_url: str | None) -> bool:
@@ -76,7 +80,7 @@ def redact_endpoint(endpoint_url: str | None) -> str | None:
     if parts.query:
         query = urlencode(
             [
-                (key, REDACTED_VALUE if is_secret_key(key) else value)
+                (key, REDACTED_VALUE if _is_secret_fragment_key(key) else value)
                 for key, value in parse_qsl(parts.query, keep_blank_values=True)
             ]
         )
@@ -85,10 +89,40 @@ def redact_endpoint(endpoint_url: str | None) -> str | None:
     return parts._replace(netloc=netloc, query=query).geturl()
 
 
+_SECRET_FRAGMENT_KEYS = (
+    "api_key",
+    "apikey",
+    "token",
+    "secret",
+    "password",
+    "credential",
+    "authorization",
+)
+_KEY_VALUE_SECRET_PATTERN = re.compile(
+    r"(?i)\b(api[_-]?key|apikey|token|secret|password|credential|authorization)"
+    r"(\s*[:=]\s*)"
+    r"(?!\[redacted\]|%5Bredacted%5D)"
+    r"([^\s,;&}\]\)]+)"
+)
+_BEARER_TOKEN_PATTERN = re.compile(r"(?i)\bbearer\s+(?!\[redacted\])[^\s,;&}\]\)]+")
+_URL_PATTERN = re.compile(r"https?://[^\s<>\"']+")
+
+
+def _is_secret_fragment_key(key: str) -> bool:
+    normalized_key = key.lower().replace("-", "_")
+    return is_secret_key(normalized_key) or any(
+        secret_key in normalized_key for secret_key in _SECRET_FRAGMENT_KEYS
+    )
+
+
+def _redact_url_match(match: re.Match[str]) -> str:
+    return redact_endpoint(match.group(0)) or REDACTED_VALUE
+
+
 def sanitize_error_message(message: str | None) -> str | None:
     if message is None:
         return None
-    sanitized = message
-    for marker in ("Authorization", "Bearer", "api_key", "token", "secret", "password"):
-        sanitized = sanitized.replace(marker, "[redacted]")
+    sanitized = _URL_PATTERN.sub(_redact_url_match, message)
+    sanitized = _BEARER_TOKEN_PATTERN.sub("Bearer [redacted]", sanitized)
+    sanitized = _KEY_VALUE_SECRET_PATTERN.sub(r"\1\2[redacted]", sanitized)
     return sanitized[:500]

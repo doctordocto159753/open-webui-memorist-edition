@@ -301,8 +301,10 @@ def _extract_first_embedding(data: object) -> object | None:
 
 
 def _is_non_empty_numeric_vector(value: object) -> bool:
-    return isinstance(value, list) and bool(value) and all(
-        isinstance(item, int | float) and not isinstance(item, bool) for item in value
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(isinstance(item, int | float) and not isinstance(item, bool) for item in value)
     )
 
 
@@ -349,10 +351,11 @@ def _health_detail_for_success(
 
 def _read_http_error_detail(error: urllib.error.HTTPError) -> str:
     try:
-        body = error.read().decode("utf-8", errors="replace")
+        body = error.read(4096).decode("utf-8", errors="replace")
     except OSError:
         body = ""
-    return f"HTTP {error.code}: {body}" if body else f"HTTP {error.code}: {error.reason}"
+    detail = f"HTTP {error.code}: {body}" if body else f"HTTP {error.code}: {error.reason}"
+    return sanitize_error_message(detail) or f"HTTP {error.code}"
 
 
 def _looks_like_response_format_rejection(detail: str) -> bool:
