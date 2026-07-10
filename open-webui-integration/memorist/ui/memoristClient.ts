@@ -178,3 +178,78 @@ export class MemoristClient {
     }
   }
 }
+
+export type ImportUploadOptions = {
+  mode?: string;
+  processing_mode?: string;
+  target_workspace_uuid?: string;
+  target_project_uuid?: string;
+};
+
+export type ImportRunSummary = {
+  import_run_uuid: string;
+  status: string;
+  source_platform?: string | null;
+  detected_format?: string | null;
+  total_conversations?: number;
+  total_messages?: number;
+  imported_conversations?: number;
+  imported_messages?: number;
+  skipped_records?: number;
+  warning_count?: number;
+  error_count?: number;
+  created_at?: string;
+  completed_at?: string | null;
+};
+
+export type RecentImportRunsResponse = { items: ImportRunSummary[] };
+
+export async function uploadImportFile(
+  baseUrl: string,
+  file: File,
+  options: ImportUploadOptions = {},
+  onProgress?: (uploadedBytes: number, totalBytes: number) => void,
+): Promise<ImportRunSummary> {
+  const form = new FormData();
+  form.append("file", file);
+  for (const [key, value] of Object.entries(options)) {
+    if (value !== undefined && value !== null && value !== "") form.append(key, String(value));
+  }
+  if (!onProgress || typeof XMLHttpRequest === "undefined") {
+    const response = await fetch(`${baseUrl}/imports/upload-file`, {
+      method: "POST",
+      credentials: "same-origin",
+      body: form,
+    });
+    if (!response.ok) throw new Error(await safeImportError(response));
+    return response.json() as Promise<ImportRunSummary>;
+  }
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", `${baseUrl}/imports/upload-file`);
+    request.withCredentials = true;
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress(event.loaded, event.total);
+    };
+    request.onload = () => {
+      try {
+        const payload = JSON.parse(request.responseText || "{}");
+        if (request.status >= 200 && request.status < 300) resolve(payload);
+        else reject(new Error(typeof payload.detail === "string" ? payload.detail : "Import upload failed."));
+      } catch {
+        reject(new Error("Import upload failed."));
+      }
+    };
+    request.onerror = () => reject(new Error("Import upload failed."));
+    request.send(form);
+  });
+}
+
+async function safeImportError(response: Response): Promise<string> {
+  try {
+    const payload = await response.json();
+    return typeof payload?.detail === "string" ? payload.detail : "Import request failed.";
+  } catch {
+    return "Import request failed.";
+  }
+}

@@ -53,6 +53,23 @@ class ImportRepository:
             self.sqlite.insert("import_runs", run)
         return run
 
+
+    def list_runs(self, limit: int = 25) -> list[dict[str, Any]]:
+        bounded_limit = max(1, min(int(limit), 100))
+        rows = self.connection.execute(
+            """
+            SELECT import_run_uuid, source_platform, detected_format, detected_format_version,
+                   target_workspace_uuid, target_project_uuid, mode, status, total_files,
+                   total_conversations, total_messages, imported_conversations, imported_messages,
+                   skipped_records, warning_count, error_count, created_at, completed_at
+            FROM import_runs
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (bounded_limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def get_run(self, import_run_uuid: str) -> dict[str, Any]:
         row = self.connection.execute(
             "SELECT * FROM import_runs WHERE import_run_uuid = ?",

@@ -1,8 +1,12 @@
+import hashlib
+import os
+import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Any
+from pathlib import Path
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from memcore.config import get_settings
@@ -11,7 +15,14 @@ from memcore.heritage.package import (
     inspect_heritage,
     verify_heritage,
 )
+from memcore.imports.security import (
+    MAX_COMPRESSED_BYTES,
+    MAX_EXPANDED_BYTES,
+    ImportSecurityError,
+    validate_zip_archive,
+)
 from memcore.imports.service import ImportService
+from memcore.imports.staging import sanitize_upload_filename
 from memcore.repositories.domain import RepositoryError
 from memcore.imports.runtime import import_connection
 from memcore.storage.write_commands.heritage_commands import restore_heritage_via_actor
@@ -57,6 +68,69 @@ class HeritageRestoreRequest(BaseModel):
     package_path: str
     db_path: str
     dry_run: bool = True
+
+
+
+@router.get("/imports", response_model=None)
+def list_imports(limit: int = 25) -> dict[str, Any]:
+    with _connection() as connection:
+        service = ImportService(connection, get_settings().object_store_path)
+        return {"items": service.repository.list_runs(limit)}
+
+
+@router.post("/imports/upload-file", response_model=None)
+def upload_import_file(
+    file: Annotated[UploadFile, File()],
+    mode: Annotated[str, Form()] = "inspect",
+    processing_mode: Annotated[str | None, Form()] = None,
+    target_workspace_uuid: Annotated[str | None, Form()] = None,
+    target_project_uuid: Annotated[str | None, Form()] = None,
+) -> dict[str, Any]:
+    safe_name = sanitize_upload_filename(file.filename)
+    suffix = Path(safe_name).suffix.lower()
+    if suffix not in {".zip", ".json", ".jsonl"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported import file type. Choose a .zip, .json, or .jsonl export.",
+        )
+    byte_limit = MAX_COMPRESSED_BYTES if suffix == ".zip" else MAX_EXPANDED_BYTES
+    settings = get_settings()
+    temp_dir = Path(settings.object_store_path) / "imports" / "_uploads"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix="upload-", suffix=suffix, dir=temp_dir)
+    temp_path = Path(temp_name)
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        with os.fdopen(fd, "wb") as output:
+            while chunk := file.file.read(1024 * 1024):
+                total += len(chunk)
+                if total > byte_limit:
+                    raise ImportSecurityError("uploaded import file exceeds size limit")
+                digest.update(chunk)
+                output.write(chunk)
+        if suffix == ".zip":
+            validate_zip_archive(str(temp_path))
+        with _connection() as connection:
+            return _guard(
+                lambda: ImportService(connection, settings.object_store_path).upload_staged_file(
+                    str(temp_path),
+                    digest.hexdigest(),
+                    safe_name,
+                    mode,
+                    {"processing_mode": processing_mode} if processing_mode else {},
+                    target_workspace_uuid,
+                    target_project_uuid,
+                )
+            )
+    except (ImportSecurityError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=_sanitize_upload_error(str(error))) from error
+    finally:
+        try:
+            file.file.close()
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
 
 
 @router.post("/imports/upload", response_model=None)
@@ -314,3 +388,22 @@ def _guard[ReturnT](callable_: Callable[[], ReturnT]) -> ReturnT:
         return callable_()
     except (RepositoryError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+def _sanitize_upload_error(message: str) -> str:
+    lowered = message.lower()
+    if "traversal" in lowered:
+        return "Archive contains a path traversal entry and was rejected."
+    if "absolute path" in lowered:
+        return "Archive contains an absolute path entry and was rejected."
+    if "link or device" in lowered:
+        return "Archive contains an unsupported link or device entry and was rejected."
+    if "too many files" in lowered:
+        return "Archive contains too many files."
+    if "compression ratio" in lowered:
+        return "Archive compression ratio exceeds the safety limit."
+    if "size" in lowered or "exceeds" in lowered:
+        return "Uploaded import file exceeds the configured size limit."
+    if "not a zip" in lowered or "badzip" in lowered:
+        return "Uploaded ZIP archive is malformed."
+    return "Import upload failed validation."
