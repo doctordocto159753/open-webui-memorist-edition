@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from memcore.config import Settings
 from memcore.main import create_app
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
+from memcore.model_control.providers.openai_compatible import OpenAICompatibleLLMProvider
 from memcore.model_control.repository import ModelControlRepository
 from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
@@ -121,6 +122,46 @@ def test_model_control_profile_crud(
         },
     )
     assert rejected.status_code == 422
+
+
+
+def test_openai_compatible_health_check_validates_json_mode(
+    openai_json_mode_server: tuple[str, type[BaseHTTPRequestHandler]],
+) -> None:
+    endpoint, handler = openai_json_mode_server
+    provider = OpenAICompatibleLLMProvider(
+        endpoint,
+        "mock-chat",
+        supports_json_mode=True,
+        requires_structured_extraction=True,
+    )
+
+    health = provider.health_check()
+
+    assert health.status == "ok"
+    assert health.detail == "HTTP 200"
+    assert handler.last_payload["response_format"] == {"type": "json_object"}
+
+
+def test_openai_compatible_health_check_reports_json_mode_unsupported(
+    openai_json_mode_server: tuple[str, type[BaseHTTPRequestHandler]],
+) -> None:
+    endpoint, handler = openai_json_mode_server
+    handler.reject_response_format = True
+    provider = OpenAICompatibleLLMProvider(
+        endpoint,
+        "mock-chat",
+        supports_structured_output=True,
+        requires_structured_extraction=True,
+    )
+
+    health = provider.health_check()
+
+    assert health.status == "error"
+    assert health.detail == (
+        "Provider rejected JSON response_format; disable Supports JSON mode or "
+        "choose a compatible model."
+    )
 
 
 def test_role_defaults_resolution(client_and_db: tuple[TestClient, Path]) -> None:
@@ -611,6 +652,49 @@ def test_docs_include_model_roles() -> None:
     assert "Model Control Plane path" in architecture
     assert "embedding" in architecture
 
+
+
+@pytest.fixture
+def openai_json_mode_server() -> Iterator[tuple[str, type[BaseHTTPRequestHandler]]]:
+    class JsonModeHandler(BaseHTTPRequestHandler):
+        reject_response_format = False
+        last_payload: dict[str, Any] = {}
+
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path != "/v1/chat/completions":
+                self.send_response(404)
+                self.end_headers()
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            type(self).last_payload = payload
+            if type(self).reject_response_format and "response_format" in payload:
+                body = json.dumps({"error": "response_format is unsupported"}).encode("utf-8")
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            content = json.dumps({})
+            body = json.dumps({"choices": [{"message": {"content": content}}]}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: Any) -> None:
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), JsonModeHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}", JsonModeHandler
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
 
 @pytest.fixture
 def openai_compatible_server() -> Iterator[str]:

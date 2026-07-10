@@ -25,23 +25,55 @@ class OpenAICompatibleLLMProvider:
         endpoint_url: str,
         model_name: str,
         secret_env_var_name: str | None = None,
+        supports_json_mode: bool = False,
+        supports_structured_output: bool = False,
+        requires_structured_extraction: bool = False,
     ) -> None:
         self.endpoint_url = endpoint_url.rstrip("/")
         self.model_name = model_name
         self.secret_env_var_name = secret_env_var_name
+        self.supports_json_mode = supports_json_mode
+        self.supports_structured_output = supports_structured_output
+        self.requires_structured_extraction = requires_structured_extraction
 
     def health_check(self, timeout_seconds: float = 1.0) -> ProviderHealth:
         started = perf_counter()
         detail: str | None
+        payload = {
+            "model": self.model_name,
+            "messages": [{"role": "user", "content": "Return {} as JSON."}],
+            "max_tokens": 8,
+        }
+        if self.supports_json_mode or self.supports_structured_output:
+            payload["response_format"] = {"type": "json_object"}
         try:
             request = urllib.request.Request(
-                _openai_url(self.endpoint_url, "models"),
+                _openai_url(self.endpoint_url, "chat/completions"),
+                data=json.dumps(payload).encode("utf-8"),
                 headers=_headers(self.secret_env_var_name),
-                method="GET",
+                method="POST",
             )
             with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
                 status = "ok" if 200 <= response.status < 300 else "error"
-                detail = f"HTTP {response.status}"
+                detail = _health_detail_for_success(
+                    response.status,
+                    supports_json_format=bool(
+                        self.supports_json_mode or self.supports_structured_output
+                    ),
+                    requires_structured_extraction=self.requires_structured_extraction,
+                )
+        except urllib.error.HTTPError as error:
+            status = "error"
+            error_detail = _read_http_error_detail(error)
+            if (
+                self.supports_json_mode or self.supports_structured_output
+            ) and _looks_like_response_format_rejection(error_detail):
+                detail = (
+                    "Provider rejected JSON response_format; disable Supports JSON mode or "
+                    "choose a compatible model."
+                )
+            else:
+                detail = sanitize_error_message(error_detail or str(error))
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             status = "error"
             detail = sanitize_error_message(str(error))
@@ -165,3 +197,33 @@ def _openai_url(endpoint_url: str, path: str) -> str:
 
 def _elapsed_ms(started: float) -> int:
     return int((perf_counter() - started) * 1000)
+
+
+def _health_detail_for_success(
+    http_status: int,
+    *,
+    supports_json_format: bool,
+    requires_structured_extraction: bool,
+) -> str:
+    if requires_structured_extraction and not supports_json_format:
+        return (
+            f"HTTP {http_status}; warning: this profile does not declare Supports JSON mode or "
+            "Supports structured output and may be unsuitable for structured memory tasks. "
+            "Enable one of those capabilities or choose a compatible model."
+        )
+    return f"HTTP {http_status}"
+
+
+def _read_http_error_detail(error: urllib.error.HTTPError) -> str:
+    try:
+        body = error.read().decode("utf-8", errors="replace")
+    except OSError:
+        body = ""
+    return f"HTTP {error.code}: {body}" if body else f"HTTP {error.code}: {error.reason}"
+
+
+def _looks_like_response_format_rejection(detail: str) -> bool:
+    lowered = detail.lower()
+    return "response_format" in lowered or (
+        "json" in lowered and any(term in lowered for term in ("unsupported", "reject", "invalid"))
+    )
