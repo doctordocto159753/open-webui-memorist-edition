@@ -64,9 +64,25 @@ class MemoryProcessingRunRepository:
             MemoryProcessingRun,
             """
             SELECT * FROM memory_processing_runs
-            WHERE message_uuid = ? AND pipeline_version = ? AND input_content_hash = ?
+            WHERE message_uuid = ?
+              AND pipeline_version = ?
+              AND COALESCE(prompt_bundle_version, '') = COALESCE(?, '')
+              AND input_content_hash = ?
+              AND COALESCE(prompt_id, '') = COALESCE(?, '')
+              AND COALESCE(prompt_version, '') = COALESCE(?, '')
+              AND COALESCE(model_profile_uuid, '') = COALESCE(?, '')
+              AND COALESCE(provider_type, '') = COALESCE(?, '')
             """,
-            (message_uuid, pipeline_version, input_content_hash),
+            (
+                message_uuid,
+                pipeline_version,
+                prompt_bundle_version,
+                input_content_hash,
+                prompt_id,
+                prompt_version,
+                model_profile_uuid,
+                provider_type,
+            ),
         )
         if existing is not None:
             return existing

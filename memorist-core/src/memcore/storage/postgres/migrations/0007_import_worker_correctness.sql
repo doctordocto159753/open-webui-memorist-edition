@@ -1,0 +1,10 @@
+ALTER TABLE memory_processing_runs ADD COLUMN IF NOT EXISTS prompt_id TEXT;
+ALTER TABLE memory_processing_runs ADD COLUMN IF NOT EXISTS prompt_version TEXT;
+ALTER TABLE import_message_processing_status ADD COLUMN IF NOT EXISTS lease_acquired_at TIMESTAMPTZ;
+ALTER TABLE import_message_processing_status ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ;
+ALTER TABLE import_message_processing_status ADD COLUMN IF NOT EXISTS last_transition_at TIMESTAMPTZ;
+ALTER TABLE import_message_processing_status ADD COLUMN IF NOT EXISTS error_classification TEXT;
+ALTER TABLE import_message_processing_status ADD COLUMN IF NOT EXISTS processing_identity_hash TEXT;
+CREATE INDEX IF NOT EXISTS idx_import_processing_claim_next ON import_message_processing_status(status, run_after, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_import_processing_active_identity ON import_message_processing_status(processing_identity_hash) WHERE status IN ('queued','running');
+CREATE INDEX IF NOT EXISTS idx_memory_processing_canonical_identity ON memory_processing_runs(message_uuid, input_content_hash, pipeline_version, prompt_bundle_version, provider_type, model_profile_uuid, prompt_id, prompt_version, status);
