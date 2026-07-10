@@ -15,7 +15,10 @@ from fastapi.testclient import TestClient
 from memcore.config import Settings
 from memcore.main import create_app
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
-from memcore.model_control.providers.openai_compatible import OpenAICompatibleLLMProvider
+from memcore.model_control.providers.openai_compatible import (
+    OpenAICompatibleEmbeddingProvider,
+    OpenAICompatibleLLMProvider,
+)
 from memcore.model_control.repository import ModelControlRepository
 from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
@@ -693,6 +696,51 @@ def test_openai_compatible_health_check_uses_chat_completions_not_models(
     assert _OpenAICompatibleHandler.post_paths == ["/v1/chat/completions"]
 
 
+def test_openai_compatible_embedding_health_check_uses_embeddings(
+    openai_compatible_server: str,
+) -> None:
+    _OpenAICompatibleHandler.get_paths = []
+    _OpenAICompatibleHandler.post_paths = []
+    _OpenAICompatibleHandler.last_payload = {}
+
+    health = OpenAICompatibleEmbeddingProvider(
+        openai_compatible_server,
+        "mock-embedding",
+        embedding_dimension=3,
+    ).health_check()
+
+    assert health.status == "ok"
+    assert health.local_only_safe is True
+    assert health.detail is not None
+    assert "dimension=3" in health.detail
+    assert _OpenAICompatibleHandler.get_paths == []
+    assert _OpenAICompatibleHandler.post_paths == ["/v1/embeddings"]
+    assert _OpenAICompatibleHandler.last_payload == {
+        "model": "mock-embedding",
+        "input": ["Memorist embedding connectivity test."],
+    }
+
+
+def test_openai_compatible_embedding_health_check_dimension_mismatch(
+    openai_compatible_server: str,
+) -> None:
+    _OpenAICompatibleHandler.post_paths = []
+
+    health = OpenAICompatibleEmbeddingProvider(
+        openai_compatible_server,
+        "mock-embedding",
+        embedding_dimension=4,
+    ).health_check()
+
+    assert health.status == "error"
+    assert health.detail is not None
+    assert "Embedding dimension mismatch" in health.detail
+    assert "profile expects 4" in health.detail
+    assert "provider returned 3" in health.detail
+    assert "Update the profile embedding_dimension" in health.detail
+    assert _OpenAICompatibleHandler.post_paths == ["/v1/embeddings"]
+
+
 def test_openai_compatible_health_check_rejects_malformed_json() -> None:
     class MalformedJSONHandler(_HealthCheckHandler):
         response_content = "not-json"
@@ -734,6 +782,7 @@ def openai_compatible_server() -> Iterator[str]:
 class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
     get_paths: list[str] = []
     post_paths: list[str] = []
+    last_payload: dict[str, Any] = {}
 
     def do_GET(self) -> None:  # noqa: N802
         self.__class__.get_paths.append(self.path)
@@ -753,6 +802,7 @@ class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
         if self.path == "/v1/chat/completions":
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            self.__class__.last_payload = payload
             if payload.get("model") != "mock-chat":
                 body = json.dumps({"error": {"message": "model not found"}}).encode("utf-8")
                 self.send_response(400)
@@ -763,6 +813,25 @@ class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
                 return
             content = json.dumps({"memorist_provider_test": "ok"})
             body = json.dumps({"choices": [{"message": {"content": content}}]}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/v1/embeddings":
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            self.__class__.last_payload = payload
+            if payload.get("model") != "mock-embedding":
+                body = json.dumps({"error": {"message": "model not found"}}).encode("utf-8")
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            body = json.dumps({"data": [{"embedding": [0.1, 0.2, 0.3]}]}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -783,6 +852,7 @@ class _HealthCheckHandler(_OpenAICompatibleHandler):
         if self.path == "/v1/chat/completions":
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            self.__class__.last_payload = payload
             if payload.get("model") != "mock-chat":
                 body = json.dumps({"error": {"message": "model not found"}}).encode("utf-8")
                 self.send_response(400)
