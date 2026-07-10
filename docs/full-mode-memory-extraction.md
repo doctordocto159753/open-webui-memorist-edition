@@ -20,7 +20,7 @@ A local OpenAI-compatible endpoint can be configured with a model profile using 
 http://host.docker.internal:31415/v1
 ```
 
-Secrets must be referenced through `secret_env_var_name`; raw API keys must not be stored in profile JSON. Diagnostics redact authorization and token-like values before persistence.
+Secrets must be referenced through `secret_env_var_name`; the named environment variable must exist in the Memorist backend container/process environment. Raw API keys must not be stored in profile JSON, are not persisted, and are not returned. Diagnostics redact authorization and token-like values before persistence.
 
 ## Deterministic fallback
 
@@ -54,12 +54,12 @@ Create a processing node for the provider that should run `memory_extraction`. F
 - **Model name**: the provider model identifier to call for memory extraction.
 - **Endpoint locality**: mark whether the endpoint is local or remote.
 - **Secret strategy**: select environment-variable secret storage.
-- **Secret environment variable name**: `MEMORIST_PROCESSING_API_KEY`; do not paste raw API keys into profile fields.
+- **Secret environment variable name**: `MEMORIST_PROCESSING_API_KEY`; this environment variable must exist in the Memorist backend container/process environment. Do not paste raw API keys into profile fields; raw keys are not persisted or returned.
 - **Capabilities**: enable JSON mode and structured output when the provider supports them.
 
 ### Optional OpenAI-compatible endpoint examples
 
-The endpoint can be any provider that implements the OpenAI-compatible API shape required by Memorist. FreeLLMAPI is only one possible OpenAI-compatible endpoint; if you use it locally, configure the same generic fields above with a FreeLLMAPI `/v1` base URL such as `http://host.docker.internal:31415/v1` and keep the API key in `MEMORIST_PROCESSING_API_KEY`.
+The endpoint can be any provider that implements the OpenAI-compatible API shape required by Memorist. FreeLLMAPI is only one possible OpenAI-compatible endpoint example, not a dedicated provider path; if you use it locally, configure the same generic OpenAI-compatible fields above with a FreeLLMAPI `/v1` base URL such as `http://host.docker.internal:31415/v1` and keep the API key in `MEMORIST_PROCESSING_API_KEY`.
 
 Other local gateways, self-hosted runtimes, or remote OpenAI-compatible services can use their own `/v1` base URLs as long as they support the configured model and structured-response capabilities.
 
@@ -68,7 +68,7 @@ Other local gateways, self-hosted runtimes, or remote OpenAI-compatible services
 1. Select **Create processing node** from **Settings → Memorist → Processing Nodes**.
 2. Enter the OpenAI-compatible fields above and save the node as a Model Control profile.
 3. To change a provider, open the profile from the processing-node list, edit the endpoint, model, locality, secret env-var name, or capability flags, and save again.
-4. Use **Test profile** before assigning the profile as a default. The test should verify that Memorist can reach the endpoint, resolve the configured secret environment variable, receive a compatible response, and validate structured JSON when structured output is enabled.
+4. Use **Test profile** before assigning the profile as a default. The test validates real role capability, not just endpoint reachability: LLM roles call `POST /v1/chat/completions`, while the `embedding` role calls `POST /v1/embeddings`. `GET /v1/models` is optional diagnostic metadata only and is not the success gate. The test must resolve the configured secret environment variable from the Memorist backend container/process environment, receive a compatible response, and actively validate JSON object responses with `response_format: {"type": "json_object"}` when `supports_json_mode` or `supports_structured_output` is enabled.
 5. Review the resolved profile details after saving. For Full Mode extraction, the worker should resolve this profile for the `memory_extraction` role.
 
 ### Acknowledge privacy for remote endpoints
@@ -87,7 +87,7 @@ After the profile is saved, tested, and privacy-acknowledged when required:
 4. Save the default assignment.
 5. Confirm the resolved default shown by the UI. After this, `/memcore/memory-worker/process-message/{message_uuid}` uses the configured profile and should record `provider_type=openai_compatible` plus a non-null `model_profile_uuid` in `memory_processing_runs`, `prompt_execution_runs`, and `model_usage_events`.
 
-API keys must be supplied through the named environment variable. Model Control stores only `secret_env_var_name`; raw keys must not be included in endpoint URLs, profile metadata, cost, quality, latency, privacy payloads, or diagnostics.
+API keys must be supplied through the named environment variable in the Memorist backend container/process environment. Model Control stores only `secret_env_var_name`; raw keys must not be included in endpoint URLs, profile metadata, cost, quality, latency, privacy payloads, or diagnostics. Raw API keys are not persisted or returned.
 
 ### Developer-only curl fallback, non-primary
 

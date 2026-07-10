@@ -26,4 +26,9 @@ curl -X POST http://localhost:8777/memcore/model-control/privacy/acknowledge \
   -d '{"model_profile_uuid":"...","acknowledged_risk_level":"external","acknowledged_data_sent":{"sends_raw_user_text":true}}'
 ```
 
-Memorist never stores raw API keys in SQLite or PostgreSQL. Store provider secrets in the environment and put only the env-var name in the profile.
+Memorist never stores raw API keys in SQLite or PostgreSQL, and Model Control APIs do not return raw keys. Store provider secrets in the Memorist backend container/process environment and put only the env-var name in the profile; the named env var must exist where the Memorist backend process runs.
+
+
+## Provider testing and diagnostics
+
+Processing Nodes **Test** validates real role capability, not only endpoint reachability. LLM roles use `POST /v1/chat/completions`; the `embedding` role uses `POST /v1/embeddings`. `GET /v1/models` may be used as optional diagnostic metadata, but it is not the success gate. If `supports_json_mode` or `supports_structured_output` is enabled, Memorist actively tests JSON object responses with `response_format: {"type": "json_object"}`. FreeLLMAPI should be configured as a normal OpenAI-compatible endpoint example rather than as a dedicated provider path.
