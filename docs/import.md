@@ -12,7 +12,7 @@ upload/stage
 -> dry-run
 -> review report
 -> commit
--> process full reconstruction batches
+-> automatic reconstruction worker drains durable jobs
 -> review progress/report and retry failures
 ```
 
@@ -50,7 +50,7 @@ Use `processing_mode` in the dry-run request to preview the intended commit:
 
 The report includes format/platform, conversation and message totals, eligibility and
 grouped skip reasons, duplicates, expected sessions/messages/mappings/jobs, processing
-priority, graph projection state, and the resolved `memory_extraction` role/profile.
+priority, graph projection state, and the resolved processing role/profile.
 It also reports whether deterministic fallback will be used, whether a configured
 profile is enabled and privacy-acknowledged, and whether its secret environment variable
 is available. Full reconstruction may consume substantial time and tokens. It does not
@@ -72,15 +72,20 @@ null mapping nodes, empty visible text, reasoning-only content, and binary-only 
 nodes are skipped with an explicit reason.
 
 Each message receives durable state in `import_message_processing_status`: `queued`,
-`running`, `succeeded`, `failed`, `skipped`, or `already_processed`. State includes source
-and target IDs, job/run/profile identifiers, retry count, sanitized error, input hash, and
-timestamps. The unique import/source/mode identity and canonical memory-worker keys make
-resume and retry idempotent.
+`running`, `succeeded`, `failed`, `skipped`, `already_processed`, or `cancelled`.
+State includes source and target IDs, job/run/profile identifiers, retry count,
+sanitized error, input hash, pipeline version, prompt-bundle version, model role,
+processing identity, lease fields, and timestamps. Mapping identity is not treated as
+proof of processing. A mapped message becomes `already_processed` only when a matching
+successful current memory-processing run exists for the same message, content hash,
+pipeline, prompt bundle, and model profile.
 
-Full reconstruction reuses Model Control's `memory_extraction` default. Disabled profiles,
-remote profiles without privacy acknowledgement, and profiles whose required secret env
-var is unavailable are not selected for imported work; deterministic fallback is used and
-reported. Prompt executions and model usage events carry the import run and job IDs.
+Full reconstruction resolves Model Control in this order: `import_reconstruction`,
+then `memory_extraction`, then deterministic fallback. Disabled profiles, remote
+profiles without privacy acknowledgement, and profiles whose required secret env var is
+unavailable are not selected for remote work; deterministic fallback is used and
+reported. Prompt executions and model usage events carry the truthful role/profile/model
+that was actually used, plus import run and job IDs.
 
 ## API
 
@@ -97,7 +102,7 @@ The existing flow remains compatible:
 - `POST /memcore/imports/{import_run_uuid}/resume`
 - `POST /memcore/imports/{import_run_uuid}/cancel`
 
-Full reconstruction adds:
+Full reconstruction adds administrative/debug endpoints:
 
 - `POST /memcore/imports/{import_run_uuid}/process` with a bounded `batch_size`.
 - `POST /memcore/imports/{import_run_uuid}/retry-failed`.
@@ -105,10 +110,17 @@ Full reconstruction adds:
 - `GET /memcore/imports/{import_run_uuid}/messages/processing-status`.
 
 Commit only schedules durable low-priority jobs; it does not create an unbounded request.
-Call the bounded process endpoint from the import worker/UI until progress is terminal.
-An import using full reconstruction is `processing` after commit and becomes
-`fully_reconstructed` only when every message has a terminal state. Failed messages are
-terminal for reporting but can be re-queued without re-importing the archive.
+The import reconstruction worker automatically claims queued work in bounded batches,
+releases the claim transaction, performs provider work outside the SQLite write actor,
+and persists results afterward. The manual process endpoint remains for bounded
+administrative execution and debugging.
+
+An import using full reconstruction is `processing` after commit. It becomes
+`fully_reconstructed` only when all eligible work succeeded or was verifiably already
+processed. If eligible messages fail permanently, the run becomes
+`completed_with_failures`. Skipped messages are acceptable only when they carry explicit
+ineligibility reasons. Retry re-queues failed eligible messages without recreating
+canonical sessions/messages.
 
 Live capture remains higher priority than import work. Pause/cancel prevents future import
 batches; completed canonical writes are not rolled back.
@@ -124,20 +136,35 @@ uv run python -m memcore.imports inspect path/to/conversations.json --commit \
   --processing-mode full_memory_reconstruction
 ```
 
-CLI commit stages and schedules reconstruction. Use the API worker endpoints for bounded
-processing, progress, and retry.
+CLI commit stages and schedules reconstruction. The background worker drains queued
+work when Memorist Core is running; use the API worker endpoints for bounded
+administrative processing, progress, and retry.
 
 ## UI status
 
-This repository does not currently ship a complete import UI. The API and CLI are the
-truthful primary interfaces for this release; a future UI should expose inspect,
-reconstruct, dry-run approval, processing-mode selection, progress, reports, and failed
-message retry without changing these contracts.
+The Open WebUI integration registers a Memorist import workflow under the Memorist
+settings area. It supports source path selection, upload/inspect/reconstruct/dry-run,
+processing-mode selection, explicit full-reconstruction confirmation, progress counts,
+pause, resume, cancel, retry failed, token counts when available, and sanitized report
+display. The UI calls the same API contracts listed above.
 
 ## Storage-mode Note
 
-The current import orchestration routes use the SQLite control store in both product
-profiles. This change adds matching PostgreSQL schema for per-message reconstruction state,
-but does not silently redirect existing import APIs to the Full/PostgreSQL canonical store.
-Direct Full/PostgreSQL import orchestration parity remains a follow-up; the limitation is
-explicit so Full Mode is not presented as complete where it is not.
+Lite Mode uses SQLite for import runs, mappings, canonical sessions/messages, durable
+per-message processing state, and memory artifacts. Full Mode import endpoints no longer
+silently fall back to SQLite; they fail explicitly until PostgreSQL import repositories
+and the PostgreSQL import worker are completed. Matching PostgreSQL migrations exist for
+per-message reconstruction state, but runtime Full/PostgreSQL import parity is not
+claimed by this document.
+
+## Worker Configuration
+
+```text
+MEMORIST_IMPORT_RECONSTRUCTION_WORKER_ENABLED=true
+MEMORIST_IMPORT_RECONSTRUCTION_CONCURRENCY=1
+MEMORIST_IMPORT_RECONSTRUCTION_WORKER_BATCH_SIZE=5
+MEMORIST_IMPORT_RECONSTRUCTION_LEASE_SECONDS=300
+MEMORIST_IMPORT_RECONSTRUCTION_MAX_ATTEMPTS=5
+MEMORIST_IMPORT_RECONSTRUCTION_RETRY_BASE_SECONDS=10
+MEMORIST_IMPORT_RECONSTRUCTION_POLL_SECONDS=1.0
+```

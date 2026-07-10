@@ -246,6 +246,13 @@ def test_effective_config_endpoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
             "max_write_queue_depth": 500,
             "low_priority": True,
             "reconstruction_default": "off",
+            "reconstruction_worker_enabled": True,
+            "reconstruction_concurrency": 1,
+            "reconstruction_worker_batch_size": 5,
+            "reconstruction_lease_seconds": 300,
+            "reconstruction_max_attempts": 5,
+            "reconstruction_retry_base_seconds": 10,
+            "reconstruction_poll_seconds": 1.0,
         },
         "scheduler": {
             "backend": "disabled",

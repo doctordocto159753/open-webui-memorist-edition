@@ -92,10 +92,13 @@ class MemoryWorkerPipeline:
 
         extraction_profile = self._resolve_memory_extraction_profile(model_target)
         extraction_profile_uuid = _optional_string(extraction_profile.get("model_profile_uuid"))
+        extraction_role = ModelRole(
+            str(extraction_profile.get("role") or ModelRole.MEMORY_EXTRACTION.value)
+        )
         if extraction_profile["provider_type"] == "disabled":
             ModelControlRepository(self.connection).record_usage_event(
                 UsageEventCreate(
-                    role=ModelRole.MEMORY_EXTRACTION,
+                    role=extraction_role,
                     stage="memory_extraction_disabled",
                     model_profile_uuid=extraction_profile_uuid,
                     session_uuid=message.session_uuid,
@@ -117,15 +120,15 @@ class MemoryWorkerPipeline:
                 "candidates": 0,
                 "consolidation_decisions": 0,
                 "graph_projection": {"status": "skipped"},
-                "model_role": ModelRole.MEMORY_EXTRACTION.value,
+                "model_role": extraction_role.value,
                 "model_profile_uuid": extraction_profile_uuid,
             }
 
         provider_type = str(extraction_profile["provider_type"])
-        if (
-            import_run_uuid is not None
-            and provider_type in {"openai_compatible", "openai_compatible_llm"}
-        ):
+        if import_run_uuid is not None and provider_type in {
+            "openai_compatible",
+            "openai_compatible_llm",
+        }:
             profile_uuid = extraction_profile.get("model_profile_uuid")
             stored_profile = (
                 ModelControlRepository(self.connection).get_profile(str(profile_uuid))
@@ -143,6 +146,7 @@ class MemoryWorkerPipeline:
                 model_name=str(extraction_profile["model_name"]),
             )
         self.jakobson.model_profile_uuid = extraction_profile_uuid
+        self.jakobson.model_role = extraction_role.value
         jakobson_started = perf_counter()
         jakobson_result = self.jakobson.run_for_message(
             message_uuid,
@@ -151,7 +155,7 @@ class MemoryWorkerPipeline:
         )
         ModelControlRepository(self.connection).record_usage_event(
             UsageEventCreate(
-                role=ModelRole.MEMORY_EXTRACTION,
+                role=extraction_role,
                 stage="jakobson_sentence_analysis",
                 model_profile_uuid=extraction_profile_uuid,
                 session_uuid=message.session_uuid,
@@ -218,13 +222,11 @@ class MemoryWorkerPipeline:
             "candidates": len(candidates),
             "consolidation_decisions": len(decisions_created),
             "graph_projection": graph_result,
-            "model_role": ModelRole.MEMORY_EXTRACTION.value,
+            "model_role": extraction_role.value,
             "model_profile_uuid": extraction_profile_uuid,
         }
 
-    def _completed_result(
-        self, processing_run_uuid: str, message_uuid: str
-    ) -> dict[str, object]:
+    def _completed_result(self, processing_run_uuid: str, message_uuid: str) -> dict[str, object]:
         unit_count = int(
             self.connection.execute(
                 "SELECT COUNT(*) FROM text_units WHERE message_uuid = ?", (message_uuid,)

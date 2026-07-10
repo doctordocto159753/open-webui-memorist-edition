@@ -4,6 +4,8 @@ import socket
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from memcore.model_control.security import sanitize_error_message
+
 
 @dataclass(frozen=True)
 class FalkorDBHealth:
@@ -27,7 +29,11 @@ class FalkorDBClient:
                 return FalkorDBHealth(ok=True, status="ok")
             return FalkorDBHealth(ok=False, status="unexpected_response")
         except Exception as error:
-            return FalkorDBHealth(ok=False, status="degraded", error_sanitized=str(error)[:240])
+            return FalkorDBHealth(
+                ok=False,
+                status="degraded",
+                error_sanitized=sanitize_error_message(str(error)),
+            )
 
     def graph_query(self, query: str) -> bytes:
         host, port = self._host_port()

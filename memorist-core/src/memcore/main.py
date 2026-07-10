@@ -1,3 +1,6 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from memcore.api.routes_base import router as base_router
@@ -15,6 +18,7 @@ from memcore.api.routes_openwebui import router as openwebui_router
 from memcore.api.routes_retrieval import router as retrieval_router
 from memcore.api.routes_scheduler import router as scheduler_router
 from memcore.config import get_settings
+from memcore.imports.orchestrator import ImportReconstructionOrchestrator
 from memcore.observability.logging import configure_logging
 from memcore.storage.runtime import initialize_storage
 from memcore.version import __version__
@@ -24,6 +28,15 @@ def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.log_level)
     initialize_storage(settings)
+    orchestrator = ImportReconstructionOrchestrator(settings)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        orchestrator.start()
+        try:
+            yield
+        finally:
+            orchestrator.stop()
 
     app = FastAPI(
         title="memorist-core",
@@ -31,6 +44,7 @@ def create_app() -> FastAPI:
         docs_url="/memcore/docs",
         redoc_url=None,
         openapi_url="/memcore/openapi.json",
+        lifespan=lifespan,
     )
     app.include_router(health_router)
     app.include_router(config_router)

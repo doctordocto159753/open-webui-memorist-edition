@@ -22,6 +22,7 @@ from memcore.memory_worker.providers.openai_compatible import (
 )
 from memcore.memory_worker.routing.signal_router import SignalRouter
 from memcore.memory_worker.segmentation.sentence_segmenter import SentenceSegmenter
+from memcore.model_control.security import sanitize_error_message
 from memcore.models import (
     JakobsonAnalysisRun,
     JakobsonAnalysisRunStatus,
@@ -66,9 +67,7 @@ class DeterministicJakobsonProvider:
         function_counts = Counter(sentence["dominant_function"] for sentence in sentences)
         dominant = function_counts.most_common(1)[0][0] if function_counts else "referential"
         secondary = [
-            function
-            for function, _ in function_counts.most_common()
-            if function != dominant
+            function for function, _ in function_counts.most_common() if function != dominant
         ]
         return {
             "schema_version": "1.0",
@@ -150,6 +149,7 @@ class JakobsonAnalysisService:
         self.outbox = MemoryStoreRepository(connection)
         self.router = SignalRouter()
         self.model_profile_uuid: str | None = None
+        self.model_role = "memory_extraction"
 
     def run_for_message(
         self,
@@ -194,7 +194,7 @@ class JakobsonAnalysisService:
             execution = PromptExecutionRepository(self.connection).record_execution(
                 prompt_id=JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
                 prompt_version=JAKOBSON_SENTENCE_ANALYSIS_VERSION,
-                model_role="memory_extraction",
+                model_role=self.model_role,
                 provider_type=self.provider.provider_type,
                 model_name=str(self.provider.model_name or self.provider.provider_type),
                 model_profile_uuid=self.model_profile_uuid,
@@ -211,16 +211,12 @@ class JakobsonAnalysisService:
                 status="ok",
                 warnings=warnings,
                 latency_ms=int(
-                    getattr(self.provider, "latency_ms", 0)
-                    or (perf_counter() - started) * 1000
+                    getattr(self.provider, "latency_ms", 0) or (perf_counter() - started) * 1000
                 ),
                 input_tokens=int(
-                    getattr(self.provider, "input_tokens", 0)
-                    or max(0, (len(raw_text) + 3) // 4)
+                    getattr(self.provider, "input_tokens", 0) or max(0, (len(raw_text) + 3) // 4)
                 ),
-                output_tokens=int(
-                    getattr(self.provider, "output_tokens", 0) or len(annotations)
-                ),
+                output_tokens=int(getattr(self.provider, "output_tokens", 0) or len(annotations)),
             )
             run.prompt_execution_uuid = str(execution["prompt_execution_uuid"])
             persisted_run = self.runs.create_run(run)
@@ -269,7 +265,7 @@ class JakobsonAnalysisService:
                 execution = PromptExecutionRepository(self.connection).record_execution(
                     prompt_id=JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
                     prompt_version=JAKOBSON_SENTENCE_ANALYSIS_VERSION,
-                    model_role="memory_extraction",
+                    model_role=self.model_role,
                     provider_type=self.provider.provider_type,
                     model_name=str(self.provider.model_name or self.provider.provider_type),
                     model_profile_uuid=self.model_profile_uuid,
@@ -285,10 +281,9 @@ class JakobsonAnalysisService:
                     validated_output_value=None,
                     status="error",
                     warnings=[type(error).__name__],
-                    error_sanitized=str(error),
+                    error_sanitized=sanitize_error_message(str(error)),
                     latency_ms=int(
-                        getattr(self.provider, "latency_ms", 0)
-                        or (perf_counter() - started) * 1000
+                        getattr(self.provider, "latency_ms", 0) or (perf_counter() - started) * 1000
                     ),
                     input_tokens=int(
                         getattr(self.provider, "input_tokens", 0)
@@ -300,6 +295,7 @@ class JakobsonAnalysisService:
                 pass
             self.runs.create_run(run)
             raise
+
     def _load_or_create_sentence_units(self, message: Message, raw_text: str) -> list[TextUnit]:
         existing = self.units.list_units(message.message_uuid)
         sentence_units = [unit for unit in existing if unit.unit_type is TextUnitType.SENTENCE]

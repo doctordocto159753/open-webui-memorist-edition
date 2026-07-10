@@ -18,7 +18,6 @@ from memcore.storage.sqlite import connect
 from memcore.storage.write_commands.heritage_commands import restore_heritage_via_actor
 from memcore.storage.write_commands.import_commands import (
     commit_import_via_actor,
-    process_import_batch_via_actor,
 )
 
 router = APIRouter(prefix="/memcore", tags=["imports"])
@@ -167,6 +166,7 @@ def import_dry_run_report(import_run_uuid: str) -> dict[str, Any]:
 @router.post("/imports/{import_run_uuid}/commit", response_model=None)
 def import_commit(import_run_uuid: str, request: ImportCommitRequest) -> dict[str, Any]:
     settings = get_settings()
+    _reject_full_mode_import(settings)
     return _guard(
         lambda: commit_import_via_actor(
             settings.db_path,
@@ -190,18 +190,13 @@ def import_progress(import_run_uuid: str) -> dict[str, Any]:
 
 
 @router.post("/imports/{import_run_uuid}/process", response_model=None)
-def import_process(
-    import_run_uuid: str, request: ImportProcessRequest
-) -> dict[str, Any]:
-    settings = get_settings()
-    return _guard(
-        lambda: process_import_batch_via_actor(
-            settings.db_path,
-            settings.object_store_path,
-            import_run_uuid,
-            request.batch_size,
+def import_process(import_run_uuid: str, request: ImportProcessRequest) -> dict[str, Any]:
+    with _connection() as connection:
+        return _guard(
+            lambda: ImportService(connection, get_settings().object_store_path).process_next_batch(
+                import_run_uuid, request.batch_size
+            )
         )
-    )
 
 
 @router.post("/imports/{import_run_uuid}/retry-failed", response_model=None)
@@ -218,9 +213,9 @@ def import_retry_failed(import_run_uuid: str) -> dict[str, Any]:
 def import_processing_report(import_run_uuid: str) -> dict[str, Any]:
     with _connection() as connection:
         return _guard(
-            lambda: ImportService(
-                connection, get_settings().object_store_path
-            ).processing_report(import_run_uuid)
+            lambda: ImportService(connection, get_settings().object_store_path).processing_report(
+                import_run_uuid
+            )
         )
 
 
@@ -290,6 +285,7 @@ def heritage_restore(request: HeritageRestoreRequest) -> dict[str, Any]:
 @contextmanager
 def _connection() -> Iterator[Any]:
     settings = get_settings()
+    _reject_full_mode_import(settings)
     connection = connect(settings.db_path)
     try:
         apply_migrations(connection)
@@ -303,3 +299,14 @@ def _guard[ReturnT](callable_: Callable[[], ReturnT]) -> ReturnT:
         return callable_()
     except (RepositoryError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+def _reject_full_mode_import(settings: Any) -> None:
+    if settings.runtime_profile == "full" or settings.canonical_store == "postgres":
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "Full Mode import requires PostgreSQL import repositories; "
+                "SQLite fallback is disabled"
+            ),
+        )

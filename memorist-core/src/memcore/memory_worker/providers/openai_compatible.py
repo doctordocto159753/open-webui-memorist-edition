@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from memcore.memory_worker.providers.base import ProviderResponse
+from memcore.model_control.security import sanitize_error_message
 
 
 class OpenAICompatibleProviderError(RuntimeError):
@@ -35,6 +36,10 @@ class OpenAICompatibleMemoryExtractionProvider:
     ) -> OpenAICompatibleMemoryExtractionProvider:
         secret_env = profile.get("secret_env_var_name")
         api_key = os.environ.get(str(secret_env)) if secret_env else None
+        if secret_env and not api_key:
+            raise OpenAICompatibleProviderError(
+                f"required provider secret environment variable is missing: {secret_env}"
+            )
         endpoint = str(profile.get("endpoint_url") or "").rstrip("/")
         if not endpoint:
             raise OpenAICompatibleProviderError("model profile endpoint_url is required")
@@ -74,7 +79,9 @@ class OpenAICompatibleMemoryExtractionProvider:
             with urllib.request.urlopen(request, timeout=self.config.timeout_ms / 1000) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
-            raise OpenAICompatibleProviderError(_sanitize_error_message(str(error))) from error
+            raise OpenAICompatibleProviderError(
+                sanitize_error_message(str(error)) or "provider request failed"
+            ) from error
         try:
             message = payload["choices"][0]["message"]["content"]
             output = json.loads(message) if isinstance(message, str) else message
@@ -99,13 +106,6 @@ class OpenAICompatibleMemoryExtractionProvider:
         if self.config.api_key:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
         return headers
-
-
-def _sanitize_error_message(message: str) -> str:
-    sanitized = message
-    for marker in ("Authorization", "Bearer", "api_key", "token", "secret", "password"):
-        sanitized = sanitized.replace(marker, "[redacted]")
-    return sanitized[:500]
 
 
 def _completion_url(base_url: str) -> str:

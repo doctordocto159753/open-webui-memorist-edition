@@ -132,9 +132,21 @@ curl 'http://localhost:8777/memcore/model-control/defaults?role=memory_extractio
 
 ## Imported-history reconstruction
 
-Official ChatGPT/OpenAI imports use the same canonical `memory_extraction` role and memory
-schema as live capture. `full_memory_reconstruction` schedules one durable low-priority job
-per eligible imported user or assistant message, records prompt/model usage provenance, and
-does not sample for cost reasons. See `docs/import.md` for the bounded processing and retry
-contract. The import API control plane is currently SQLite-backed; direct PostgreSQL import
-orchestration parity remains explicitly tracked as follow-up work.
+Official ChatGPT/OpenAI imports use the same memory schema as live capture. In Lite Mode,
+`full_memory_reconstruction` schedules one durable low-priority job per eligible imported
+user or assistant message, records prompt/model usage provenance, and does not sample for
+cost reasons. Role resolution prefers `import_reconstruction`, falls back to
+`memory_extraction`, and then uses deterministic fallback only when no valid configured
+profile can be used.
+
+The Lite import worker automatically drains queued reconstruction jobs while Memorist Core
+is running. It claims work in short database transitions, performs provider calls outside
+the SQLite write actor, and persists successful or failed outcomes afterward. Pause,
+resume, cancel, retry, leases, sanitized errors, and duplicate-versus-processed semantics
+are documented in `docs/import.md`.
+
+Full Mode import endpoints do not silently write canonical import state into SQLite.
+Runtime PostgreSQL import repositories and the PostgreSQL import reconstruction worker are
+still required before Full/PostgreSQL import parity can be claimed. The existing
+`PostgresMemoryWorkerPipeline` remains the production Full Mode path for processing
+messages that already exist in PostgreSQL.

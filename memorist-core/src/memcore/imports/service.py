@@ -21,6 +21,7 @@ from memcore.repositories import (
     WorkspaceRepository,
 )
 from memcore.repositories.domain import RepositoryError
+from memcore.repositories.memory_worker import canonical_text_hash
 from memcore.storage.write_actor import get_write_actor
 from memcore.validators.ijson import canonical_hash_ijson, dump_ijson, load_ijson
 
@@ -172,9 +173,7 @@ class ImportService:
             raise RepositoryError("Imported conversation not found")
         return dict(row)
 
-    def dry_run(
-        self, import_run_uuid: str, processing_mode: str | None = None
-    ) -> dict[str, Any]:
+    def dry_run(self, import_run_uuid: str, processing_mode: str | None = None) -> dict[str, Any]:
         run = self.repository.get_run(import_run_uuid)
         run_options = load_ijson(run["options_ijson"])
         selected_mode = processing_mode or str(run_options.get("processing_mode") or "none")
@@ -188,6 +187,8 @@ class ImportService:
         expected_messages = 0
         eligible_messages = 0
         eligible_new_messages = 0
+        eligible_processing_required_messages = 0
+        already_processed_messages = 0
         skip_reasons: dict[str, int] = {}
         duplicate_messages = 0
         for row in conversations:
@@ -216,6 +217,25 @@ class ImportService:
                     eligible_messages += 1
                     if decision == "new":
                         eligible_new_messages += 1
+                        eligible_processing_required_messages += 1
+                    elif selected_mode == "full_memory_reconstruction":
+                        mapping = self._message_mapping(
+                            str(payload["source_platform"]),
+                            str(message.source_message_id or ""),
+                        )
+                        if mapping is None:
+                            eligible_processing_required_messages += 1
+                        else:
+                            text = visible_text(message.content_parts)
+                            state = processor.determine_processing_state(
+                                target_message_uuid=str(mapping["target_uuid"]),
+                                input_content_hash=canonical_text_hash(text),
+                                model_target=model_target,
+                            )
+                            if state["decision"] == "already_processed":
+                                already_processed_messages += 1
+                            elif state["decision"] != "currently_active":
+                                eligible_processing_required_messages += 1
                 else:
                     reason_key = reason or "unknown_ineligible_reason"
                     skip_reasons[reason_key] = skip_reasons.get(reason_key, 0) + 1
@@ -240,6 +260,7 @@ class ImportService:
                 1 for item in decisions if item["decision"] != "new"
             ),
             "duplicate_message_count": duplicate_messages,
+            "already_processed_message_count": already_processed_messages,
             "decisions": decisions,
             "expected_new_database_rows": {
                 "sessions": expected_new_sessions,
@@ -250,7 +271,7 @@ class ImportService:
                 eligible_new_messages if selected_mode == "extract_candidates" else 0
             ),
             "expected_memory_processing_jobs": (
-                eligible_new_messages
+                eligible_processing_required_messages
                 if selected_mode == "full_memory_reconstruction"
                 else 0
             ),
@@ -263,9 +284,7 @@ class ImportService:
                 else None
             ),
             "processing_model": model_target,
-            "memory_extraction_default_configured": bool(
-                model_target.get("model_profile_uuid")
-            ),
+            "memory_extraction_default_configured": bool(model_target.get("model_profile_uuid")),
             "import_reconstruction_default_required": False,
             "deterministic_fallback": bool(model_target.get("deterministic_fallback")),
             "graph_projection_enabled": bool(get_settings().enable_graph_projection),
@@ -308,9 +327,9 @@ class ImportService:
             phase=str(run["status"]),
             records_total=int(run["total_conversations"] or 0),
         )
-        processing = ImportMessageProcessor(
-            self.connection, get_settings()
-        ).processing_report(import_run_uuid)
+        processing = ImportMessageProcessor(self.connection, get_settings()).processing_report(
+            import_run_uuid
+        )
         return {
             "status": run["status"],
             **stored_progress,
@@ -488,8 +507,7 @@ class ImportService:
                         severity="warning",
                         issue_code="conversation_commit_failed",
                         message=(
-                            "Conversation failed during bounded commit: "
-                            f"{type(error).__name__}"
+                            f"Conversation failed during bounded commit: {type(error).__name__}"
                         ),
                         details={"source_conversation_id": row["source_conversation_id"]},
                     ),
@@ -518,30 +536,51 @@ class ImportService:
         )
         return self._finalize_commit_if_complete(import_run_uuid, run, processing_mode)
 
-    def process_next_batch(
-        self, import_run_uuid: str, batch_size: int = 25
-    ) -> dict[str, Any]:
-        return ImportMessageProcessor(
-            self.connection, get_settings()
-        ).process_next_batch(import_run_uuid, batch_size)
+    def process_next_batch(self, import_run_uuid: str, batch_size: int = 25) -> dict[str, Any]:
+        return ImportMessageProcessor(self.connection, get_settings()).process_next_batch(
+            import_run_uuid, batch_size
+        )
 
     def retry_failed_processing(self, import_run_uuid: str) -> dict[str, Any]:
-        return ImportMessageProcessor(
-            self.connection, get_settings()
-        ).retry_failed(import_run_uuid)
+        return ImportMessageProcessor(self.connection, get_settings()).retry_failed(import_run_uuid)
 
     def processing_report(self, import_run_uuid: str) -> dict[str, Any]:
-        return ImportMessageProcessor(
-            self.connection, get_settings()
-        ).processing_report(import_run_uuid)
+        return ImportMessageProcessor(self.connection, get_settings()).processing_report(
+            import_run_uuid
+        )
 
     def message_processing_statuses(self, import_run_uuid: str) -> list[dict[str, Any]]:
-        return ImportMessageProcessor(
-            self.connection, get_settings()
-        ).statuses(import_run_uuid)
+        return ImportMessageProcessor(self.connection, get_settings()).statuses(import_run_uuid)
 
     def cancel(self, import_run_uuid: str) -> dict[str, Any]:
-        self.repository.update_run(import_run_uuid, {"status": "cancelled"})
+        now = utc_now()
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE import_message_processing_status
+                SET status = 'cancelled', processing_decision = 'cancelled',
+                    lease_owner = NULL, lease_expires_at = NULL,
+                    updated_at = ?, finished_at = COALESCE(finished_at, ?)
+                WHERE import_run_uuid = ?
+                  AND status IN ('queued', 'running')
+                """,
+                (now, now, import_run_uuid),
+            )
+            self.connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'cancelled', locked_by = NULL, locked_at = NULL,
+                    updated_at = ?
+                WHERE job_uuid IN (
+                    SELECT job_uuid
+                    FROM import_message_processing_status
+                    WHERE import_run_uuid = ? AND job_uuid IS NOT NULL
+                )
+                  AND status IN ('pending', 'running')
+                """,
+                (now, import_run_uuid),
+            )
+        self.repository.update_run(import_run_uuid, {"status": "cancelled", "completed_at": now})
         return update_progress(self.connection, import_run_uuid, cancelled=1, phase="cancelled")
 
     def delete_staging(self, import_run_uuid: str) -> dict[str, str]:
@@ -677,16 +716,48 @@ class ImportService:
                 """,
                 (conversation.source_platform, source_message_id),
             ).fetchone()
-            processor.record_duplicate(
+            message = conversation.messages[source_message_id]
+            if mapping is None:
+                processor.record_duplicate(
+                    import_run_uuid=import_run_uuid,
+                    source_platform=conversation.source_platform,
+                    source_conversation_id=conversation.source_conversation_id,
+                    source_message_id=source_message_id,
+                    target_session_uuid=None,
+                    target_message_uuid=None,
+                    processing_mode=processing_mode,
+                    model_target=model_target,
+                )
+                continue
+            processor.schedule(
                 import_run_uuid=import_run_uuid,
                 source_platform=conversation.source_platform,
                 source_conversation_id=conversation.source_conversation_id,
                 source_message_id=source_message_id,
-                target_session_uuid=(str(mapping["session_uuid"]) if mapping else None),
-                target_message_uuid=str(mapping["target_uuid"]) if mapping else None,
+                target_session_uuid=str(mapping["session_uuid"]),
+                target_message_uuid=str(mapping["target_uuid"]),
+                message=message,
                 processing_mode=processing_mode,
                 model_target=model_target,
             )
+
+    def _message_mapping(
+        self,
+        source_platform: str,
+        source_message_id: str,
+    ) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            """
+            SELECT im.target_uuid, m.session_uuid
+            FROM import_mappings im
+            LEFT JOIN messages m ON m.message_uuid = im.target_uuid
+            WHERE source_platform = ? AND source_object_type = 'message'
+              AND source_object_id = ?
+            LIMIT 1
+            """,
+            (source_platform, source_message_id),
+        ).fetchone()
+        return dict(row) if row is not None else None
 
     def _conversation_count(self, import_run_uuid: str) -> int:
         return int(

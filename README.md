@@ -11,7 +11,7 @@ This repository is a **v0.2.0-beta.1 development baseline**. It is ready for con
 | Area | Status |
 |---|---|
 | Version | `0.2.0-beta.1` |
-| Storage schema | `18` |
+| Storage schema | `20` |
 | Recommended label | `v0.2.0-beta.1 development baseline` |
 | Lite Mode | Beta-candidate local path |
 | Full Mode | Experimental preview; external certification incomplete |
@@ -66,9 +66,10 @@ Memorist is not an official Open WebUI release. It is not a replacement for Open
 - Raw API keys, tokens, passwords, and credentials are rejected from persisted model profile data.
 - Memory Worker prompts are versioned, schema-bound, output-validated, and audit-linked.
 - Retrieved/imported memory is treated as untrusted data.
-- Official ChatGPT/OpenAI export ZIPs and extracted `conversations.json` files can be
-  imported with durable, resumable full-memory reconstruction for every eligible message;
-  see `docs/import.md`.
+- In Lite Mode, official ChatGPT/OpenAI export ZIPs and extracted `conversations.json`
+  files can be imported with durable, resumable, automatically drained full-memory
+  reconstruction for every eligible message; see `docs/import.md`. Full Mode import
+  endpoints fail explicitly until PostgreSQL import runtime parity is completed.
 - Chat fails open when Memorist is unavailable, unless explicitly configured otherwise.
 - Forget workflows include preview, confirmation, execution, receipt, and residue checks.
 - Generated packages and runtime artifacts are not committed by default.

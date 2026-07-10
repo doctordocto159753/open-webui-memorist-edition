@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from memcore.imports.orchestrator import ImportReconstructionOrchestrator
 from memcore.imports.security import ImportSecurityError
 from memcore.imports.service import ImportService
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
@@ -59,9 +60,10 @@ def test_official_zip_nested_and_standalone_json_use_same_adapter(
     assert root_zip_inspect["source_platform"] == "chatgpt"
     assert standalone_inspect["detected_format"] == "chatgpt_conversation_mapping"
     assert zip_inspect["detected_format"] == "chatgpt_conversation_mapping"
-    assert service.repository.list_artifacts(standalone_run["import_run_uuid"])[0][
-        "relative_path"
-    ] == "conversations.json"
+    assert (
+        service.repository.list_artifacts(standalone_run["import_run_uuid"])[0]["relative_path"]
+        == "conversations.json"
+    )
 
 
 def test_malformed_standalone_json_and_absolute_zip_member_fail_safely(
@@ -120,15 +122,16 @@ def test_chatgpt_tree_metadata_and_reasoning_quarantine(
     assert conversation["messages"]["assistant-active"]["branch_status"] == "active"
     assert conversation["messages"]["assistant-branch"]["branch_status"] == "branch"
     assert conversation["messages"]["assistant-active"]["model_name"] == "gpt-4.1"
-    assert conversation["messages"]["assistant-active"]["metadata"]["attachments"][0][
-        "name"
-    ] == "notes.txt"
+    assert (
+        conversation["messages"]["assistant-active"]["metadata"]["attachments"][0]["name"]
+        == "notes.txt"
+    )
     reasoning = conversation["messages"]["reasoning-only"]["content_parts"][0]
     assert reasoning["part_type"] == "provider_internal_reasoning"
     assert reasoning["quarantined"] is True
-    provider_parts = conversation["messages"]["reasoning-only"]["metadata"]["provider"][
-        "chatgpt"
-    ]["message"]["content"]["parts"]
+    provider_parts = conversation["messages"]["reasoning-only"]["metadata"]["provider"]["chatgpt"][
+        "message"
+    ]["content"]["parts"]
     assert provider_parts == [{"quarantined": True}]
 
 
@@ -179,9 +182,10 @@ def test_full_reconstruction_tracks_every_message_and_creates_memory_artifacts(
     paused = service.pause(run_uuid)
     assert paused["paused"] is True
     service.process_next_batch(run_uuid, batch_size=10)
-    assert sum(
-        item["status"] == "queued" for item in service.message_processing_statuses(run_uuid)
-    ) == 3
+    assert (
+        sum(item["status"] == "queued" for item in service.message_processing_statuses(run_uuid))
+        == 3
+    )
     service.resume(run_uuid)
 
     report = service.process_next_batch(run_uuid, batch_size=10)
@@ -241,10 +245,71 @@ def test_duplicate_reimport_records_already_processed_without_duplicate_messages
     assert committed["status"] == "fully_reconstructed"
     assert connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == message_count
     assert len(statuses) == 11
-    assert {item["status"] for item in statuses} == {"already_processed"}
-    assert {item["skip_reason"] for item in statuses} == {
-        "duplicate_message_already_mapped"
+    assert sum(item["status"] == "already_processed" for item in statuses) == 3
+    assert sum(item["status"] == "skipped" for item in statuses) == 8
+    assert {
+        item["processing_decision"] for item in statuses if item["status"] == "already_processed"
+    } == {"already_processed"}
+
+
+def test_reimport_after_none_queues_mapped_but_unprocessed_messages(
+    connection: sqlite3.Connection, tmp_path: Path
+) -> None:
+    first_service, first_run = _reconstructed_service(connection, tmp_path, "first-none.json")
+    first_service.dry_run(first_run, "none")
+    first_service.commit(first_run, "none")
+    message_count = connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+
+    second_service, second_run = _reconstructed_service(connection, tmp_path, "second-full.json")
+    dry_run = second_service.dry_run(second_run, "full_memory_reconstruction")
+    dry_run_report = load_ijson(dry_run["report_ijson"])
+    committed = second_service.commit(second_run, "full_memory_reconstruction")
+    statuses = second_service.message_processing_statuses(second_run)
+
+    assert dry_run_report["expected_memory_processing_jobs"] == 3
+    assert dry_run_report["already_processed_message_count"] == 0
+    assert committed["status"] == "processing"
+    assert connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == message_count
+    assert sum(item["status"] == "queued" for item in statuses) == 3
+    assert {item["processing_decision"] for item in statuses if item["status"] == "queued"} == {
+        "imported_but_unprocessed"
     }
+    second_service.process_next_batch(second_run, 10)
+    assert second_service.repository.get_run(second_run)["status"] == "fully_reconstructed"
+    assert connection.execute("SELECT COUNT(*) FROM memory_candidates").fetchone()[0] >= 1
+
+
+def test_automatic_orchestrator_drains_full_reconstruction_without_manual_process(
+    connection: sqlite3.Connection, tmp_path: Path
+) -> None:
+    service, run_uuid = _reconstructed_service(connection, tmp_path)
+    service.dry_run(run_uuid, "full_memory_reconstruction")
+    service.commit(run_uuid, "full_memory_reconstruction")
+    settings = type(
+        "Settings",
+        (),
+        {
+            "db_path": str(tmp_path / "chatgpt-import.sqlite"),
+            "object_store_path": str(tmp_path / "objects"),
+            "import_reconstruction_worker_enabled": True,
+            "runtime_profile": "lite",
+            "import_reconstruction_concurrency": 1,
+            "import_reconstruction_worker_batch_size": 10,
+            "import_reconstruction_lease_seconds": 300,
+            "import_reconstruction_poll_seconds": 0.1,
+        },
+    )()
+
+    result = ImportReconstructionOrchestrator(settings).run_once()
+    verify = connect(settings.db_path)
+    try:
+        apply_migrations(verify)
+        run = ImportService(verify, str(tmp_path / "objects")).repository.get_run(run_uuid)
+    finally:
+        verify.close()
+
+    assert result["runs_seen"] == 1
+    assert run["status"] == "fully_reconstructed"
 
 
 def test_failed_processing_is_sanitized_and_retryable(
@@ -261,9 +326,7 @@ def test_failed_processing_is_sanitized_and_retryable(
     monkeypatch.setattr(MemoryWorkerPipeline, "process_message", fail_once)
     failed_report = service.process_next_batch(run_uuid, 1)
     failed = next(
-        item
-        for item in service.message_processing_statuses(run_uuid)
-        if item["status"] == "failed"
+        item for item in service.message_processing_statuses(run_uuid) if item["status"] == "failed"
     )
 
     assert failed_report["processing_jobs_failed"] == 1
@@ -278,6 +341,55 @@ def test_failed_processing_is_sanitized_and_retryable(
     assert next(item for item in updated if item["status"] == "succeeded")["retry_count"] == 1
 
 
+def test_provider_errors_are_centrally_sanitized(
+    connection: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, run_uuid = _reconstructed_service(connection, tmp_path)
+    service.dry_run(run_uuid, "full_memory_reconstruction")
+    service.commit(run_uuid, "full_memory_reconstruction")
+
+    raw_error = (
+        "Authorization: Bearer sk-import-secret "
+        "api_key=raw-import-key token=raw-token password=raw-password "
+        "https://user:pass@example.test/v1?token=query-secret"
+    )
+
+    def fail_with_secret(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise RuntimeError(raw_error)
+
+    monkeypatch.setattr(MemoryWorkerPipeline, "process_message", fail_with_secret)
+    report = service.process_next_batch(run_uuid, 1)
+    status = next(
+        item for item in service.message_processing_statuses(run_uuid) if item["status"] == "failed"
+    )
+    job = connection.execute(
+        "SELECT * FROM jobs WHERE job_uuid = ?", (status["job_uuid"],)
+    ).fetchone()
+    usage = connection.execute(
+        """
+        SELECT * FROM model_usage_events
+        WHERE import_run_uuid = ? AND status = 'error'
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (run_uuid,),
+    ).fetchone()
+    returned = json.dumps(report, sort_keys=True)
+
+    for value in (
+        "sk-import-secret",
+        "raw-import-key",
+        "raw-token",
+        "raw-password",
+        "user:pass",
+        "query-secret",
+    ):
+        assert value not in status["error_sanitized"]
+        assert value not in job["last_error_sanitized"]
+        assert value not in job["last_error"]
+        assert value not in usage["error_message_sanitized"]
+        assert value not in returned
+
+
 def test_configured_memory_extraction_profile_is_recorded_for_import(
     connection: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -287,9 +399,12 @@ def test_configured_memory_extraction_profile_is_recorded_for_import(
         system_prompt: str,
         input_payload: dict[str, object],
     ) -> ProviderResponse:
-        del system_prompt, input_payload
+        del system_prompt
         return ProviderResponse(
-            output=valid_jakobson_output(), input_tokens=12, output_tokens=8, latency_ms=3
+            output=_jakobson_output_for_input(input_payload),
+            input_tokens=12,
+            output_tokens=8,
+            latency_ms=3,
         )
 
     monkeypatch.setattr(OpenAICompatibleMemoryExtractionProvider, "extract", fake_extract)
@@ -328,11 +443,118 @@ def test_configured_memory_extraction_profile_is_recorded_for_import(
 
     assert dry_run_report["processing_model"]["model_profile_uuid"] == profile.model_profile_uuid
     assert dry_run_report["processing_model"]["deterministic_fallback"] is False
-    assert all(
-        item["model_profile_uuid"] == profile.model_profile_uuid for item in statuses
-    )
+    assert all(item["model_profile_uuid"] == profile.model_profile_uuid for item in statuses)
     assert prompt["provider_type"] == "openai_compatible_llm"
     assert prompt["model_name"] == "synthetic-import-model"
+
+
+def test_import_reconstruction_role_is_preferred_and_recorded(
+    connection: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_extract(
+        _provider: OpenAICompatibleMemoryExtractionProvider,
+        *,
+        system_prompt: str,
+        input_payload: dict[str, object],
+    ) -> ProviderResponse:
+        del system_prompt
+        return ProviderResponse(
+            output=_jakobson_output_for_input(input_payload),
+            input_tokens=7,
+            output_tokens=5,
+            latency_ms=2,
+        )
+
+    monkeypatch.setattr(OpenAICompatibleMemoryExtractionProvider, "extract", fake_extract)
+    monkeypatch.setenv("MEMORIST_IMPORT_ROLE_KEY", "synthetic-test-secret")
+    model_control = ModelControlRepository(connection)
+    profile = model_control.create_profile(
+        ModelProfileCreate(
+            provider_type=ProviderType.OPENAI_COMPATIBLE_LLM,
+            provider_name="synthetic-openai-compatible",
+            model_name="synthetic-import-role-model",
+            role=ModelRole.IMPORT_RECONSTRUCTION,
+            endpoint_url="https://models.example.test/v1",
+            endpoint_is_local=False,
+            secret_strategy="env_var",
+            secret_env_var_name="MEMORIST_IMPORT_ROLE_KEY",
+            privacy_acknowledged=True,
+        )
+    )
+    model_control.set_default(ModelRole.IMPORT_RECONSTRUCTION, profile.model_profile_uuid)
+    service, run_uuid = _reconstructed_service(connection, tmp_path)
+
+    dry_run = service.dry_run(run_uuid, "full_memory_reconstruction")
+    dry_run_report = load_ijson(dry_run["report_ijson"])
+    service.commit(run_uuid, "full_memory_reconstruction")
+    service.process_next_batch(run_uuid, 10)
+    prompt = connection.execute(
+        """
+        SELECT * FROM prompt_execution_runs
+        WHERE import_run_uuid = ?
+        ORDER BY created_at
+        LIMIT 1
+        """,
+        (run_uuid,),
+    ).fetchone()
+
+    assert dry_run_report["processing_model"]["role"] == "import_reconstruction"
+    assert prompt["model_role"] == "import_reconstruction"
+    assert prompt["model_profile_uuid"] == profile.model_profile_uuid
+
+
+def test_missing_runtime_secret_uses_fallback_without_remote_call(
+    connection: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_if_called(
+        _provider: OpenAICompatibleMemoryExtractionProvider,
+        *,
+        system_prompt: str,
+        input_payload: dict[str, object],
+    ) -> ProviderResponse:
+        del system_prompt, input_payload
+        raise AssertionError("remote provider should not be called without its secret")
+
+    monkeypatch.delenv("MEMORIST_MISSING_IMPORT_KEY", raising=False)
+    monkeypatch.setattr(OpenAICompatibleMemoryExtractionProvider, "extract", fail_if_called)
+    model_control = ModelControlRepository(connection)
+    profile = model_control.create_profile(
+        ModelProfileCreate(
+            provider_type=ProviderType.OPENAI_COMPATIBLE_LLM,
+            provider_name="synthetic-openai-compatible",
+            model_name="synthetic-missing-secret-model",
+            role=ModelRole.IMPORT_RECONSTRUCTION,
+            endpoint_url="https://models.example.test/v1",
+            endpoint_is_local=False,
+            secret_strategy="env_var",
+            secret_env_var_name="MEMORIST_MISSING_IMPORT_KEY",
+            privacy_acknowledged=True,
+        )
+    )
+    model_control.set_default(ModelRole.IMPORT_RECONSTRUCTION, profile.model_profile_uuid)
+    service, run_uuid = _reconstructed_service(connection, tmp_path)
+
+    dry_run = service.dry_run(run_uuid, "full_memory_reconstruction")
+    dry_run_report = load_ijson(dry_run["report_ijson"])
+    service.commit(run_uuid, "full_memory_reconstruction")
+    service.process_next_batch(run_uuid, 10)
+    prompt = connection.execute(
+        """
+        SELECT * FROM prompt_execution_runs
+        WHERE import_run_uuid = ?
+        ORDER BY created_at
+        LIMIT 1
+        """,
+        (run_uuid,),
+    ).fetchone()
+
+    assert dry_run_report["processing_model"]["deterministic_fallback"] is True
+    assert dry_run_report["processing_model"]["secret_configured"] is False
+    assert (
+        "required provider secret environment variable is missing"
+        in dry_run_report["processing_model"]["warnings"]
+    )
+    assert prompt["provider_type"] == "deterministic"
 
 
 def _reconstructed_service(
@@ -421,18 +643,10 @@ def _official_payload() -> list[dict[str, object]]:
                     "assistant",
                     ["Alternate response."],
                 ),
-                "system-1": node(
-                    "system-1", "assistant-active", [], "system", ["System metadata"]
-                ),
-                "tool-1": node(
-                    "tool-1", "assistant-active", [], "tool", ["Tool output"]
-                ),
-                "plugin-1": node(
-                    "plugin-1", "assistant-active", [], "plugin", ["Plugin output"]
-                ),
-                "code-1": node(
-                    "code-1", "assistant-active", [], "code", ["print('hello')"]
-                ),
+                "system-1": node("system-1", "assistant-active", [], "system", ["System metadata"]),
+                "tool-1": node("tool-1", "assistant-active", [], "tool", ["Tool output"]),
+                "plugin-1": node("plugin-1", "assistant-active", [], "plugin", ["Plugin output"]),
+                "code-1": node("code-1", "assistant-active", [], "code", ["print('hello')"]),
                 "empty-1": node("empty-1", "assistant-active", [], "user", [""]),
                 "missing-parts": {
                     "id": "missing-parts",
@@ -456,3 +670,24 @@ def _official_payload() -> list[dict[str, object]]:
             },
         }
     ]
+
+
+def _jakobson_output_for_input(input_payload: dict[str, object]) -> dict[str, object]:
+    base = valid_jakobson_output()
+    sentences = []
+    for index, item in enumerate(input_payload.get("sentences", []), start=1):
+        text = str(dict(item)["text"])
+        sentence = dict(base["sentences"][0])
+        sentence["id"] = index
+        sentence["text"] = text
+        factors = dict(sentence["six_factors"])
+        factors["message"] = {
+            "value": text,
+            "evidence": text,
+            "confidence": "high",
+        }
+        sentence["six_factors"] = factors
+        sentences.append(sentence)
+    base["sentences"] = sentences
+    base["sentence_count"] = len(sentences)
+    return base

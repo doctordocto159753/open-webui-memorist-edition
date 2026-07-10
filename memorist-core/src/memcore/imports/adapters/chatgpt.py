@@ -146,9 +146,7 @@ def _provider_snapshot(node: dict[str, Any]) -> dict[str, Any]:
         content["parts"] = [
             {"quarantined": True}
             if isinstance(part, dict)
-            and _is_internal_reasoning_type(
-                str(part.get("content_type") or part.get("type") or "")
-            )
+            and _is_internal_reasoning_type(str(part.get("content_type") or part.get("type") or ""))
             else part
             for part in parts
         ]

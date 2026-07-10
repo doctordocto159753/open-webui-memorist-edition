@@ -5,7 +5,7 @@ import json
 from hashlib import sha256
 from time import perf_counter
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from fastapi import HTTPException
 
@@ -22,7 +22,7 @@ from memcore.memory_worker.providers.openai_compatible import (
 )
 from memcore.memory_worker.segmentation.sentence_segmenter import SentenceSegmenter
 from memcore.model_control.security import sanitize_error_message
-from memcore.models import new_uuid, utc_now
+from memcore.models import TextUnit, new_uuid, utc_now
 from memcore.repositories.memory_worker import canonical_text_hash
 from memcore.validators.ijson import canonical_hash_ijson
 
@@ -562,7 +562,10 @@ class PostgresMemoryWorkerPipeline:
             if existing:
                 continue
             decision = self.gate.evaluate(
-                SimpleNamespace(text=unit["text"], speaker_role=unit["speaker_role"])
+                cast(
+                    TextUnit,
+                    SimpleNamespace(text=unit["text"], speaker_role=unit["speaker_role"]),
+                )
             )
             self.connection.execute(
                 """

@@ -94,9 +94,7 @@ def _conversation_payload(
             "parentId": f"{conversation_id}-msg-0001",
             "childrenIds": [],
             "role": "assistant",
-            "content": (
-                _branch_text(index, branch_index, malicious_content)
-            ),
+            "content": (_branch_text(index, branch_index, malicious_content)),
             "timestamp": f"2026-02-{(index % 28) + 1:02d}T13:{branch_index % 60:02d}:00Z",
             "model": "synthetic-heavy-branch-model",
         }

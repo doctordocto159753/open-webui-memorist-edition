@@ -1,5 +1,7 @@
 import "./processingNodes";
+import "./importWorkflow";
 
+import { MEMORIST_IMPORT_WORKFLOW_ROUTE } from "./importWorkflow";
 import { MEMORIST_PROCESSING_NODES_ROUTE } from "./processingNodes";
 
 export const MEMORIST_UI_SURFACES = [
@@ -54,6 +56,7 @@ export function sanitizeUiText(value: string): string {
 
 export const MEMORIST_SETTINGS_ROUTES = {
   processingNodes: MEMORIST_PROCESSING_NODES_ROUTE,
+  importWorkflow: MEMORIST_IMPORT_WORKFLOW_ROUTE,
 } as const;
 
 export const MEMORIST_SETTINGS_NAVIGATION: readonly MemoristSettingsNavigationItem[] = [
@@ -63,6 +66,12 @@ export const MEMORIST_SETTINGS_NAVIGATION: readonly MemoristSettingsNavigationIt
     surface: "MemoristProcessingNodesSettings",
     adminOnly: true,
   },
+  {
+    label: "Import",
+    href: MEMORIST_SETTINGS_ROUTES.importWorkflow,
+    surface: "ImportTab",
+    adminOnly: false,
+  },
 ] as const;
 
 export const MEMORIST_SETTINGS_ROUTE_MOUNTS: readonly MemoristSettingsRoute[] = [
@@ -70,6 +79,11 @@ export const MEMORIST_SETTINGS_ROUTE_MOUNTS: readonly MemoristSettingsRoute[] = 
     path: MEMORIST_SETTINGS_ROUTES.processingNodes,
     surface: "MemoristProcessingNodesSettings",
     element: "memorist-processing-nodes-settings",
+  },
+  {
+    path: MEMORIST_SETTINGS_ROUTES.importWorkflow,
+    surface: "ImportTab",
+    element: "memorist-import-workflow",
   },
 ] as const;
 

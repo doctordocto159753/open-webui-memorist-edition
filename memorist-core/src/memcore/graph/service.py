@@ -6,6 +6,7 @@ from typing import Any
 from memcore.config import Settings
 from memcore.graph.falkordb import FalkorDBClient
 from memcore.graph.projector import FalkorGraphProjector, GraphProjectionResult
+from memcore.model_control.security import sanitize_error_message
 
 
 class GraphProjectionService:
@@ -38,7 +39,9 @@ class GraphProjectionService:
             {
                 "graph_backend": self.settings.graph_backend,
                 "fallback": "postgres_retrieval" if status["status"] == "degraded" else None,
-                "outbox_lag": self._outbox_lag() if self.settings.canonical_store == "postgres" else None,
+                "outbox_lag": (
+                    self._outbox_lag() if self.settings.canonical_store == "postgres" else None
+                ),
                 "drift_detectable": True,
             }
         )
@@ -150,7 +153,7 @@ class GraphProjectionService:
                 "source": "postgres",
                 "projection_version": FalkorGraphProjector.projection_version,
                 "projected": projected,
-                "error_sanitized": str(error)[:240],
+                "error_sanitized": sanitize_error_message(str(error)),
             }
         finally:
             connection.close()
@@ -169,9 +172,13 @@ class GraphProjectionService:
                 projected=int(rebuild.get("projected") or 0),
                 failed=1,
                 degraded=rebuild.get("status") == "degraded",
-                last_error_sanitized=str(
-                    rebuild.get("error_sanitized") or rebuild.get("reason") or "graph projection failed"
-                )[:240],
+                last_error_sanitized=sanitize_error_message(
+                    str(
+                        rebuild.get("error_sanitized")
+                        or rebuild.get("reason")
+                        or "graph projection failed"
+                    )
+                ),
             )
         return GraphProjectionResult(projected=int(rebuild.get("projected") or 0))
 

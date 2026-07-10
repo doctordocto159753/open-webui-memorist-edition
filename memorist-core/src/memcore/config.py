@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     import_max_write_queue_depth: int = Field(default=500, ge=1)
     import_low_priority: bool = True
     import_reconstruction_default: str = "off"
+    import_reconstruction_worker_enabled: bool = True
+    import_reconstruction_concurrency: int = Field(default=1, ge=1, le=16)
+    import_reconstruction_worker_batch_size: int = Field(default=5, ge=1, le=100)
+    import_reconstruction_lease_seconds: int = Field(default=300, ge=10)
+    import_reconstruction_max_attempts: int = Field(default=5, ge=1, le=20)
+    import_reconstruction_retry_base_seconds: int = Field(default=10, ge=1)
+    import_reconstruction_poll_seconds: float = Field(default=1.0, ge=0.1, le=60.0)
     fail_open: bool = True
 
     @field_validator("falkordb_url", mode="before")
@@ -226,6 +233,13 @@ def get_effective_config(settings: Settings) -> dict[str, Any]:
             "max_write_queue_depth": settings.import_max_write_queue_depth,
             "low_priority": settings.import_low_priority,
             "reconstruction_default": settings.import_reconstruction_default,
+            "reconstruction_worker_enabled": settings.import_reconstruction_worker_enabled,
+            "reconstruction_concurrency": settings.import_reconstruction_concurrency,
+            "reconstruction_worker_batch_size": settings.import_reconstruction_worker_batch_size,
+            "reconstruction_lease_seconds": settings.import_reconstruction_lease_seconds,
+            "reconstruction_max_attempts": settings.import_reconstruction_max_attempts,
+            "reconstruction_retry_base_seconds": settings.import_reconstruction_retry_base_seconds,
+            "reconstruction_poll_seconds": settings.import_reconstruction_poll_seconds,
         },
         "scheduler": {
             "backend": settings.hot_scheduler,

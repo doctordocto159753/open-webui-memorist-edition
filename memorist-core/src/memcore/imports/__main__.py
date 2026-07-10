@@ -37,9 +37,7 @@ def main() -> None:
         heavy_result = generate_openwebui_heavy_fixture(
             args.output,
             conversations=args.conversations,
-            messages_per_conversation=args.messages_per_conversation
-            or args.legacy_messages
-            or 2,
+            messages_per_conversation=args.messages_per_conversation or args.legacy_messages or 2,
             branches=args.branches,
             duplicate_every=args.duplicate_every,
             malformed_every=args.malformed_every,
@@ -57,9 +55,7 @@ def main() -> None:
         result: dict[str, object] = {"inspect": inspected}
         if args.dry_run or args.commit:
             result["reconstruct"] = service.reconstruct(run["import_run_uuid"])
-            result["dry_run"] = service.dry_run(
-                run["import_run_uuid"], args.processing_mode
-            )
+            result["dry_run"] = service.dry_run(run["import_run_uuid"], args.processing_mode)
         if args.commit:
             result["commit"] = service.commit(
                 run["import_run_uuid"], processing_mode=args.processing_mode

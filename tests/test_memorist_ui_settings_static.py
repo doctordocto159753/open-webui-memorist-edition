@@ -4,6 +4,8 @@ from pathlib import Path
 
 SURFACES = Path("open-webui-integration/memorist/ui/surfaces.ts")
 PROCESSING_NODES = Path("open-webui-integration/memorist/ui/processingNodes.ts")
+IMPORT_WORKFLOW = Path("open-webui-integration/memorist/ui/importWorkflow.ts")
+CLIENT = Path("open-webui-integration/memorist/ui/memoristClient.ts")
 
 
 def test_processing_nodes_component_is_registered_and_settings_mounted() -> None:
@@ -18,6 +20,25 @@ def test_processing_nodes_component_is_registered_and_settings_mounted() -> None
     assert 'element: "memorist-processing-nodes-settings"' in surfaces
     assert "document.createElement(route.element)" in surfaces
     assert 'customElements.define("memorist-processing-nodes-settings"' in component
+
+
+def test_import_workflow_component_is_registered_and_settings_mounted() -> None:
+    surfaces = SURFACES.read_text(encoding="utf-8")
+    component = IMPORT_WORKFLOW.read_text(encoding="utf-8")
+    client = CLIENT.read_text(encoding="utf-8")
+
+    assert 'import "./importWorkflow";' in surfaces
+    assert 'label: "Import"' in surfaces
+    assert 'element: "memorist-import-workflow"' in surfaces
+    assert 'customElements.define("memorist-import-workflow"' in component
+    assert "full_memory_reconstruction" in component
+    assert "Upload, inspect, reconstruct, dry-run" in component
+    assert "Confirm import" in component
+    assert "pauseImport" in client
+    assert "resumeImport" in client
+    assert "cancelImport" in client
+    assert "retryFailedImport" in client
+    assert "/retry-failed" in client
 
 
 def test_processing_nodes_exposes_model_capability_controls() -> None:

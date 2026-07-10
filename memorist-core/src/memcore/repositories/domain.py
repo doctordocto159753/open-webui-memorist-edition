@@ -517,26 +517,41 @@ class JobRepository:
         priority: int = 50,
         run_after: str | None = None,
         max_attempts: int = 3,
+        idempotency_key: str | None = None,
     ) -> Job:
         payload_ijson = _canonical_ijson("payload_ijson", payload)
-        existing = _fetch_one(
-            self.connection,
-            Job,
-            """
-            SELECT * FROM jobs
-            WHERE job_type = ? AND payload_ijson = ?
-            ORDER BY created_at
-            LIMIT 1
-            """,
-            (job_type, payload_ijson),
-        )
+        if idempotency_key is None:
+            idempotency_key = f"{job_type}:{canonical_hash_ijson(load_ijson(payload_ijson))}"
+            existing = _fetch_one(
+                self.connection,
+                Job,
+                """
+                SELECT * FROM jobs
+                WHERE job_type = ? AND payload_ijson = ?
+                ORDER BY created_at
+                LIMIT 1
+                """,
+                (job_type, payload_ijson),
+            )
+        else:
+            existing = _fetch_one(
+                self.connection,
+                Job,
+                """
+                SELECT * FROM jobs
+                WHERE job_type = ? AND idempotency_key = ?
+                ORDER BY created_at
+                LIMIT 1
+                """,
+                (job_type, idempotency_key),
+            )
         if existing is not None:
             return existing
 
         job = Job(
             job_type=job_type,
             payload_ijson=payload_ijson,
-            idempotency_key=f"{job_type}:{canonical_hash_ijson(load_ijson(payload_ijson))}",
+            idempotency_key=idempotency_key,
             priority=priority,
             run_after=run_after,
             max_attempts=max_attempts,
@@ -644,6 +659,7 @@ class JobRepository:
         job = self.get_job(job_uuid)
         if job is None:
             raise RepositoryError(f"Job not found: {job_uuid}")
+        sanitized = _sanitize_error_message(error)
 
         if retry and job.attempts < job.max_attempts:
             status = JobStatus.PENDING
@@ -656,8 +672,8 @@ class JobRepository:
             job_uuid,
             {
                 "status": status.value,
-                "last_error": error,
-                "last_error_sanitized": error[:240],
+                "last_error": sanitized,
+                "last_error_sanitized": sanitized,
                 "locked_by": None,
                 "locked_at": None,
                 "updated_at": utc_now(),
@@ -665,12 +681,13 @@ class JobRepository:
         )
 
     def mark_job_dead(self, job_uuid: str, error: str) -> Job:
+        sanitized = _sanitize_error_message(error)
         return self._update_job(
             job_uuid,
             {
                 "status": JobStatus.DEAD.value,
-                "last_error": error,
-                "last_error_sanitized": error[:240],
+                "last_error": sanitized,
+                "last_error_sanitized": sanitized,
                 "locked_by": None,
                 "locked_at": None,
                 "updated_at": utc_now(),
@@ -976,6 +993,12 @@ def _reject_model_profile_secrets(value: Any) -> None:
     elif isinstance(value, list):
         for child_value in value:
             _reject_model_profile_secrets(child_value)
+
+
+def _sanitize_error_message(message: str | None) -> str | None:
+    from memcore.model_control.security import sanitize_error_message
+
+    return sanitize_error_message(message)
 
 
 type EnumLike = (

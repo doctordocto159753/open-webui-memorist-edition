@@ -113,6 +113,11 @@ MEMORIST_DB_PATH=./data/memorist.sqlite
 MEMORIST_OBJECT_STORE_PATH=./data/objects
 MEMORIST_IMPORT_STAGING=./data/imports
 MEMORIST_EXPORT_DIR=./data/exports
+MEMORIST_IMPORT_RECONSTRUCTION_WORKER_ENABLED=true
+MEMORIST_IMPORT_RECONSTRUCTION_CONCURRENCY=1
+MEMORIST_IMPORT_RECONSTRUCTION_WORKER_BATCH_SIZE=5
+MEMORIST_IMPORT_RECONSTRUCTION_LEASE_SECONDS=300
+MEMORIST_IMPORT_RECONSTRUCTION_MAX_ATTEMPTS=5
 MEMORIST_GRAPH_BACKEND=disabled
 MEMORIST_PREFLIGHT_ENABLED=true
 MEMORIST_PREFLIGHT_TIMEOUT_MS=1200
@@ -133,7 +138,10 @@ MEMORIST_EXPORT_DIR=/exports
 MEMORIST_CORE_URL=http://memorist-core:8777
 ```
 
-Do not place provider API keys in `.env` unless a future secure secret-storage feature is explicitly added. Configure model providers in Open WebUI Admin Settings → Connections.
+Model provider profiles store only environment-variable names such as
+`MEMORIST_PROCESSING_API_KEY`; raw API keys must not be pasted into persisted profile
+JSON or endpoint URLs. Import reconstruction uses the same rule and falls back
+deterministically when a configured remote profile is missing its required secret.
 
 ## 6. Open WebUI Integration
 

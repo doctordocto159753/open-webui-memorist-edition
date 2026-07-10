@@ -109,6 +109,24 @@ export type PrivacyAcknowledgementResponse = {
   schema_version: number;
 };
 
+export type ImportProcessingMode = "none" | "extract_candidates" | "full_memory_reconstruction";
+
+export type ImportUploadRequest = {
+  archive_path: string;
+  mode?: string;
+  options?: Record<string, unknown>;
+  target_workspace_uuid?: string | null;
+  target_project_uuid?: string | null;
+};
+
+export type ImportCommitRequest = {
+  processing_mode: ImportProcessingMode;
+};
+
+export type ImportDryRunRequest = {
+  processing_mode?: ImportProcessingMode | null;
+};
+
 export class MemoristClient {
   constructor(private readonly baseUrl: string = "/memcore") {}
 
@@ -137,6 +155,16 @@ export class MemoristClient {
   async acknowledgeModelControlPrivacy(payload: PrivacyAcknowledgementRequest): Promise<PrivacyAcknowledgementResponse> { return this.post("/model-control/privacy/acknowledge", payload); }
   async modelRoleCosts(): Promise<unknown> { return this.get("/costs/model-roles"); }
   async diagnostics(): Promise<unknown> { return this.get("/openwebui/status"); }
+  async uploadImport(payload: ImportUploadRequest): Promise<Record<string, unknown>> { return this.post("/imports/upload", payload); }
+  async inspectImport(importRunUuid: string): Promise<Record<string, unknown>> { return this.post(`/imports/${encodeURIComponent(importRunUuid)}/inspect`, {}); }
+  async reconstructImport(importRunUuid: string, adapterId?: string | null): Promise<Record<string, unknown>> { return this.post(`/imports/${encodeURIComponent(importRunUuid)}/reconstruct`, { adapter_id: adapterId ?? null }); }
+  async dryRunImport(importRunUuid: string, payload: ImportDryRunRequest): Promise<Record<string, unknown>> { return this.post(`/imports/${encodeURIComponent(importRunUuid)}/dry-run`, payload); }
+  async commitImport(importRunUuid: string, payload: ImportCommitRequest): Promise<Record<string, unknown>> { return this.post(`/imports/${encodeURIComponent(importRunUuid)}/commit`, payload); }
+  async importProgress(importRunUuid: string): Promise<Record<string, unknown>> { return this.get(`/imports/${encodeURIComponent(importRunUuid)}/progress`); }
+  async pauseImport(importRunUuid: string): Promise<Record<string, unknown>> { return this.post(`/imports/${encodeURIComponent(importRunUuid)}/pause`, {}); }
+  async resumeImport(importRunUuid: string): Promise<Record<string, unknown>> { return this.post(`/imports/${encodeURIComponent(importRunUuid)}/resume`, {}); }
+  async cancelImport(importRunUuid: string): Promise<Record<string, unknown>> { return this.post(`/imports/${encodeURIComponent(importRunUuid)}/cancel`, {}); }
+  async retryFailedImport(importRunUuid: string): Promise<Record<string, unknown>> { return this.post(`/imports/${encodeURIComponent(importRunUuid)}/retry-failed`, {}); }
 
   private async get<T = unknown>(path: string): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, { credentials: "same-origin" });
