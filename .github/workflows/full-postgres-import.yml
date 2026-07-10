@@ -1,0 +1,38 @@
+name: Full PostgreSQL Import Runtime
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  full-postgres-import:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: memorist
+          POSTGRES_PASSWORD: memorist
+          POSTGRES_DB: memorist_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U memorist -d memorist_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MEMORIST_RUNTIME_PROFILE: full
+      MEMORIST_CANONICAL_STORE: postgres
+      MEMORIST_POSTGRES_DSN: postgresql://memorist:memorist@localhost:5432/memorist_test
+      MEMORIST_OBJECT_STORE_PATH: /tmp/memorist-objects
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Run PostgreSQL import integration tests
+        working-directory: memorist-core
+        run: uv run pytest tests/test_full_postgres_import_runtime.py
+      - name: Type check PostgreSQL import/runtime files
+        working-directory: memorist-core
+        run: uv run mypy src/memcore/imports/runtime.py src/memcore/imports/processing.py src/memcore/memory_worker/postgres/pipeline.py

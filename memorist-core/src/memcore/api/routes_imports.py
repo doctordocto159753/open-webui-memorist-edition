@@ -13,8 +13,7 @@ from memcore.heritage.package import (
 )
 from memcore.imports.service import ImportService
 from memcore.repositories.domain import RepositoryError
-from memcore.storage.migrations import apply_migrations
-from memcore.storage.sqlite import connect
+from memcore.imports.runtime import import_connection
 from memcore.storage.write_commands.heritage_commands import restore_heritage_via_actor
 from memcore.storage.write_commands.import_commands import (
     commit_import_via_actor,
@@ -167,6 +166,16 @@ def import_dry_run_report(import_run_uuid: str) -> dict[str, Any]:
 @router.post("/imports/{import_run_uuid}/commit", response_model=None)
 def import_commit(import_run_uuid: str, request: ImportCommitRequest) -> dict[str, Any]:
     settings = get_settings()
+    if settings.runtime_profile == "full" and settings.canonical_store == "postgres":
+        with _connection() as connection:
+            return _guard(
+                lambda: ImportService(connection, settings.object_store_path).commit(
+                    import_run_uuid,
+                    request.processing_mode,
+                    batch_size=settings.import_batch_size,
+                    max_write_queue_depth=settings.import_max_write_queue_depth,
+                )
+            )
     return _guard(
         lambda: commit_import_via_actor(
             settings.db_path,
@@ -194,6 +203,13 @@ def import_process(
     import_run_uuid: str, request: ImportProcessRequest
 ) -> dict[str, Any]:
     settings = get_settings()
+    if settings.runtime_profile == "full" and settings.canonical_store == "postgres":
+        with _connection() as connection:
+            return _guard(
+                lambda: ImportService(connection, settings.object_store_path).process_next_batch(
+                    import_run_uuid, request.batch_size
+                )
+            )
     return _guard(
         lambda: process_import_batch_via_actor(
             settings.db_path,
@@ -289,13 +305,8 @@ def heritage_restore(request: HeritageRestoreRequest) -> dict[str, Any]:
 
 @contextmanager
 def _connection() -> Iterator[Any]:
-    settings = get_settings()
-    connection = connect(settings.db_path)
-    try:
-        apply_migrations(connection)
+    with import_connection(get_settings()) as connection:
         yield connection
-    finally:
-        connection.close()
 
 
 def _guard[ReturnT](callable_: Callable[[], ReturnT]) -> ReturnT:

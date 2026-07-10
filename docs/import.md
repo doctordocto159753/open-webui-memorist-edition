@@ -134,10 +134,24 @@ truthful primary interfaces for this release; a future UI should expose inspect,
 reconstruct, dry-run approval, processing-mode selection, progress, reports, and failed
 message retry without changing these contracts.
 
-## Storage-mode Note
+## Runtime parity: Lite SQLite and Full PostgreSQL
 
-The current import orchestration routes use the SQLite control store in both product
-profiles. This change adds matching PostgreSQL schema for per-message reconstruction state,
-but does not silently redirect existing import APIs to the Full/PostgreSQL canonical store.
-Direct Full/PostgreSQL import orchestration parity remains a follow-up; the limitation is
-explicit so Full Mode is not presented as complete where it is not.
+Import persistence is selected from the active runtime profile. `runtime_profile=lite` with
+`canonical_store=sqlite` uses the SQLite import repository, SQLite canonical repositories, and the
+Lite memory pipeline. `runtime_profile=full` with `canonical_store=postgres` uses PostgreSQL for
+import runs, staged artifact metadata, dry-run reports, imported conversation staging, mappings,
+commit batches, progress, per-message processing state, canonical sessions/messages, memory worker
+artifacts, prompt execution rows, usage rows, and graph projection outbox rows. Unsupported store
+combinations fail explicitly at runtime selection; Full Mode does not silently fall back to
+`settings.db_path` for canonical import state.
+
+Full Mode requires `MEMORIST_RUNTIME_PROFILE=full`, `MEMORIST_CANONICAL_STORE=postgres`, and
+`MEMORIST_POSTGRES_DSN`. Run the PostgreSQL migrations before serving import traffic; the API import
+connection applies the same PostgreSQL migration set used by the canonical store. The local object
+store remains filesystem-backed, but all staged-file metadata is in PostgreSQL.
+
+PostgreSQL full reconstruction claims work with a short transaction using
+`FOR UPDATE SKIP LOCKED`, commits the claim before invoking model inference, persists durable lease
+metadata (`lease_owner`, `lease_expires_at`, and `attempt_started_at`), and writes success/failure
+state back to `import_message_processing_status`. The Full Mode processing route uses
+`PostgresMemoryWorkerPipeline`; it does not instantiate the SQLite `MemoryWorkerPipeline`.
