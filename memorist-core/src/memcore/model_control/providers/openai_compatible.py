@@ -216,3 +216,33 @@ def _openai_url(endpoint_url: str, path: str) -> str:
 
 def _elapsed_ms(started: float) -> int:
     return int((perf_counter() - started) * 1000)
+
+
+def _health_detail_for_success(
+    http_status: int,
+    *,
+    supports_json_format: bool,
+    requires_structured_extraction: bool,
+) -> str:
+    if requires_structured_extraction and not supports_json_format:
+        return (
+            f"HTTP {http_status}; warning: this profile does not declare Supports JSON mode or "
+            "Supports structured output and may be unsuitable for structured memory tasks. "
+            "Enable one of those capabilities or choose a compatible model."
+        )
+    return f"HTTP {http_status}"
+
+
+def _read_http_error_detail(error: urllib.error.HTTPError) -> str:
+    try:
+        body = error.read().decode("utf-8", errors="replace")
+    except OSError:
+        body = ""
+    return f"HTTP {error.code}: {body}" if body else f"HTTP {error.code}: {error.reason}"
+
+
+def _looks_like_response_format_rejection(detail: str) -> bool:
+    lowered = detail.lower()
+    return "response_format" in lowered or (
+        "json" in lowered and any(term in lowered for term in ("unsupported", "reject", "invalid"))
+    )

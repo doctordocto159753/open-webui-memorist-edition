@@ -124,6 +124,46 @@ def test_model_control_profile_crud(
     assert rejected.status_code == 422
 
 
+
+def test_openai_compatible_health_check_validates_json_mode(
+    openai_json_mode_server: tuple[str, type[BaseHTTPRequestHandler]],
+) -> None:
+    endpoint, handler = openai_json_mode_server
+    provider = OpenAICompatibleLLMProvider(
+        endpoint,
+        "mock-chat",
+        supports_json_mode=True,
+        requires_structured_extraction=True,
+    )
+
+    health = provider.health_check()
+
+    assert health.status == "ok"
+    assert health.detail == "HTTP 200"
+    assert handler.last_payload["response_format"] == {"type": "json_object"}
+
+
+def test_openai_compatible_health_check_reports_json_mode_unsupported(
+    openai_json_mode_server: tuple[str, type[BaseHTTPRequestHandler]],
+) -> None:
+    endpoint, handler = openai_json_mode_server
+    handler.reject_response_format = True
+    provider = OpenAICompatibleLLMProvider(
+        endpoint,
+        "mock-chat",
+        supports_structured_output=True,
+        requires_structured_extraction=True,
+    )
+
+    health = provider.health_check()
+
+    assert health.status == "error"
+    assert health.detail == (
+        "Provider rejected JSON response_format; disable Supports JSON mode or "
+        "choose a compatible model."
+    )
+
+
 def test_role_defaults_resolution(client_and_db: tuple[TestClient, Path]) -> None:
     client, _db_path = client_and_db
     workspace = _assert_ok(client.post("/memcore/workspaces", json={"name": "Workspace"}))

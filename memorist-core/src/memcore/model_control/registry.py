@@ -35,6 +35,8 @@ def provider_for_profile(profile: ModelProfile | dict[str, object] | None) -> Mo
                 str(endpoint_url),
                 model_name,
                 str(secret_env_var_name) if secret_env_var_name else None,
+                supports_json_mode=bool(_get(profile, "supports_json_mode")),
+                supports_structured_output=bool(_get(profile, "supports_structured_output")),
             )
         if not endpoint_url:
             return DisabledProvider(model_name)
@@ -52,6 +54,8 @@ def provider_for_profile(profile: ModelProfile | dict[str, object] | None) -> Mo
             str(endpoint_url),
             model_name,
             str(secret_env_var_name) if secret_env_var_name else None,
+            supports_json_mode=bool(_get(profile, "supports_json_mode")),
+            supports_structured_output=bool(_get(profile, "supports_structured_output")),
         )
     if provider_type in {"ollama", "ollama_llm"}:
         if not endpoint_url:
@@ -70,3 +74,14 @@ def _get(profile: ModelProfile | dict[str, object], key: str) -> object | None:
     if isinstance(profile, dict):
         return profile.get(key)
     return cast(object | None, getattr(profile, key))
+
+
+def _role_requires_structured_extraction(role_text: str) -> bool:
+    return role_text in {
+        ModelRole.PREFLIGHT.value,
+        ModelRole.MEMORY_EXTRACTION.value,
+        ModelRole.HIGH_CONFIDENCE_EXTRACTION.value,
+        ModelRole.IMPORT_RECONSTRUCTION.value,
+        ModelRole.BLOCK_COMPACTION.value,
+        ModelRole.PRIVACY_SENSITIVITY.value,
+    }
