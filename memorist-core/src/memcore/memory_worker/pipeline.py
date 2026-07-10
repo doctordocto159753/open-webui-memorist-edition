@@ -20,6 +20,7 @@ from memcore.memory_worker.graph import GraphProjectionRunner
 from memcore.memory_worker.jakobson.service import (
     DeterministicJakobsonProvider,
     JakobsonAnalysisService,
+    OpenAICompatibleJakobsonProvider,
 )
 from memcore.memory_worker.segmentation.sentence_segmenter import SentenceSegmenter
 from memcore.model_control.repository import ModelControlRepository
@@ -31,6 +32,7 @@ from memcore.models import (
     MemoryGateDecision,
     Message,
     ModelRole,
+    ProcessingRunStatus,
     ProcessingStatus,
     TextUnit,
 )
@@ -63,7 +65,13 @@ class MemoryWorkerPipeline:
         self.consolidator = MemoryConsolidator(connection)
         self.jakobson = JakobsonAnalysisService(connection, segmenter=self.unitizer)
 
-    def process_message(self, message_uuid: str) -> dict[str, object]:
+    def process_message(
+        self,
+        message_uuid: str,
+        import_run_uuid: str | None = None,
+        job_uuid: str | None = None,
+        model_target: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         message = self.messages.get_message(message_uuid)
         if message is None:
             raise RepositoryError(f"Message not found: {message_uuid}")
@@ -75,12 +83,14 @@ class MemoryWorkerPipeline:
             prompt_bundle_version=PROMPT_BUNDLE_VERSION,
             input_content_hash=canonical_text_hash(raw_text),
         )
+        if run.status is ProcessingRunStatus.SUCCEEDED:
+            return self._completed_result(run.processing_run_uuid, message_uuid)
         self.runs.mark_started(run.processing_run_uuid)
 
         units = self._unitize(message, raw_text)
         self.messages.mark_processing_status(message_uuid, ProcessingStatus.UNITIZED)
 
-        extraction_profile = self._resolve_memory_extraction_profile()
+        extraction_profile = self._resolve_memory_extraction_profile(model_target)
         extraction_profile_uuid = _optional_string(extraction_profile.get("model_profile_uuid"))
         if extraction_profile["provider_type"] == "disabled":
             ModelControlRepository(self.connection).record_usage_event(
@@ -90,6 +100,8 @@ class MemoryWorkerPipeline:
                     model_profile_uuid=extraction_profile_uuid,
                     session_uuid=message.session_uuid,
                     message_uuid=message.message_uuid,
+                    import_run_uuid=import_run_uuid,
+                    job_uuid=job_uuid,
                     status="disabled",
                 )
             )
@@ -109,13 +121,34 @@ class MemoryWorkerPipeline:
                 "model_profile_uuid": extraction_profile_uuid,
             }
 
-        self.jakobson.provider = DeterministicJakobsonProvider(
-            provider_type=str(extraction_profile["provider_type"]),
-            model_name=str(extraction_profile["model_name"]),
-        )
+        provider_type = str(extraction_profile["provider_type"])
+        if (
+            import_run_uuid is not None
+            and provider_type in {"openai_compatible", "openai_compatible_llm"}
+        ):
+            profile_uuid = extraction_profile.get("model_profile_uuid")
+            stored_profile = (
+                ModelControlRepository(self.connection).get_profile(str(profile_uuid))
+                if profile_uuid
+                else None
+            )
+            if stored_profile is None:
+                raise RepositoryError("configured memory extraction profile was not found")
+            self.jakobson.provider = OpenAICompatibleJakobsonProvider(
+                stored_profile.model_dump(mode="json")
+            )
+        else:
+            self.jakobson.provider = DeterministicJakobsonProvider(
+                provider_type=provider_type,
+                model_name=str(extraction_profile["model_name"]),
+            )
         self.jakobson.model_profile_uuid = extraction_profile_uuid
         jakobson_started = perf_counter()
-        jakobson_result = self.jakobson.run_for_message(message_uuid)
+        jakobson_result = self.jakobson.run_for_message(
+            message_uuid,
+            import_run_uuid=import_run_uuid,
+            job_uuid=job_uuid,
+        )
         ModelControlRepository(self.connection).record_usage_event(
             UsageEventCreate(
                 role=ModelRole.MEMORY_EXTRACTION,
@@ -123,9 +156,20 @@ class MemoryWorkerPipeline:
                 model_profile_uuid=extraction_profile_uuid,
                 session_uuid=message.session_uuid,
                 message_uuid=message.message_uuid,
-                input_tokens=max(0, (len(raw_text) + 3) // 4),
-                output_tokens=int(jakobson_result["annotations"]),
-                latency_ms=int((perf_counter() - jakobson_started) * 1000),
+                import_run_uuid=import_run_uuid,
+                job_uuid=job_uuid,
+                input_tokens=int(
+                    getattr(self.jakobson.provider, "input_tokens", 0)
+                    or max(0, (len(raw_text) + 3) // 4)
+                ),
+                output_tokens=int(
+                    getattr(self.jakobson.provider, "output_tokens", 0)
+                    or jakobson_result["annotations"]
+                ),
+                latency_ms=int(
+                    getattr(self.jakobson.provider, "latency_ms", 0)
+                    or (perf_counter() - jakobson_started) * 1000
+                ),
                 status="ok",
             )
         )
@@ -178,7 +222,34 @@ class MemoryWorkerPipeline:
             "model_profile_uuid": extraction_profile_uuid,
         }
 
-    def _resolve_memory_extraction_profile(self) -> dict[str, object]:
+    def _completed_result(
+        self, processing_run_uuid: str, message_uuid: str
+    ) -> dict[str, object]:
+        unit_count = int(
+            self.connection.execute(
+                "SELECT COUNT(*) FROM text_units WHERE message_uuid = ?", (message_uuid,)
+            ).fetchone()[0]
+        )
+        candidate_count = int(
+            self.connection.execute(
+                "SELECT COUNT(*) FROM memory_candidates WHERE processing_run_uuid = ?",
+                (processing_run_uuid,),
+            ).fetchone()[0]
+        )
+        return {
+            "processing_run_uuid": processing_run_uuid,
+            "message_uuid": message_uuid,
+            "units": unit_count,
+            "candidates": candidate_count,
+            "idempotent_replay": True,
+            "status": "succeeded",
+        }
+
+    def _resolve_memory_extraction_profile(
+        self, override: dict[str, object] | None = None
+    ) -> dict[str, object]:
+        if override is not None:
+            return override
         repository = ModelControlRepository(self.connection)
         resolved = repository.resolve_default(ModelRole.MEMORY_EXTRACTION)
         if resolved is None:

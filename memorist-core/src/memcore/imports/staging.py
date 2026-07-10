@@ -5,7 +5,11 @@ import zipfile
 from pathlib import Path
 
 from memcore.imports.models import StagedArtifact
-from memcore.imports.security import validate_zip_archive
+from memcore.imports.security import (
+    MAX_EXPANDED_BYTES,
+    ImportSecurityError,
+    validate_zip_archive,
+)
 
 
 def sha256_file(path: str | Path) -> str:
@@ -45,6 +49,39 @@ def stage_archive(
                 )
             )
     return artifacts
+
+
+def stage_import_source(
+    source_path: str, staging_root: str | Path, import_run_uuid: str
+) -> list[StagedArtifact]:
+    """Stage a supported import source without trusting its original path or filename."""
+    source = Path(source_path)
+    if not source.is_file():
+        raise ImportSecurityError("import source is not a regular file")
+    suffix = source.suffix.lower()
+    if suffix == ".zip":
+        return stage_archive(str(source), staging_root, import_run_uuid)
+    if suffix not in {".json", ".jsonl"}:
+        raise ImportSecurityError("unsupported import source; expected .zip, .json, or .jsonl")
+    size_bytes = source.stat().st_size
+    if size_bytes > MAX_EXPANDED_BYTES:
+        raise ImportSecurityError("standalone import source exceeds expanded size limit")
+
+    object_dir = Path(staging_root) / "imports" / import_run_uuid / "objects"
+    object_dir.mkdir(parents=True, exist_ok=True)
+    target_path = object_dir / f"artifact-000000{suffix}"
+    with source.open("rb") as input_file, target_path.open("wb") as output_file:
+        shutil.copyfileobj(input_file, output_file, length=1024 * 1024)
+    return [
+        StagedArtifact(
+            relative_path=source.name,
+            object_store_path=str(target_path),
+            artifact_role="conversation_data",
+            detected_media_type=mimetypes.guess_type(source.name)[0] or "application/json",
+            size_bytes=size_bytes,
+            sha256=sha256_file(target_path),
+        )
+    ]
 
 
 def _artifact_role(filename: str) -> str:

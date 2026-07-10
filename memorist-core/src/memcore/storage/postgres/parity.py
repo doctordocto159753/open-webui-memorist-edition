@@ -31,6 +31,7 @@ REQUIRED_CANONICAL_TABLES = {
     "import_runs",
     "import_records",
     "import_mappings",
+    "import_message_processing_status",
     "memory_processing_runs",
     "memory_candidates",
     "candidate_evidence",

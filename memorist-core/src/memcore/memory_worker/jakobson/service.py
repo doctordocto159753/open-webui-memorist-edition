@@ -8,10 +8,17 @@ from typing import Any, Protocol
 from memcore.memory_worker.contracts import JOB_MEMORY_SIGNAL_ROUTING
 from memcore.memory_worker.jakobson.mapper import map_output_to_annotations
 from memcore.memory_worker.jakobson.validator import validate_jakobson_provider_output
-from memcore.memory_worker.prompts.registry import PromptExecutionRepository
+from memcore.memory_worker.prompts.registry import (
+    PromptExecutionRepository,
+    render_prompt,
+    validate_prompt_execution,
+)
 from memcore.memory_worker.prompts.versions import (
     JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
     JAKOBSON_SENTENCE_ANALYSIS_VERSION,
+)
+from memcore.memory_worker.providers.openai_compatible import (
+    OpenAICompatibleMemoryExtractionProvider,
 )
 from memcore.memory_worker.routing.signal_router import SignalRouter
 from memcore.memory_worker.segmentation.sentence_segmenter import SentenceSegmenter
@@ -40,7 +47,7 @@ from memcore.validators.ijson import canonical_hash_ijson, dump_ijson
 
 class JakobsonProvider(Protocol):
     provider_type: str
-    model_name: str | None
+    model_name: str
 
     def analyze(self, units: list[TextUnit], raw_text: str) -> dict[str, Any]: ...
 
@@ -89,6 +96,39 @@ class DeterministicJakobsonProvider:
         }
 
 
+class OpenAICompatibleJakobsonProvider:
+    def __init__(self, profile: dict[str, Any], timeout_ms: int = 8000) -> None:
+        self.provider_type = str(
+            profile.get("provider_type") or profile.get("provider") or "openai_compatible"
+        )
+        self.model_name = str(profile.get("model_name") or "unknown")
+        self.provider = OpenAICompatibleMemoryExtractionProvider.from_profile(
+            profile, timeout_ms=timeout_ms
+        )
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.latency_ms = 0
+
+    def analyze(self, units: list[TextUnit], raw_text: str) -> dict[str, Any]:
+        input_value = _jakobson_input(units)
+        prompt = render_prompt(
+            JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
+            JAKOBSON_SENTENCE_ANALYSIS_VERSION,
+            input_value,
+        )
+        response = self.provider.extract(system_prompt=prompt, input_payload=input_value)
+        validate_prompt_execution(
+            JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
+            JAKOBSON_SENTENCE_ANALYSIS_VERSION,
+            input_value,
+            response.output,
+        )
+        self.input_tokens = response.input_tokens
+        self.output_tokens = response.output_tokens
+        self.latency_ms = response.latency_ms
+        return response.output
+
+
 class JakobsonAnalysisService:
     def __init__(
         self,
@@ -97,7 +137,9 @@ class JakobsonAnalysisService:
         segmenter: SentenceSegmenter | None = None,
     ) -> None:
         self.connection = connection
-        self.provider = provider or DeterministicJakobsonProvider()
+        self.provider: JakobsonProvider = (
+            provider if provider is not None else DeterministicJakobsonProvider()
+        )
         self.segmenter = segmenter or SentenceSegmenter()
         self.messages = MessageRepository(connection)
         self.sessions = SessionRepository(connection)
@@ -109,27 +151,18 @@ class JakobsonAnalysisService:
         self.router = SignalRouter()
         self.model_profile_uuid: str | None = None
 
-    def run_for_message(self, message_uuid: str) -> dict[str, Any]:
+    def run_for_message(
+        self,
+        message_uuid: str,
+        import_run_uuid: str | None = None,
+        job_uuid: str | None = None,
+    ) -> dict[str, Any]:
         message = self.messages.get_message(message_uuid)
         if message is None:
             raise RepositoryError(f"Message not found: {message_uuid}")
         raw_text = message.raw_text or ""
         units = self._load_or_create_sentence_units(message, raw_text)
-        input_value = {
-            "message_uuid": message.message_uuid,
-            "prompt_id": JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-            "prompt_version": JAKOBSON_SENTENCE_ANALYSIS_VERSION,
-            "sentences": [
-                {
-                    "id": index + 1,
-                    "unit_uuid": unit.text_unit_uuid,
-                    "text": unit.text,
-                    "char_start": unit.start_char,
-                    "char_end": unit.end_char,
-                }
-                for index, unit in enumerate(units)
-            ],
-        }
+        input_value = _jakobson_input(units)
         session = self.sessions.get_session(message.session_uuid)
         output: dict[str, Any] | None = None
         run = JakobsonAnalysisRun(
@@ -169,15 +202,25 @@ class JakobsonAnalysisService:
                 project_uuid=session.project_uuid if session else None,
                 session_uuid=message.session_uuid,
                 message_uuid=message.message_uuid,
+                import_run_uuid=import_run_uuid,
+                job_uuid=job_uuid,
                 input_value=input_value,
                 input_ref=f"message:{message.message_uuid}",
                 raw_output_value=output,
                 validated_output_value=output,
                 status="ok",
                 warnings=warnings,
-                latency_ms=int((perf_counter() - started) * 1000),
-                input_tokens=max(0, (len(raw_text) + 3) // 4),
-                output_tokens=len(annotations),
+                latency_ms=int(
+                    getattr(self.provider, "latency_ms", 0)
+                    or (perf_counter() - started) * 1000
+                ),
+                input_tokens=int(
+                    getattr(self.provider, "input_tokens", 0)
+                    or max(0, (len(raw_text) + 3) // 4)
+                ),
+                output_tokens=int(
+                    getattr(self.provider, "output_tokens", 0) or len(annotations)
+                ),
             )
             run.prompt_execution_uuid = str(execution["prompt_execution_uuid"])
             persisted_run = self.runs.create_run(run)
@@ -234,6 +277,8 @@ class JakobsonAnalysisService:
                     project_uuid=session.project_uuid if session else None,
                     session_uuid=message.session_uuid,
                     message_uuid=message.message_uuid,
+                    import_run_uuid=import_run_uuid,
+                    job_uuid=job_uuid,
                     input_value=input_value,
                     input_ref=f"message:{message.message_uuid}",
                     raw_output_value=output,
@@ -241,15 +286,20 @@ class JakobsonAnalysisService:
                     status="error",
                     warnings=[type(error).__name__],
                     error_sanitized=str(error),
-                    latency_ms=int((perf_counter() - started) * 1000),
-                    input_tokens=max(0, (len(raw_text) + 3) // 4),
+                    latency_ms=int(
+                        getattr(self.provider, "latency_ms", 0)
+                        or (perf_counter() - started) * 1000
+                    ),
+                    input_tokens=int(
+                        getattr(self.provider, "input_tokens", 0)
+                        or max(0, (len(raw_text) + 3) // 4)
+                    ),
                 )
                 run.prompt_execution_uuid = str(execution["prompt_execution_uuid"])
             except Exception:
                 pass
             self.runs.create_run(run)
             raise
-
     def _load_or_create_sentence_units(self, message: Message, raw_text: str) -> list[TextUnit]:
         existing = self.units.list_units(message.message_uuid)
         sentence_units = [unit for unit in existing if unit.unit_type is TextUnitType.SENTENCE]
@@ -267,6 +317,25 @@ class JakobsonAnalysisService:
                 text=raw_text,
             )
         )
+
+
+def _jakobson_input(units: list[TextUnit]) -> dict[str, Any]:
+    message_uuid = units[0].message_uuid if units else None
+    return {
+        "message_uuid": message_uuid,
+        "prompt_id": JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
+        "prompt_version": JAKOBSON_SENTENCE_ANALYSIS_VERSION,
+        "sentences": [
+            {
+                "id": index + 1,
+                "unit_uuid": unit.text_unit_uuid,
+                "text": unit.text,
+                "char_start": unit.start_char,
+                "char_end": unit.end_char,
+            }
+            for index, unit in enumerate(units)
+        ],
+    }
 
 
 def _analyze_unit(unit: TextUnit, sentence_id: int) -> dict[str, Any]:
