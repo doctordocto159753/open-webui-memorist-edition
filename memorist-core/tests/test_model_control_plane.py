@@ -595,6 +595,234 @@ def test_memory_worker_process_uses_memory_extraction_profile(
         assert usage["model_name"] == "worker-extractor"
 
 
+def test_memory_worker_uses_tested_memory_extraction_profile(
+    client_and_db: tuple[TestClient, Path],
+    openai_compatible_server: str,
+    tmp_path: Path,
+) -> None:
+    client, db_path = client_and_db
+    _OpenAICompatibleHandler.reset()
+    profile = _assert_ok(
+        client.post(
+            "/memcore/model-control/profiles",
+            json={
+                "provider_type": "openai_compatible_llm",
+                "provider_name": "local-memory-mock",
+                "model_name": "mock-chat",
+                "role": "memory_extraction",
+                "endpoint_url": openai_compatible_server,
+                "supports_json_mode": True,
+            },
+        )
+    )
+    profile_uuid = profile["model_profile_uuid"]
+
+    health = _assert_ok(
+        client.post(f"/memcore/model-control/profiles/{profile_uuid}/test", json={})
+    )
+
+    assert health["health"]["status"] == "ok"
+    assert _OpenAICompatibleHandler.post_paths == ["/v1/chat/completions"]
+    assert _OpenAICompatibleHandler.last_payload["model"] == "mock-chat"
+
+    _assert_ok(
+        client.post(
+            "/memcore/model-control/defaults",
+            json={"role": "memory_extraction", "model_profile_uuid": profile_uuid},
+        )
+    )
+    session = _assert_ok(client.post("/memcore/sessions", json={"title": "worker-openai"}))
+    message = _assert_ok(
+        client.post(
+            "/memcore/messages",
+            json={
+                "session_uuid": session["session_uuid"],
+                "role": "assistant",
+                "creator_type": "model",
+                "raw_text": "The user prefers local OpenAI-compatible memory extraction tests.",
+            },
+        )
+    )
+
+    with _db(db_path) as connection:
+        result = MemoryWorkerPipeline(
+            connection,
+            Settings(db_path=str(db_path), object_store_path=str(tmp_path / "objects-openai")),
+        ).process_message(message["message_uuid"])
+        assert result["model_profile_uuid"] == profile_uuid
+
+        usage = connection.execute(
+            """
+            SELECT model_profile_uuid, provider_type, model_name, status
+            FROM model_usage_events
+            WHERE role = 'memory_extraction' AND stage = 'jakobson_sentence_analysis'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        assert usage is not None
+        assert usage["model_profile_uuid"] == profile_uuid
+        assert usage["provider_type"] == "openai_compatible_llm"
+        assert usage["model_name"] == "mock-chat"
+        assert usage["status"] == "ok"
+
+        prompt_run = connection.execute(
+            """
+            SELECT model_profile_uuid, provider_type, model_name, status
+            FROM prompt_execution_runs
+            WHERE model_role = 'memory_extraction'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        assert prompt_run is not None
+        assert prompt_run["model_profile_uuid"] == profile_uuid
+        assert prompt_run["provider_type"] == "openai_compatible_llm"
+        assert prompt_run["model_name"] == "mock-chat"
+        assert prompt_run["status"] == "ok"
+
+
+def test_deterministic_fallback_still_works_without_profile(
+    client_and_db: tuple[TestClient, Path],
+    tmp_path: Path,
+) -> None:
+    client, db_path = client_and_db
+    session = _assert_ok(client.post("/memcore/sessions", json={"title": "worker-fallback"}))
+    message = _assert_ok(
+        client.post(
+            "/memcore/messages",
+            json={
+                "session_uuid": session["session_uuid"],
+                "role": "user",
+                "creator_type": "user",
+                "raw_text": "Please remember that deterministic fallback stays available.",
+            },
+        )
+    )
+
+    with _db(db_path) as connection:
+        result = MemoryWorkerPipeline(
+            connection,
+            Settings(db_path=str(db_path), object_store_path=str(tmp_path / "objects-fallback")),
+        ).process_message(message["message_uuid"])
+        assert result["model_profile_uuid"] is None
+
+        usage = connection.execute(
+            """
+            SELECT model_profile_uuid, provider_type, model_name, status
+            FROM model_usage_events
+            WHERE role = 'memory_extraction' AND stage = 'jakobson_sentence_analysis'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        assert usage is not None
+        assert usage["model_profile_uuid"] is None
+        assert usage["provider_type"] == "deterministic"
+        assert usage["model_name"] == "deterministic_extraction"
+        assert usage["status"] == "ok"
+
+        prompt_run = connection.execute(
+            """
+            SELECT model_profile_uuid, provider_type, model_name, status
+            FROM prompt_execution_runs
+            WHERE model_role = 'memory_extraction'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        assert prompt_run is not None
+        assert prompt_run["model_profile_uuid"] is None
+        assert prompt_run["provider_type"] == "deterministic"
+        assert prompt_run["model_name"] == "deterministic_extraction"
+        assert prompt_run["status"] == "ok"
+
+
+def test_memory_worker_profile_test_failure_is_sanitized_and_fallback_still_works(
+    client_and_db: tuple[TestClient, Path],
+    tmp_path: Path,
+) -> None:
+    client, db_path = client_and_db
+    with _served(_AuthFailureHandler) as endpoint_url:
+        profile = _assert_ok(
+            client.post(
+                "/memcore/model-control/profiles",
+                json={
+                    "provider_type": "openai_compatible_llm",
+                    "model_name": "mock-chat",
+                    "role": "memory_extraction",
+                    "endpoint_url": endpoint_url,
+                    "supports_json_mode": True,
+                },
+            )
+        )
+        profile_uuid = profile["model_profile_uuid"]
+        response = _assert_ok(
+            client.post(f"/memcore/model-control/profiles/{profile_uuid}/test", json={})
+        )
+
+    detail = response["health"]["detail"]
+    assert response["health"]["status"] == "error"
+    assert "HTTP 401" in detail
+    _assert_no_auth_failure_secret_material(detail)
+    assert "Bearer [redacted]" in detail
+    assert "api_key=[redacted]" in detail
+
+    session = _assert_ok(client.post("/memcore/sessions", json={"title": "worker-failure"}))
+    message = _assert_ok(
+        client.post(
+            "/memcore/messages",
+            json={
+                "session_uuid": session["session_uuid"],
+                "role": "assistant",
+                "creator_type": "model",
+                "raw_text": (
+                    "The memory worker should keep deterministic fallback when no default exists."
+                ),
+            },
+        )
+    )
+
+    with _db(db_path) as connection:
+        event = connection.execute(
+            """
+            SELECT status, provider_type, model_name, detail_sanitized
+            FROM model_health_events
+            WHERE model_profile_uuid = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (profile_uuid,),
+        ).fetchone()
+        assert event is not None
+        assert event["status"] == "error"
+        assert event["provider_type"] == "openai_compatible_llm"
+        assert event["model_name"] == "mock-chat"
+        assert event["detail_sanitized"] == detail
+        _assert_no_auth_failure_secret_material(event["detail_sanitized"])
+
+        result = MemoryWorkerPipeline(
+            connection,
+            Settings(db_path=str(db_path), object_store_path=str(tmp_path / "objects-failure")),
+        ).process_message(message["message_uuid"])
+        assert result["model_profile_uuid"] is None
+
+        usage = connection.execute(
+            """
+            SELECT model_profile_uuid, provider_type, model_name, status
+            FROM model_usage_events
+            WHERE role = 'memory_extraction' AND stage = 'jakobson_sentence_analysis'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        assert usage is not None
+        assert usage["model_profile_uuid"] is None
+        assert usage["provider_type"] == "deterministic"
+        assert usage["model_name"] == "deterministic_extraction"
+        assert usage["status"] == "ok"
+
+
 def test_embedding_profile_switch_marks_reindex(client_and_db: tuple[TestClient, Path]) -> None:
     client, db_path = client_and_db
     first_profile = _create_profile(client, "embedding", "embedder-a", supports_embeddings=True)
@@ -1251,6 +1479,7 @@ def _assert_ok(response: Any) -> dict[str, Any]:
     payload = response.json()
     assert isinstance(payload, dict)
     return payload
+
 
 def test_profile_health_routes_roles_and_provider_types(openai_compatible_server: str) -> None:
     from memcore.model_control.registry import test_profile_health
