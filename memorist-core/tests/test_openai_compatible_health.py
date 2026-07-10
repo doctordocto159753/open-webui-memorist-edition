@@ -69,6 +69,28 @@ def test_openai_compatible_health_check_reports_json_mode_unsupported(
     )
 
 
+def test_openai_compatible_health_check_reports_missing_secret_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+    openai_json_mode_server: tuple[str, type[BaseHTTPRequestHandler]],
+) -> None:
+    endpoint, handler = openai_json_mode_server
+    secret_env_var_name = "MEMORIST_TEST_OPENAI_API_KEY"
+    monkeypatch.delenv(secret_env_var_name, raising=False)
+    provider = OpenAICompatibleLLMProvider(
+        endpoint,
+        "mock-chat",
+        secret_env_var_name=secret_env_var_name,
+    )
+
+    health = provider.health_check()
+
+    assert health.status == "error"
+    assert health.detail == (
+        f"Secret environment variable {secret_env_var_name} is not set"
+    )
+    assert handler.last_payload == {}
+
+
 @pytest.fixture
 def openai_json_mode_server() -> Iterator[tuple[str, type[BaseHTTPRequestHandler]]]:
     class JsonModeHandler(BaseHTTPRequestHandler):

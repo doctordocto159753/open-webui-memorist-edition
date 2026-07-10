@@ -91,6 +91,8 @@ class OpenAICompatibleLLMProvider:
                 )
             else:
                 detail = sanitize_error_message(error_detail)
+        except MissingSecretEnvironmentVariableError as error:
+            detail = str(error)
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             detail = sanitize_error_message(str(error))
         return ProviderHealth(
@@ -186,10 +188,15 @@ class OpenAICompatibleEmbeddingProvider(OpenAICompatibleLLMProvider):
                 if embedding is None:
                     detail = "Missing data[0].embedding in embeddings response"
                 elif not _is_non_empty_numeric_vector(embedding):
-                    detail = "Embedding response data[0].embedding must be a non-empty numeric vector"
+                    detail = (
+                        "Embedding response data[0].embedding must be a non-empty numeric vector"
+                    )
                 else:
                     dimension = len(embedding)
-                    if self.embedding_dimension is not None and dimension != self.embedding_dimension:
+                    if (
+                        self.embedding_dimension is not None
+                        and dimension != self.embedding_dimension
+                    ):
                         detail = (
                             "Embedding dimension mismatch: profile expects "
                             f"{self.embedding_dimension}, provider returned {dimension}. "
@@ -197,11 +204,15 @@ class OpenAICompatibleEmbeddingProvider(OpenAICompatibleLLMProvider):
                         )
                     else:
                         status = "ok"
-                        detail = f"HTTP {response.status}; embeddings validated; dimension={dimension}"
+                        detail = (
+                            f"HTTP {response.status}; embeddings validated; dimension={dimension}"
+                        )
         except json.JSONDecodeError as error:
             detail = f"Malformed JSON response: {sanitize_error_message(str(error))}"
         except urllib.error.HTTPError as error:
             detail = sanitize_error_message(_read_http_error_detail(error))
+        except MissingSecretEnvironmentVariableError as error:
+            detail = str(error)
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             detail = sanitize_error_message(str(error))
         return ProviderHealth(
@@ -295,12 +306,18 @@ def _is_non_empty_numeric_vector(value: object) -> bool:
     )
 
 
+class MissingSecretEnvironmentVariableError(RuntimeError):
+    def __init__(self, secret_env_var_name: str) -> None:
+        super().__init__(f"Secret environment variable {secret_env_var_name} is not set")
+
+
 def _headers(secret_env_var_name: str | None) -> dict[str, str]:
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     if secret_env_var_name:
         secret = os.environ.get(secret_env_var_name)
-        if secret:
-            headers["Authorization"] = f"Bearer {secret}"
+        if not secret:
+            raise MissingSecretEnvironmentVariableError(secret_env_var_name)
+        headers["Authorization"] = f"Bearer {secret}"
     return headers
 
 
