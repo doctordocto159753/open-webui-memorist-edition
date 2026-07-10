@@ -139,6 +139,29 @@ def test_openai_compatible_health_check_validates_json_mode(
     health = provider.health_check()
 
     assert health.status == "ok"
+    assert health.detail == "HTTP 200; chat completions validated"
+    assert handler.last_payload["response_format"] == {"type": "json_object"}
+
+
+def test_openai_compatible_health_check_warns_without_structured_flags(
+    openai_json_mode_server: tuple[str, type[BaseHTTPRequestHandler]],
+) -> None:
+    endpoint, handler = openai_json_mode_server
+    provider = OpenAICompatibleLLMProvider(
+        endpoint,
+        "mock-chat",
+        requires_structured_extraction=True,
+    )
+
+    health = provider.health_check()
+
+    assert health.status == "ok"
+    assert "response_format" not in handler.last_payload
+    assert health.detail is not None
+    assert "chat completions validated" in health.detail
+    assert "may be unsuitable for structured memory tasks" in health.detail
+
+
     assert health.detail == "HTTP 200"
     assert handler.last_payload["response_format"] == {"type": "json_object"}
 
