@@ -25,25 +25,60 @@ class OpenAICompatibleLLMProvider:
         endpoint_url: str,
         model_name: str,
         secret_env_var_name: str | None = None,
+        supports_structured_output: bool = False,
+        supports_json_mode: bool = False,
     ) -> None:
         self.endpoint_url = endpoint_url.rstrip("/")
         self.model_name = model_name
         self.secret_env_var_name = secret_env_var_name
+        self.supports_structured_output = supports_structured_output
+        self.supports_json_mode = supports_json_mode
 
     def health_check(self, timeout_seconds: float = 1.0) -> ProviderHealth:
         started = perf_counter()
+        status = "error"
         detail: str | None
+        payload: dict[str, object] = {
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Memorist connectivity test. Reply only with valid JSON.",
+                },
+                {"role": "user", "content": '{"memorist_provider_test":"ok"}'},
+            ],
+        }
+        if self.supports_json_mode or self.supports_structured_output:
+            payload["response_format"] = {"type": "json_object"}
+
         try:
             request = urllib.request.Request(
-                _openai_url(self.endpoint_url, "models"),
+                _openai_url(self.endpoint_url, "chat/completions"),
+                data=json.dumps(payload).encode("utf-8"),
                 headers=_headers(self.secret_env_var_name),
-                method="GET",
+                method="POST",
             )
             with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-                status = "ok" if 200 <= response.status < 300 else "error"
-                detail = f"HTTP {response.status}"
+                response_body = response.read().decode("utf-8")
+                data = json.loads(response_body)
+                if not 200 <= response.status < 300:
+                    detail = f"HTTP {response.status}"
+                else:
+                    content = _extract_chat_content(data)
+                    if content is None:
+                        detail = "Missing choices[0].message.content"
+                    else:
+                        marker = json.loads(content)
+                        if marker.get("memorist_provider_test") == "ok":
+                            status = "ok"
+                            detail = f"HTTP {response.status}; chat completions validated"
+                        else:
+                            detail = "Provider health marker mismatch"
+        except json.JSONDecodeError as error:
+            detail = f"Malformed JSON response: {sanitize_error_message(str(error))}"
+        except urllib.error.HTTPError as error:
+            detail = sanitize_error_message(f"HTTP {error.code}: {error.reason}")
         except (urllib.error.URLError, TimeoutError, OSError) as error:
-            status = "error"
             detail = sanitize_error_message(str(error))
         return ProviderHealth(
             status=status,
@@ -146,6 +181,22 @@ class OllamaProvider(OpenAICompatibleLLMProvider):
             local_only_safe=endpoint_is_local(self.endpoint_url),
             detail=detail,
         )
+
+
+def _extract_chat_content(data: object) -> str | None:
+    if not isinstance(data, dict):
+        return None
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return None
+    message = first_choice.get("message")
+    if not isinstance(message, dict):
+        return None
+    content = message.get("content")
+    return content if isinstance(content, str) and content else None
 
 
 def _headers(secret_env_var_name: str | None) -> dict[str, str]:
