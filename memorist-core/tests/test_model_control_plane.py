@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -723,8 +724,7 @@ def test_docs_include_model_roles() -> None:
 def test_openai_compatible_health_check_uses_chat_completions_not_models(
     openai_compatible_server: str,
 ) -> None:
-    _OpenAICompatibleHandler.get_paths = []
-    _OpenAICompatibleHandler.post_paths = []
+    _OpenAICompatibleHandler.reset()
 
     health = OpenAICompatibleLLMProvider(
         openai_compatible_server,
@@ -735,14 +735,21 @@ def test_openai_compatible_health_check_uses_chat_completions_not_models(
     assert health.status == "ok"
     assert _OpenAICompatibleHandler.get_paths == []
     assert _OpenAICompatibleHandler.post_paths == ["/v1/chat/completions"]
+    assert _OpenAICompatibleHandler.request_log == [
+        {
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "json": _OpenAICompatibleHandler.last_payload,
+            "body": _OpenAICompatibleHandler.last_body,
+        }
+    ]
+    assert _OpenAICompatibleHandler.last_payload["model"] == "mock-chat"
 
 
 def test_openai_compatible_embedding_health_check_uses_embeddings(
     openai_compatible_server: str,
 ) -> None:
-    _OpenAICompatibleHandler.get_paths = []
-    _OpenAICompatibleHandler.post_paths = []
-    _OpenAICompatibleHandler.last_payload = {}
+    _OpenAICompatibleHandler.reset()
 
     health = OpenAICompatibleEmbeddingProvider(
         openai_compatible_server,
@@ -765,7 +772,7 @@ def test_openai_compatible_embedding_health_check_uses_embeddings(
 def test_openai_compatible_embedding_health_check_dimension_mismatch(
     openai_compatible_server: str,
 ) -> None:
-    _OpenAICompatibleHandler.post_paths = []
+    _OpenAICompatibleHandler.reset()
 
     health = OpenAICompatibleEmbeddingProvider(
         openai_compatible_server,
@@ -806,6 +813,152 @@ def test_openai_compatible_health_check_reports_wrong_model() -> None:
     assert health.model_name == "wrong-chat"
     assert health.detail is not None
     assert "HTTP 400" in health.detail
+
+
+def test_fake_provider_tracks_each_request_path_and_body(
+    openai_compatible_server: str,
+) -> None:
+    _OpenAICompatibleHandler.reset()
+
+    health = OpenAICompatibleLLMProvider(openai_compatible_server, "mock-chat").health_check()
+
+    assert health.status == "ok"
+    assert _OpenAICompatibleHandler.request_log == [
+        {
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "json": _OpenAICompatibleHandler.last_payload,
+            "body": _OpenAICompatibleHandler.last_body,
+        }
+    ]
+    assert _OpenAICompatibleHandler.get_paths == []
+    assert _OpenAICompatibleHandler.last_payload["model"] == "mock-chat"
+    assert b'"model": "mock-chat"' in _OpenAICompatibleHandler.last_body
+
+
+def test_fake_provider_supports_chat_completion_success(
+    openai_compatible_server: str,
+) -> None:
+    _OpenAICompatibleHandler.reset()
+
+    health = OpenAICompatibleLLMProvider(openai_compatible_server, "mock-chat").health_check()
+
+    assert health.status == "ok"
+    assert health.detail == "HTTP 200; chat completions validated"
+
+
+def test_fake_provider_supports_malformed_json_content(
+    openai_compatible_server: str,
+) -> None:
+    _OpenAICompatibleHandler.reset()
+    _OpenAICompatibleHandler.response_content = "not-json"
+
+    health = OpenAICompatibleLLMProvider(openai_compatible_server, "mock-chat").health_check()
+
+    assert health.status == "error"
+    assert health.detail is not None
+    assert "Malformed JSON" in health.detail
+
+
+def test_fake_provider_supports_json_mode_rejection(
+    openai_compatible_server: str,
+) -> None:
+    _OpenAICompatibleHandler.reset()
+    _OpenAICompatibleHandler.reject_response_format = True
+
+    health = OpenAICompatibleLLMProvider(
+        openai_compatible_server,
+        "mock-chat",
+        supports_json_mode=True,
+    ).health_check()
+
+    assert health.status == "error"
+    assert health.detail == (
+        "Provider rejected JSON response_format; disable Supports JSON mode or "
+        "choose a compatible model."
+    )
+
+
+def test_fake_provider_supports_http_401_with_fake_bearer_token_body(
+    openai_compatible_server: str,
+) -> None:
+    _OpenAICompatibleHandler.reset()
+    _OpenAICompatibleHandler.auth_failure_body = "Authorization failed for Bearer abc.def.ghi"
+
+    health = OpenAICompatibleLLMProvider(openai_compatible_server, "mock-chat").health_check()
+
+    assert health.status == "error"
+    assert health.detail is not None
+    assert "HTTP 401" in health.detail
+    assert "Bearer [redacted]" in health.detail
+    assert "abc.def.ghi" not in health.detail
+
+
+def test_fake_provider_supports_wrong_model_rejection(
+    openai_compatible_server: str,
+) -> None:
+    _OpenAICompatibleHandler.reset()
+
+    health = OpenAICompatibleLLMProvider(openai_compatible_server, "wrong-chat").health_check()
+
+    assert health.status == "error"
+    assert health.detail is not None
+    assert "HTTP 400" in health.detail
+    assert _OpenAICompatibleHandler.last_payload["model"] == "wrong-chat"
+
+
+def test_fake_provider_supports_timeout(
+    openai_compatible_server: str,
+) -> None:
+    _OpenAICompatibleHandler.reset()
+    _OpenAICompatibleHandler.response_delay_seconds = 0.2
+
+    health = OpenAICompatibleLLMProvider(openai_compatible_server, "mock-chat").health_check(
+        timeout_seconds=0.01
+    )
+
+    assert health.status == "error"
+    assert health.detail is not None
+    assert "timed out" in health.detail.lower()
+
+
+def test_fake_provider_supports_embedding_success(
+    openai_compatible_server: str,
+) -> None:
+    _OpenAICompatibleHandler.reset()
+
+    health = OpenAICompatibleEmbeddingProvider(
+        openai_compatible_server,
+        "mock-embedding",
+        embedding_dimension=3,
+    ).health_check()
+
+    assert health.status == "ok"
+    assert health.detail is not None
+    assert "dimension=3" in health.detail
+    assert _OpenAICompatibleHandler.last_payload == {
+        "model": "mock-embedding",
+        "input": ["Memorist embedding connectivity test."],
+    }
+
+
+def test_fake_provider_supports_embedding_dimension_mismatch(
+    openai_compatible_server: str,
+) -> None:
+    _OpenAICompatibleHandler.reset()
+    _OpenAICompatibleHandler.embedding_vector = [0.1, 0.2]
+
+    health = OpenAICompatibleEmbeddingProvider(
+        openai_compatible_server,
+        "mock-embedding",
+        embedding_dimension=3,
+    ).health_check()
+
+    assert health.status == "error"
+    assert health.detail is not None
+    assert "Embedding dimension mismatch" in health.detail
+    assert "profile expects 3" in health.detail
+    assert "provider returned 2" in health.detail
 
 
 @pytest.fixture
@@ -862,6 +1015,7 @@ def openai_json_mode_server() -> Iterator[tuple[str, type[BaseHTTPRequestHandler
 
 @pytest.fixture
 def openai_compatible_server() -> Iterator[str]:
+    _OpenAICompatibleHandler.reset()
     server = HTTPServer(("127.0.0.1", 0), _OpenAICompatibleHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -876,9 +1030,34 @@ class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
     get_paths: list[str] = []
     post_paths: list[str] = []
     last_payload: dict[str, Any] = {}
+    last_body = b""
+    request_log: list[dict[str, Any]] = []
+    expected_chat_model = "mock-chat"
+    expected_embedding_model = "mock-embedding"
+    response_content = json.dumps({"memorist_provider_test": "ok"})
+    reject_response_format = False
+    auth_failure_body: str | None = None
+    response_delay_seconds = 0.0
+    embedding_vector: list[float] = [0.1, 0.2, 0.3]
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.get_paths = []
+        cls.post_paths = []
+        cls.last_payload = {}
+        cls.last_body = b""
+        cls.request_log = []
+        cls.expected_chat_model = "mock-chat"
+        cls.expected_embedding_model = "mock-embedding"
+        cls.response_content = json.dumps({"memorist_provider_test": "ok"})
+        cls.reject_response_format = False
+        cls.auth_failure_body = None
+        cls.response_delay_seconds = 0.0
+        cls.embedding_vector = [0.1, 0.2, 0.3]
 
     def do_GET(self) -> None:  # noqa: N802
         self.__class__.get_paths.append(self.path)
+        self.__class__.request_log.append({"method": "GET", "path": self.path, "body": b""})
         if self.path == "/v1/models":
             body = json.dumps({"data": [{"id": "mock-chat"}]}).encode("utf-8")
             self.send_response(200)
@@ -892,11 +1071,34 @@ class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         self.__class__.post_paths.append(self.path)
+        if self.__class__.response_delay_seconds:
+            time.sleep(self.__class__.response_delay_seconds)
         if self.path == "/v1/chat/completions":
             length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            raw_body = self.rfile.read(length)
+            payload = json.loads(raw_body.decode("utf-8"))
+            self.__class__.last_body = raw_body
             self.__class__.last_payload = payload
-            if payload.get("model") != "mock-chat":
+            self.__class__.request_log.append(
+                {"method": "POST", "path": self.path, "json": payload, "body": raw_body}
+            )
+            if self.__class__.auth_failure_body is not None:
+                body = self.__class__.auth_failure_body.encode("utf-8")
+                self.send_response(401)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if self.__class__.reject_response_format and "response_format" in payload:
+                body = json.dumps({"error": "response_format is unsupported"}).encode("utf-8")
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if payload.get("model") != self.__class__.expected_chat_model:
                 body = json.dumps({"error": {"message": "model not found"}}).encode("utf-8")
                 self.send_response(400)
                 self.send_header("Content-Type", "application/json")
@@ -904,8 +1106,9 @@ class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            content = json.dumps({"memorist_provider_test": "ok"})
-            body = json.dumps({"choices": [{"message": {"content": content}}]}).encode("utf-8")
+            body = json.dumps(
+                {"choices": [{"message": {"content": self.__class__.response_content}}]}
+            ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -914,9 +1117,14 @@ class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/v1/embeddings":
             length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            raw_body = self.rfile.read(length)
+            payload = json.loads(raw_body.decode("utf-8"))
+            self.__class__.last_body = raw_body
             self.__class__.last_payload = payload
-            if payload.get("model") != "mock-embedding":
+            self.__class__.request_log.append(
+                {"method": "POST", "path": self.path, "json": payload, "body": raw_body}
+            )
+            if payload.get("model") != self.__class__.expected_embedding_model:
                 body = json.dumps({"error": {"message": "model not found"}}).encode("utf-8")
                 self.send_response(400)
                 self.send_header("Content-Type", "application/json")
@@ -924,7 +1132,9 @@ class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            body = json.dumps({"data": [{"embedding": [0.1, 0.2, 0.3]}]}).encode("utf-8")
+            body = json.dumps({"data": [{"embedding": self.__class__.embedding_vector}]}).encode(
+                "utf-8"
+            )
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
