@@ -47,6 +47,8 @@ def provider_for_profile(profile: ModelProfile | dict[str, object] | None) -> Mo
             supports_json_mode=bool(_get(profile, "supports_json_mode")),
             supports_structured_output=bool(_get(profile, "supports_structured_output")),
             requires_structured_extraction=_role_requires_structured_extraction(role_text),
+            bool(_get(profile, "supports_structured_output")),
+            bool(_get(profile, "supports_json_mode")),
         )
     if provider_type == "openai_compatible_embedding":
         if not endpoint_url:
