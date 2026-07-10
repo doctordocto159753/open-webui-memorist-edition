@@ -235,6 +235,7 @@ class MessageRepository:
         turn_index: int | None = None,
         model_profile_uuid: str | None = None,
         job_priority: int = 100,
+        enqueue_text_unitization: bool = True,
     ) -> Message:
         if turn_index is None:
             turn_index = self._next_turn_index(session_uuid)
@@ -262,14 +263,15 @@ class MessageRepository:
                     "created_at": message.created_at,
                 },
             )
-            JobRepository(self.connection).enqueue_job_once(
-                "text_unitization",
-                {
-                    "message_uuid": message.message_uuid,
-                    "session_uuid": session_uuid,
-                },
-                priority=job_priority,
-            )
+            if enqueue_text_unitization:
+                JobRepository(self.connection).enqueue_job_once(
+                    "text_unitization",
+                    {
+                        "message_uuid": message.message_uuid,
+                        "session_uuid": session_uuid,
+                    },
+                    priority=job_priority,
+                )
         return message
 
     def get_message(self, message_uuid: str) -> Message | None:

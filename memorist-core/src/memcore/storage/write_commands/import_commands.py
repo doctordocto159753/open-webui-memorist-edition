@@ -53,6 +53,36 @@ class ImportBatchCommitCommand:
         )
 
 
+@dataclass(frozen=True)
+class ImportProcessingBatchCommand:
+    import_run_uuid: str
+    object_store_path: str
+    batch_size: int = 25
+    command_type: str = "import.processing_batch"
+    priority: int = 30
+    max_transaction_ms: int = 120_000
+    can_batch: bool = False
+
+    @property
+    def idempotency_key(self) -> str | None:
+        return None
+
+    @property
+    def estimated_write_weight(self) -> int:
+        return max(1, self.batch_size * 20)
+
+    def execute(self, connection: sqlite3.Connection) -> WriteResult:
+        result = ImportService(
+            connection, self.object_store_path
+        ).process_next_batch(self.import_run_uuid, self.batch_size)
+        return WriteResult(
+            command_type=self.command_type,
+            target_type="import_run",
+            target_uuid=self.import_run_uuid,
+            result=result,
+        )
+
+
 def commit_import_via_actor(
     db_path: str | Path,
     object_store_path: str,
@@ -81,4 +111,22 @@ def commit_import_via_actor(
         if last_result["status"] != "committing":
             return last_result
     raise TimeoutError(f"Import commit exceeded maximum batch count: {max_batches}")
+
+
+def process_import_batch_via_actor(
+    db_path: str | Path,
+    object_store_path: str,
+    import_run_uuid: str,
+    batch_size: int = 25,
+    timeout: float | None = 300,
+) -> dict[str, Any]:
+    result = get_write_actor(db_path).submit_sync(
+        ImportProcessingBatchCommand(
+            import_run_uuid=import_run_uuid,
+            object_store_path=object_store_path,
+            batch_size=batch_size,
+        ),
+        timeout=timeout,
+    )
+    return result.result
 

@@ -65,7 +65,7 @@ class OpenAICompatibleMemoryExtractionProvider:
         if self.config.supports_json_mode or self.config.supports_structured_output:
             body["response_format"] = {"type": "json_object"}
         request = urllib.request.Request(
-            f"{self.config.base_url}/chat/completions",
+            _completion_url(self.config.base_url),
             data=json.dumps(body).encode("utf-8"),
             headers=self._headers(),
             method="POST",
@@ -106,3 +106,10 @@ def _sanitize_error_message(message: str) -> str:
     for marker in ("Authorization", "Bearer", "api_key", "token", "secret", "password"):
         sanitized = sanitized.replace(marker, "[redacted]")
     return sanitized[:500]
+
+
+def _completion_url(base_url: str) -> str:
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/v1"):
+        return f"{normalized}/chat/completions"
+    return f"{normalized}/v1/chat/completions"

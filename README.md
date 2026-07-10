@@ -66,6 +66,9 @@ Memorist is not an official Open WebUI release. It is not a replacement for Open
 - Raw API keys, tokens, passwords, and credentials are rejected from persisted model profile data.
 - Memory Worker prompts are versioned, schema-bound, output-validated, and audit-linked.
 - Retrieved/imported memory is treated as untrusted data.
+- Official ChatGPT/OpenAI export ZIPs and extracted `conversations.json` files can be
+  imported with durable, resumable full-memory reconstruction for every eligible message;
+  see `docs/import.md`.
 - Chat fails open when Memorist is unavailable, unless explicitly configured otherwise.
 - Forget workflows include preview, confirmation, execution, receipt, and residue checks.
 - Generated packages and runtime artifacts are not committed by default.
