@@ -28,8 +28,6 @@ class OpenAICompatibleLLMProvider:
         supports_json_mode: bool = False,
         supports_structured_output: bool = False,
         requires_structured_extraction: bool = False,
-        supports_structured_output: bool = False,
-        supports_json_mode: bool = False,
     ) -> None:
         self.endpoint_url = endpoint_url.rstrip("/")
         self.model_name = model_name
@@ -37,27 +35,12 @@ class OpenAICompatibleLLMProvider:
         self.supports_json_mode = supports_json_mode
         self.supports_structured_output = supports_structured_output
         self.requires_structured_extraction = requires_structured_extraction
-        self.supports_structured_output = supports_structured_output
-        self.supports_json_mode = supports_json_mode
 
     def health_check(self, timeout_seconds: float = 1.0) -> ProviderHealth:
         started = perf_counter()
         status = "error"
         detail: str | None = None
-        payload = {
-            "model": self.model_name,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": 'Return exactly {"memorist_provider_test":"ok"} as JSON.',
-                }
-            ],
-            "max_tokens": 16,
-        }
         supports_json_format = self.supports_json_mode or self.supports_structured_output
-        if supports_json_format:
-            payload["response_format"] = {"type": "json_object"}
-        detail: str | None
         payload: dict[str, object] = {
             "model": self.model_name,
             "messages": [
@@ -68,7 +51,7 @@ class OpenAICompatibleLLMProvider:
                 {"role": "user", "content": '{"memorist_provider_test":"ok"}'},
             ],
         }
-        if self.supports_json_mode or self.supports_structured_output:
+        if supports_json_format:
             payload["response_format"] = {"type": "json_object"}
 
         try:
@@ -79,8 +62,7 @@ class OpenAICompatibleLLMProvider:
                 method="POST",
             )
             with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-                response_body = response.read().decode("utf-8")
-                data = json.loads(response_body)
+                data = json.loads(response.read().decode("utf-8"))
                 if not 200 <= response.status < 300:
                     detail = f"HTTP {response.status}"
                 else:
@@ -88,21 +70,14 @@ class OpenAICompatibleLLMProvider:
                     if content is None:
                         detail = "Missing choices[0].message.content"
                     else:
-                        marker = json.loads(content) if isinstance(content, str) else content
-                        if (
-                            isinstance(marker, dict)
-                            and marker.get("memorist_provider_test") == "ok"
-                        ):
+                        marker = json.loads(content)
+                        if marker.get("memorist_provider_test") == "ok":
                             status = "ok"
                             detail = _health_detail_for_success(
                                 response.status,
                                 supports_json_format=bool(supports_json_format),
                                 requires_structured_extraction=self.requires_structured_extraction,
                             )
-                        marker = json.loads(content)
-                        if marker.get("memorist_provider_test") == "ok":
-                            status = "ok"
-                            detail = f"HTTP {response.status}; chat completions validated"
                         else:
                             detail = "Provider health marker mismatch"
         except json.JSONDecodeError as error:
@@ -115,10 +90,7 @@ class OpenAICompatibleLLMProvider:
                     "choose a compatible model."
                 )
             else:
-                detail = sanitize_error_message(
-                    error_detail or f"HTTP {error.code}: {error.reason}"
-                )
-            detail = sanitize_error_message(f"HTTP {error.code}: {error.reason}")
+                detail = sanitize_error_message(error_detail)
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             detail = sanitize_error_message(str(error))
         return ProviderHealth(
@@ -176,6 +148,71 @@ class OpenAICompatibleLLMProvider:
 class OpenAICompatibleEmbeddingProvider(OpenAICompatibleLLMProvider):
     provider_type = "openai_compatible_embedding"
 
+    def __init__(
+        self,
+        endpoint_url: str,
+        model_name: str,
+        secret_env_var_name: str | None = None,
+        supports_json_mode: bool = False,
+        supports_structured_output: bool = False,
+        requires_structured_extraction: bool = False,
+        embedding_dimension: int | None = None,
+    ) -> None:
+        super().__init__(
+            endpoint_url,
+            model_name,
+            secret_env_var_name,
+            supports_json_mode=supports_json_mode,
+            supports_structured_output=supports_structured_output,
+            requires_structured_extraction=requires_structured_extraction,
+        )
+        self.embedding_dimension = embedding_dimension
+
+    def health_check(self, timeout_seconds: float = 1.0) -> ProviderHealth:
+        started = perf_counter()
+        status = "error"
+        detail: str | None = None
+        payload = {"model": self.model_name, "input": ["Memorist embedding connectivity test."]}
+        try:
+            request = urllib.request.Request(
+                _openai_url(self.endpoint_url, "embeddings"),
+                data=json.dumps(payload).encode("utf-8"),
+                headers=_headers(self.secret_env_var_name),
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+                data = json.loads(response.read().decode("utf-8"))
+                embedding = _extract_first_embedding(data)
+                if embedding is None:
+                    detail = "Missing data[0].embedding in embeddings response"
+                elif not _is_non_empty_numeric_vector(embedding):
+                    detail = "Embedding response data[0].embedding must be a non-empty numeric vector"
+                else:
+                    dimension = len(embedding)
+                    if self.embedding_dimension is not None and dimension != self.embedding_dimension:
+                        detail = (
+                            "Embedding dimension mismatch: profile expects "
+                            f"{self.embedding_dimension}, provider returned {dimension}. "
+                            "Update the profile embedding_dimension or choose a matching model."
+                        )
+                    else:
+                        status = "ok"
+                        detail = f"HTTP {response.status}; embeddings validated; dimension={dimension}"
+        except json.JSONDecodeError as error:
+            detail = f"Malformed JSON response: {sanitize_error_message(str(error))}"
+        except urllib.error.HTTPError as error:
+            detail = sanitize_error_message(_read_http_error_detail(error))
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            detail = sanitize_error_message(str(error))
+        return ProviderHealth(
+            status=status,
+            provider_type=self.provider_type,
+            model_name=self.model_name,
+            latency_ms=_elapsed_ms(started),
+            local_only_safe=endpoint_is_local(self.endpoint_url),
+            detail=detail,
+        )
+
     def embed(self, texts: list[str], timeout_seconds: float = 1.0) -> EmbeddingResponse:
         started = perf_counter()
         payload = {"model": self.model_name, "input": texts}
@@ -224,7 +261,6 @@ class OllamaProvider(OpenAICompatibleLLMProvider):
         )
 
 
-def _extract_chat_content(data: object) -> object | None:
 def _extract_chat_content(data: object) -> str | None:
     if not isinstance(data, dict):
         return None
@@ -237,9 +273,26 @@ def _extract_chat_content(data: object) -> str | None:
     message = first_choice.get("message")
     if not isinstance(message, dict):
         return None
-    return message.get("content")
     content = message.get("content")
     return content if isinstance(content, str) and content else None
+
+
+def _extract_first_embedding(data: object) -> object | None:
+    if not isinstance(data, dict):
+        return None
+    records = data.get("data")
+    if not isinstance(records, list) or not records:
+        return None
+    first_record = records[0]
+    if not isinstance(first_record, dict):
+        return None
+    return first_record.get("embedding")
+
+
+def _is_non_empty_numeric_vector(value: object) -> bool:
+    return isinstance(value, list) and bool(value) and all(
+        isinstance(item, int | float) and not isinstance(item, bool) for item in value
+    )
 
 
 def _headers(secret_env_var_name: str | None) -> dict[str, str]:
@@ -275,11 +328,6 @@ def _health_detail_for_success(
             "compatible model."
         )
     return f"HTTP {http_status}; chat completions validated"
-            f"HTTP {http_status}; warning: this profile does not declare Supports JSON mode or "
-            "Supports structured output and may be unsuitable for structured memory tasks. "
-            "Enable one of those capabilities or choose a compatible model."
-        )
-    return f"HTTP {http_status}"
 
 
 def _read_http_error_detail(error: urllib.error.HTTPError) -> str:

@@ -37,6 +37,7 @@ def provider_for_profile(profile: ModelProfile | dict[str, object] | None) -> Mo
                 str(secret_env_var_name) if secret_env_var_name else None,
                 supports_json_mode=bool(_get(profile, "supports_json_mode")),
                 supports_structured_output=bool(_get(profile, "supports_structured_output")),
+                embedding_dimension=_embedding_dimension(profile),
             )
         if not endpoint_url:
             return DisabledProvider(model_name)
@@ -47,8 +48,6 @@ def provider_for_profile(profile: ModelProfile | dict[str, object] | None) -> Mo
             supports_json_mode=bool(_get(profile, "supports_json_mode")),
             supports_structured_output=bool(_get(profile, "supports_structured_output")),
             requires_structured_extraction=_role_requires_structured_extraction(role_text),
-            bool(_get(profile, "supports_structured_output")),
-            bool(_get(profile, "supports_json_mode")),
         )
     if provider_type == "openai_compatible_embedding":
         if not endpoint_url:
@@ -59,6 +58,7 @@ def provider_for_profile(profile: ModelProfile | dict[str, object] | None) -> Mo
             str(secret_env_var_name) if secret_env_var_name else None,
             supports_json_mode=bool(_get(profile, "supports_json_mode")),
             supports_structured_output=bool(_get(profile, "supports_structured_output")),
+            embedding_dimension=_embedding_dimension(profile),
         )
     if provider_type in {"ollama", "ollama_llm"}:
         if not endpoint_url:
@@ -88,3 +88,14 @@ def _role_requires_structured_extraction(role_text: str) -> bool:
         ModelRole.BLOCK_COMPACTION.value,
         ModelRole.PRIVACY_SENSITIVITY.value,
     }
+
+
+def _embedding_dimension(profile: ModelProfile | dict[str, object]) -> int | None:
+    value = _get(profile, "embedding_dimension")
+    if value is None:
+        return None
+    try:
+        dimension = int(value)
+    except (TypeError, ValueError):
+        return None
+    return dimension if dimension > 0 else None
