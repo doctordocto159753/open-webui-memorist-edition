@@ -34,7 +34,7 @@ class PostgresMemoryWorkerPipeline:
         self.segmenter = SentenceSegmenter()
         self.gate = DeterministicGate()
 
-    def process_message(self, message_uuid: str) -> dict[str, object]:
+    def process_message(self, message_uuid: str, import_run_uuid: str | None = None, job_uuid: str | None = None, model_target: dict[str, Any] | None = None) -> dict[str, object]:
         started = perf_counter()
         message = self.connection.execute(
             "SELECT m.*, s.workspace_uuid, s.project_uuid FROM messages m JOIN sessions s ON s.session_uuid = m.session_uuid WHERE m.message_uuid = %s",

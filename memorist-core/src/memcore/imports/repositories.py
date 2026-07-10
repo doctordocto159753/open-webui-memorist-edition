@@ -182,13 +182,18 @@ class ImportRepository:
         ).fetchone()
         if existing is not None:
             return dict(existing)
+        mapping_uuid = new_uuid()
         row = {
-            "import_mapping_uuid": new_uuid(),
+            "import_mapping_uuid": mapping_uuid,
+            "mapping_uuid": mapping_uuid,
             "source_platform": source_platform,
             "source_object_type": source_object_type,
             "source_object_id": source_object_id,
             "source_fingerprint": source_fingerprint,
             "target_object_type": target_object_type,
+            "source_type": source_object_type,
+            "source_uuid": source_object_id or source_fingerprint,
+            "target_type": target_object_type,
             "target_uuid": target_uuid,
             "import_run_uuid": import_run_uuid,
             "created_at": utc_now(),

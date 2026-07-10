@@ -116,3 +116,16 @@ python release/tests/full_compose_smoke.py
 Set `MEMORIST_FULL_COMPOSE_SMOKE=false` only when intentionally skipping the
 gate. If Docker is unavailable or the gate is skipped, Full remains an
 experimental preview.
+
+## Import and reconstruction runtime
+
+Full Mode import is PostgreSQL-backed end to end. Import APIs store `import_runs`, staged artifacts,
+issues, records, imported conversations, dry-run reports, mappings, progress, commit batches, and
+per-message reconstruction state in PostgreSQL. Commit creates canonical workspaces, sessions, and
+messages in PostgreSQL, preserving source IDs/timestamps and branch metadata in the message snapshot
+and message mappings. The regular Full Mode session/message reads see imported conversations because
+there is no separate SQLite canonical copy.
+
+There is no silent Lite fallback: `runtime_profile=full` requires `canonical_store=postgres` and a
+valid `MEMORIST_POSTGRES_DSN`. Any unsupported runtime/store pairing fails explicitly during import
+runtime selection.

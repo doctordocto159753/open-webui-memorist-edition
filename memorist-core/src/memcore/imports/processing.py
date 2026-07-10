@@ -10,6 +10,7 @@ from memcore.config import Settings
 from memcore.imports.reconstruction.content_parts import visible_text
 from memcore.imports.reconstruction.models import ImportedMessageNode
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
+from memcore.memory_worker.postgres.pipeline import PostgresMemoryWorkerPipeline
 from memcore.model_control.repository import ModelControlRepository
 from memcore.model_control.schemas import UsageEventCreate
 from memcore.models import ModelRole, new_uuid, utc_now
@@ -258,18 +259,24 @@ class ImportMessageProcessor:
         ).fetchone()
         if progress is not None and (progress["paused"] or progress["cancelled"]):
             return self.processing_report(import_run_uuid)
-        pending = self.connection.execute(
-            """
-            SELECT *
-            FROM import_message_processing_status
-            WHERE import_run_uuid = ?
-              AND processing_mode = 'full_memory_reconstruction'
-              AND status = 'queued'
-            ORDER BY created_at, status_uuid
-            LIMIT ?
-            """,
-            (import_run_uuid, max(1, limit)),
-        ).fetchall()
+        if (
+            self.settings.runtime_profile == "full"
+            and self.settings.canonical_store == "postgres"
+        ):
+            pending = self._claim_postgres_work(import_run_uuid, max(1, limit))
+        else:
+            pending = self.connection.execute(
+                """
+                SELECT *
+                FROM import_message_processing_status
+                WHERE import_run_uuid = ?
+                  AND processing_mode = 'full_memory_reconstruction'
+                  AND status = 'queued'
+                ORDER BY created_at, status_uuid
+                LIMIT ?
+                """,
+                (import_run_uuid, max(1, limit)),
+            ).fetchall()
         for row in pending:
             control = self.connection.execute(
                 "SELECT paused, cancelled FROM import_progress WHERE import_run_uuid = ?",
@@ -280,6 +287,43 @@ class ImportMessageProcessor:
             self._process_one(dict(row))
         self.finalize_if_terminal(import_run_uuid)
         return self.processing_report(import_run_uuid)
+
+
+    def _claim_postgres_work(self, import_run_uuid: str, limit: int) -> list[dict[str, Any]]:
+        owner = f"import-processor:{os.getpid()}"
+        progress = self.connection.execute(
+            "SELECT paused, cancelled FROM import_progress WHERE import_run_uuid = ?",
+            (import_run_uuid,),
+        ).fetchone()
+        if progress is not None and (progress["paused"] or progress["cancelled"]):
+            return []
+        rows = self.connection.execute(
+            """
+            WITH candidates AS (
+                SELECT status_uuid
+                FROM import_message_processing_status
+                WHERE import_run_uuid = ?
+                  AND processing_mode = 'full_memory_reconstruction'
+                  AND status = 'queued'
+                  AND (run_after IS NULL OR run_after <= now())
+                ORDER BY created_at, status_uuid
+                FOR UPDATE SKIP LOCKED
+                LIMIT ?
+            )
+            UPDATE import_message_processing_status AS status
+            SET status = 'running',
+                lease_owner = ?,
+                lease_expires_at = now() + interval '15 minutes',
+                attempt_started_at = now(),
+                updated_at = now()
+            FROM candidates
+            WHERE status.status_uuid = candidates.status_uuid
+            RETURNING status.*
+            """,
+            (import_run_uuid, limit, owner),
+        ).fetchall()
+        self.connection.commit()
+        return [dict(row) for row in rows]
 
     def retry_failed(self, import_run_uuid: str) -> dict[str, Any]:
         now = utc_now()
@@ -424,7 +468,15 @@ class ImportMessageProcessor:
                     (now, now, job_uuid),
                 )
         try:
-            result = MemoryWorkerPipeline(self.connection, self.settings).process_message(
+            pipeline = (
+                PostgresMemoryWorkerPipeline(self.connection, self.settings)
+                if (
+                    self.settings.runtime_profile == "full"
+                    and self.settings.canonical_store == "postgres"
+                )
+                else MemoryWorkerPipeline(self.connection, self.settings)
+            )
+            result = pipeline.process_message(
                 str(status_row["target_message_uuid"]),
                 import_run_uuid=str(status_row["import_run_uuid"]),
                 job_uuid=str(job_uuid) if job_uuid else None,
