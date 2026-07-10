@@ -676,7 +676,7 @@ def openai_json_mode_server() -> Iterator[tuple[str, type[BaseHTTPRequestHandler
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            content = json.dumps({})
+            content = json.dumps({"memorist_provider_test": "ok"})
             body = json.dumps({"choices": [{"message": {"content": content}}]}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -723,7 +723,13 @@ class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         if self.path == "/v1/chat/completions":
-            content = json.dumps({"not": "a valid preflight output"})
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            prompt = payload.get("messages", [{}])[0].get("content", "")
+            if "memorist_provider_test" in prompt:
+                content = json.dumps({"memorist_provider_test": "ok"})
+            else:
+                content = json.dumps({"not": "a valid preflight output"})
             body = json.dumps({"choices": [{"message": {"content": content}}]}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
