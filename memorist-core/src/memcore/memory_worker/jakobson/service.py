@@ -22,6 +22,7 @@ from memcore.memory_worker.providers.openai_compatible import (
 )
 from memcore.memory_worker.routing.signal_router import SignalRouter
 from memcore.memory_worker.segmentation.sentence_segmenter import SentenceSegmenter
+from memcore.model_control.security import sanitize_error_message
 from memcore.models import (
     JakobsonAnalysisRun,
     JakobsonAnalysisRunStatus,
@@ -254,8 +255,11 @@ class JakobsonAnalysisService:
                 "warnings": warnings,
             }
         except Exception as error:
+            sanitized_error = (
+                sanitize_error_message(f"{type(error).__name__}: {error}") or type(error).__name__
+            )
             run.status = JakobsonAnalysisRunStatus.FAILED
-            run.warnings_ijson = dump_ijson([str(error)])
+            run.warnings_ijson = dump_ijson([sanitized_error])
             if output is not None:
                 run.raw_output_ijson = dump_ijson(output)
                 run.output_hash = canonical_hash_ijson(output)
@@ -279,7 +283,7 @@ class JakobsonAnalysisService:
                     validated_output_value=None,
                     status="error",
                     warnings=[type(error).__name__],
-                    error_sanitized=str(error),
+                    error_sanitized=sanitized_error,
                     latency_ms=int(
                         getattr(self.provider, "latency_ms", 0) or (perf_counter() - started) * 1000
                     ),
