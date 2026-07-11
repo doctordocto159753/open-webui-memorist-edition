@@ -5,7 +5,7 @@ import json
 from hashlib import sha256
 from time import perf_counter
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from fastapi import HTTPException
 
@@ -34,7 +34,13 @@ class PostgresMemoryWorkerPipeline:
         self.segmenter = SentenceSegmenter()
         self.gate = DeterministicGate()
 
-    def process_message(self, message_uuid: str, import_run_uuid: str | None = None, job_uuid: str | None = None, model_target: dict[str, Any] | None = None) -> dict[str, object]:
+    def process_message(
+        self,
+        message_uuid: str,
+        import_run_uuid: str | None = None,
+        job_uuid: str | None = None,
+        model_target: dict[str, Any] | None = None,
+    ) -> dict[str, object]:
         started = perf_counter()
         message = self.connection.execute(
             "SELECT m.*, s.workspace_uuid, s.project_uuid FROM messages m JOIN sessions s ON s.session_uuid = m.session_uuid WHERE m.message_uuid = %s",
@@ -45,7 +51,12 @@ class PostgresMemoryWorkerPipeline:
         raw_text = str(message.get("raw_text") or "").strip()
         if not raw_text:
             raise HTTPException(status_code=400, detail="message has no raw_text to process")
-        profile = self._resolve_profile()
+        profile = model_target or self._resolve_profile()
+        model_role = str(
+            (profile or {}).get("model_role")
+            or (profile or {}).get("role")
+            or "import_reconstruction"
+        )
         provider_type = str(
             (profile or {}).get("provider_type")
             or (profile or {}).get("provider")
@@ -69,9 +80,12 @@ class PostgresMemoryWorkerPipeline:
                 "provider_type": provider_type,
                 "model_name": model_name,
             },
+            model_role=model_role,
         )
         content_hash = identity.input_content_hash
-        run = self._get_or_create_run(message, identity, model_profile_uuid, provider_type)
+        run = self._get_or_create_run(
+            message, identity, model_profile_uuid, provider_type, model_name
+        )
         if run["status"] == "succeeded":
             return self._summary(message_uuid, str(run["processing_run_uuid"]), True)
         self.connection.execute(
@@ -192,6 +206,7 @@ class PostgresMemoryWorkerPipeline:
         identity: Any,
         model_profile_uuid: str | None,
         provider_type: str,
+        model_name: str,
     ) -> dict[str, Any]:
         existing = self.connection.execute(
             """
@@ -199,8 +214,11 @@ class PostgresMemoryWorkerPipeline:
             WHERE message_uuid = %s AND pipeline_version = %s AND prompt_bundle_version = %s
               AND input_content_hash = %s AND COALESCE(model_profile_uuid, '') = COALESCE(%s, '')
               AND COALESCE(provider_type, '') = COALESCE(%s, '')
+              AND COALESCE(model_role, '') = COALESCE(%s, '')
+              AND COALESCE(model_name, '') = COALESCE(%s, '')
               AND COALESCE(prompt_id, '') = COALESCE(%s, '')
               AND COALESCE(prompt_version, '') = COALESCE(%s, '')
+              AND COALESCE(processing_identity_hash, '') = COALESCE(%s, '')
             ORDER BY created_at LIMIT 1
             """,
             (
@@ -210,8 +228,11 @@ class PostgresMemoryWorkerPipeline:
                 identity.input_content_hash,
                 model_profile_uuid,
                 provider_type,
+                identity.model_role,
+                model_name,
                 identity.prompt_id,
                 identity.prompt_version,
+                identity.identity_hash,
             ),
         ).fetchone()
         if existing is not None:
@@ -220,8 +241,8 @@ class PostgresMemoryWorkerPipeline:
         self.connection.execute(
             """
             INSERT INTO memory_processing_runs (processing_run_uuid, session_uuid, message_uuid, pipeline_version, prompt_bundle_version,
-              input_content_hash, status, created_at, schema_version, model_profile_uuid, provider_type, input_hash)
-            VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, 1, %s, %s, %s)
+              input_content_hash, status, created_at, schema_version, model_profile_uuid, provider_type, model_role, model_name, processing_identity_hash, input_hash)
+            VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, 1, %s, %s, %s, %s, %s, %s)
             """,
             (
                 run_uuid,
@@ -233,6 +254,9 @@ class PostgresMemoryWorkerPipeline:
                 utc_now(),
                 model_profile_uuid,
                 provider_type,
+                identity.model_role,
+                model_name,
+                identity.identity_hash,
                 identity.input_content_hash,
             ),
         )
@@ -359,7 +383,7 @@ class PostgresMemoryWorkerPipeline:
             INSERT INTO prompt_execution_runs (prompt_execution_uuid, prompt_id, prompt_version, stage, model_profile_uuid, model_role, provider_type,
               model_name, workspace_uuid, project_uuid, session_uuid, message_uuid, input_hash, output_hash, raw_output_ijson, validated_output_ijson,
               status, warnings_ijson, error_sanitized, latency_ms, input_tokens, output_tokens, created_at, schema_version)
-            VALUES (%s,%s,%s,'jakobson_sentence_analysis',%s,'memory_extraction',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'ok',%s,NULL,%s,%s,%s,%s,1)
+            VALUES (%s,%s,%s,'jakobson_sentence_analysis',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'ok',%s,NULL,%s,%s,%s,%s,1)
             """,
             (
                 prompt_execution_uuid,
@@ -397,11 +421,12 @@ class PostgresMemoryWorkerPipeline:
             """
             INSERT INTO model_usage_events (usage_event_uuid, model_profile_uuid, role, event_type, input_tokens, output_tokens, created_at, schema_version,
               stage, provider_type, model_name, workspace_uuid, project_uuid, session_uuid, message_uuid, latency_ms, status)
-            VALUES (%s,%s,'memory_extraction','prompt_execution',%s,%s,%s,1,'jakobson_sentence_analysis',%s,%s,%s,%s,%s,%s,%s,'ok')
+            VALUES (%s,%s,%s,'prompt_execution',%s,%s,%s,1,'jakobson_sentence_analysis',%s,%s,%s,%s,%s,%s,%s,'ok')
             """,
             (
                 new_uuid(),
                 model_profile_uuid,
+                "import_reconstruction",
                 int(usage.get("input_tokens", 0)),
                 int(usage.get("output_tokens", 0)),
                 utc_now(),
@@ -581,7 +606,10 @@ class PostgresMemoryWorkerPipeline:
             if existing:
                 continue
             decision = self.gate.evaluate(
-                SimpleNamespace(text=unit["text"], speaker_role=unit["speaker_role"])
+                cast(
+                    Any,
+                    SimpleNamespace(text=unit["text"], speaker_role=unit["speaker_role"]),
+                )
             )
             self.connection.execute(
                 """

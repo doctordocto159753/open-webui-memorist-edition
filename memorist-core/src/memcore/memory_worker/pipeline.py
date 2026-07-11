@@ -93,6 +93,9 @@ class MemoryWorkerPipeline:
             prompt_version=identity.prompt_version,
             model_profile_uuid=identity.model_profile_uuid,
             provider_type=identity.provider_type,
+            model_role=identity.model_role,
+            model_name=str(extraction_profile.get("model_name") or "deterministic_extraction"),
+            processing_identity_hash=identity.identity_hash,
             input_hash=identity.input_content_hash,
         )
         if run.status is ProcessingRunStatus.SUCCEEDED:
@@ -128,15 +131,17 @@ class MemoryWorkerPipeline:
                 "candidates": 0,
                 "consolidation_decisions": 0,
                 "graph_projection": {"status": "skipped"},
-                "model_role": ModelRole.MEMORY_EXTRACTION.value,
+                "model_role": str(
+                    extraction_profile.get("model_role") or ModelRole.MEMORY_EXTRACTION.value
+                ),
                 "model_profile_uuid": extraction_profile_uuid,
             }
 
         provider_type = str(extraction_profile["provider_type"])
-        if (
-            import_run_uuid is not None
-            and provider_type in {"openai_compatible", "openai_compatible_llm"}
-        ):
+        if import_run_uuid is not None and provider_type in {
+            "openai_compatible",
+            "openai_compatible_llm",
+        }:
             profile_uuid = extraction_profile.get("model_profile_uuid")
             stored_profile = (
                 ModelControlRepository(self.connection).get_profile(str(profile_uuid))
@@ -162,7 +167,9 @@ class MemoryWorkerPipeline:
         )
         ModelControlRepository(self.connection).record_usage_event(
             UsageEventCreate(
-                role=ModelRole.MEMORY_EXTRACTION,
+                role=ModelRole(
+                    str(extraction_profile.get("model_role") or ModelRole.MEMORY_EXTRACTION.value)
+                ),
                 stage="jakobson_sentence_analysis",
                 model_profile_uuid=extraction_profile_uuid,
                 session_uuid=message.session_uuid,
@@ -229,13 +236,13 @@ class MemoryWorkerPipeline:
             "candidates": len(candidates),
             "consolidation_decisions": len(decisions_created),
             "graph_projection": graph_result,
-            "model_role": ModelRole.MEMORY_EXTRACTION.value,
+            "model_role": str(
+                extraction_profile.get("model_role") or ModelRole.MEMORY_EXTRACTION.value
+            ),
             "model_profile_uuid": extraction_profile_uuid,
         }
 
-    def _completed_result(
-        self, processing_run_uuid: str, message_uuid: str
-    ) -> dict[str, object]:
+    def _completed_result(self, processing_run_uuid: str, message_uuid: str) -> dict[str, object]:
         unit_count = int(
             self.connection.execute(
                 "SELECT COUNT(*) FROM text_units WHERE message_uuid = ?", (message_uuid,)

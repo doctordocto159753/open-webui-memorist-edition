@@ -4,7 +4,9 @@ import json
 import os
 import urllib.error
 import urllib.request
+from collections.abc import Sized
 from time import perf_counter
+from typing import cast
 from urllib.parse import urlsplit
 
 from memcore.model_control.providers.base import (
@@ -192,7 +194,7 @@ class OpenAICompatibleEmbeddingProvider(OpenAICompatibleLLMProvider):
                         "Embedding response data[0].embedding must be a non-empty numeric vector"
                     )
                 else:
-                    dimension = len(embedding)
+                    dimension = len(cast(Sized, embedding))
                     if (
                         self.embedding_dimension is not None
                         and dimension != self.embedding_dimension

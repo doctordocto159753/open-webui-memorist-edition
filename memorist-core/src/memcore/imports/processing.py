@@ -17,6 +17,7 @@ from memcore.memory_worker.pipeline import MemoryWorkerPipeline
 from memcore.memory_worker.postgres.pipeline import PostgresMemoryWorkerPipeline
 from memcore.model_control.repository import ModelControlRepository
 from memcore.model_control.schemas import UsageEventCreate
+from memcore.model_control.security import sanitize_error_message
 from memcore.models import ModelRole, new_uuid, utc_now
 from memcore.repositories import JobRepository
 
@@ -39,31 +40,53 @@ class ImportMessageProcessor:
     def model_target(
         self, workspace_uuid: str | None = None, project_uuid: str | None = None
     ) -> dict[str, Any]:
-        profile = self.model_control.resolve_default(
-            ModelRole.MEMORY_EXTRACTION,
-            workspace_uuid=workspace_uuid,
-            project_uuid=project_uuid,
-        )
         warnings: list[str] = []
-        if profile is None:
-            return {
-                "role": ModelRole.MEMORY_EXTRACTION.value,
-                "model_profile_uuid": None,
-                "provider_type": "deterministic",
-                "model_name": "deterministic_extraction",
-                "deterministic_fallback": True,
-                "profile_enabled": True,
-                "privacy_acknowledged": True,
-                "secret_configured": True,
-                "warnings": warnings,
-            }
+        for role in (ModelRole.IMPORT_RECONSTRUCTION, ModelRole.MEMORY_EXTRACTION):
+            profile = self.model_control.resolve_default(
+                role, workspace_uuid=workspace_uuid, project_uuid=project_uuid
+            )
+            target = self._usable_model_target(role, profile, warnings)
+            if target is not None:
+                return target
+        return {
+            "role": ModelRole.IMPORT_RECONSTRUCTION.value,
+            "model_role": ModelRole.IMPORT_RECONSTRUCTION.value,
+            "model_profile_uuid": None,
+            "provider_type": "deterministic",
+            "model_name": "deterministic_extraction",
+            "deterministic_fallback": True,
+            "profile_enabled": True,
+            "privacy_acknowledged": True,
+            "secret_configured": True,
+            "warnings": warnings,
+        }
 
+    def _usable_model_target(
+        self, role: ModelRole, profile: dict[str, Any] | None, warnings: list[str]
+    ) -> dict[str, Any] | None:
+        if profile is None:
+            return None
         enabled = bool(profile.get("is_enabled", True))
         requires_ack = bool(profile.get("requires_privacy_acknowledgement", False))
         privacy_acknowledged = bool(profile.get("privacy_acknowledged_at")) or not requires_ack
         internal_profile = self.model_control.get_profile(str(profile["model_profile_uuid"]))
         secret_env = internal_profile.secret_env_var_name if internal_profile is not None else None
         secret_configured = not secret_env or bool(os.getenv(str(secret_env)))
+        provider_type = str(profile.get("provider_type") or profile.get("provider") or "")
+        supported = provider_type in {"deterministic", "openai_compatible", "openai_compatible_llm"}
+        prefix = role.value
+        if not enabled:
+            warnings.append(f"configured {prefix} profile is disabled")
+        if not privacy_acknowledged:
+            warnings.append(f"configured {prefix} profile lacks privacy acknowledgement")
+        if not secret_configured:
+            warnings.append(
+                f"configured {prefix} profile is missing required secret environment variable"
+            )
+        if not supported:
+            warnings.append(f"configured {prefix} provider type is unsupported")
+        if not (enabled and privacy_acknowledged and secret_configured and supported):
+            return None
         health = self.connection.execute(
             """
             SELECT status, latency_ms, detail_sanitized, created_at
@@ -74,34 +97,11 @@ class ImportMessageProcessor:
             """,
             (profile.get("model_profile_uuid"),),
         ).fetchone()
-        if not enabled:
-            warnings.append("configured memory_extraction profile is disabled")
-        if not privacy_acknowledged:
-            warnings.append("configured memory_extraction profile lacks privacy acknowledgement")
-        if not secret_configured:
-            warnings.append("required provider secret environment variable is missing")
-        if health is not None and health["status"] not in {"ok", "healthy"}:
-            warnings.append(
-                f"latest provider health is {health['status']}; runtime failures remain retryable"
-            )
-        usable = enabled and privacy_acknowledged and secret_configured
-        if not usable:
-            warnings.append("deterministic fallback will be used")
-            return {
-                "role": ModelRole.MEMORY_EXTRACTION.value,
-                "model_profile_uuid": None,
-                "provider_type": "deterministic",
-                "model_name": "deterministic_extraction",
-                "deterministic_fallback": True,
-                "profile_enabled": enabled,
-                "privacy_acknowledged": privacy_acknowledged,
-                "secret_configured": secret_configured,
-                "warnings": warnings,
-            }
         return {
-            "role": ModelRole.MEMORY_EXTRACTION.value,
+            "role": role.value,
+            "model_role": role.value,
             "model_profile_uuid": profile.get("model_profile_uuid"),
-            "provider_type": profile.get("provider_type") or profile.get("provider"),
+            "provider_type": provider_type,
             "model_name": profile.get("model_name"),
             "deterministic_fallback": False,
             "profile_enabled": enabled,
@@ -157,9 +157,14 @@ class ImportMessageProcessor:
             "target_session_uuid": target_session_uuid,
             "target_message_uuid": target_message_uuid,
             "processing_mode": processing_mode,
+            "model_role": identity.model_role,
             "model_profile_uuid": model_target.get("model_profile_uuid"),
             "provider_type": model_target.get("provider_type"),
             "model_name": model_target.get("model_name"),
+            "pipeline_version": identity.pipeline_version,
+            "prompt_bundle_version": identity.prompt_bundle_version,
+            "prompt_id": identity.prompt_id,
+            "prompt_version": identity.prompt_version,
             "input_content_hash": identity.input_content_hash,
             "processing_identity_hash": identity.identity_hash,
         }
@@ -177,10 +182,13 @@ class ImportMessageProcessor:
             FROM memory_processing_runs
             WHERE message_uuid = ? AND input_content_hash = ? AND status = 'succeeded'
               AND pipeline_version = ? AND prompt_bundle_version = ?
+              AND COALESCE(model_role, '') = COALESCE(?, '')
               AND COALESCE(model_profile_uuid, '') = COALESCE(?, '')
               AND COALESCE(provider_type, '') = COALESCE(?, '')
+              AND COALESCE(model_name, '') = COALESCE(?, '')
               AND COALESCE(prompt_id, '') = COALESCE(?, '')
               AND COALESCE(prompt_version, '') = COALESCE(?, '')
+              AND COALESCE(processing_identity_hash, '') = COALESCE(?, '')
             ORDER BY created_at DESC
             LIMIT 1
             """,
@@ -189,10 +197,13 @@ class ImportMessageProcessor:
                 identity.input_content_hash,
                 identity.pipeline_version,
                 identity.prompt_bundle_version,
+                identity.model_role,
                 identity.model_profile_uuid,
                 identity.provider_type,
+                model_target.get("model_name"),
                 identity.prompt_id,
                 identity.prompt_version,
+                identity.identity_hash,
             ),
         ).fetchone()
         if already_processed is not None:
@@ -202,6 +213,23 @@ class ImportMessageProcessor:
                 status="already_processed",
                 memory_processing_run_uuid=already_processed["processing_run_uuid"],
                 finished_at=utc_now(),
+            )
+
+        active = self.connection.execute(
+            """
+            SELECT * FROM import_message_processing_status
+            WHERE processing_identity_hash = ? AND status IN ('queued', 'running')
+            ORDER BY created_at LIMIT 1
+            """,
+            (identity.identity_hash,),
+        ).fetchone()
+        if active is not None:
+            return self._upsert_status(
+                **common,
+                processing_stage=str(active["processing_stage"]),
+                status=str(active["status"]),
+                job_uuid=active["job_uuid"],
+                memory_processing_run_uuid=active["memory_processing_run_uuid"],
             )
 
         job_type = (
@@ -225,7 +253,7 @@ class ImportMessageProcessor:
         )
         self.model_control.record_usage_event(
             UsageEventCreate(
-                role=ModelRole.MEMORY_EXTRACTION,
+                role=ModelRole(identity.model_role),
                 stage=f"import_{job_type}_queued",
                 model_profile_uuid=model_target.get("model_profile_uuid"),
                 session_uuid=target_session_uuid,
@@ -378,7 +406,6 @@ class ImportMessageProcessor:
                 ).rowcount
             )
 
-
     def _claim_postgres_work(self, import_run_uuid: str, limit: int) -> list[dict[str, Any]]:
         owner = _worker_id()
         progress = self.connection.execute(
@@ -484,9 +511,7 @@ class ImportMessageProcessor:
             "SELECT * FROM import_runs WHERE import_run_uuid = ?", (import_run_uuid,)
         ).fetchone()
         message_uuids = [
-            str(item["target_message_uuid"])
-            for item in statuses
-            if item.get("target_message_uuid")
+            str(item["target_message_uuid"]) for item in statuses if item.get("target_message_uuid")
         ]
         metrics = self._artifact_metrics(import_run_uuid, message_uuids)
         return {
@@ -504,34 +529,58 @@ class ImportMessageProcessor:
             "processing_jobs_failed": counts["failed"],
             "processing_jobs_skipped": counts["skipped"],
             "processing_jobs_already_processed": counts["already_processed"],
-            "terminal": all(
-                str(item["status"]) in TERMINAL_STATUSES for item in statuses
+            "terminal": all(str(item["status"]) in TERMINAL_STATUSES for item in statuses),
+            "processing_jobs_retry_scheduled": sum(
+                1 for item in statuses if item.get("run_after") and item["status"] == "queued"
             ),
             **metrics,
         }
 
     def finalize_if_terminal(self, import_run_uuid: str) -> bool:
         report = self.processing_report(import_run_uuid)
-        run = self.connection.execute(
-            "SELECT status FROM import_runs WHERE import_run_uuid = ?", (import_run_uuid,)
+        progress = self.connection.execute(
+            "SELECT paused, cancelled FROM import_progress WHERE import_run_uuid = ?",
+            (import_run_uuid,),
         ).fetchone()
-        if run is not None and run["status"] in {"paused", "cancelled"}:
-            return False
-        if report["processing_jobs_total"] == 0 or not report["terminal"]:
+        if progress is not None and progress["cancelled"]:
             with self.connection:
                 self.connection.execute(
-                    "UPDATE import_runs SET status = 'processing' WHERE import_run_uuid = ?",
+                    "UPDATE import_runs SET status = 'cancelled' WHERE import_run_uuid = ?",
+                    (import_run_uuid,),
+                )
+            return True
+        if progress is not None and progress["paused"]:
+            with self.connection:
+                self.connection.execute(
+                    "UPDATE import_runs SET status = 'paused' WHERE import_run_uuid = ?",
+                    (import_run_uuid,),
+                )
+            return True
+        if report["processing_jobs_total"] == 0:
+            final_status = "fully_reconstructed"
+        elif not report["terminal"]:
+            with self.connection:
+                self.connection.execute(
+                    """
+                    UPDATE import_runs
+                    SET status = 'processing', completed_at = NULL
+                    WHERE import_run_uuid = ?
+                    """,
                     (import_run_uuid,),
                 )
             return False
+        elif report["processing_jobs_failed"] > 0:
+            final_status = "completed_with_failures"
+        else:
+            final_status = "fully_reconstructed"
         with self.connection:
             self.connection.execute(
                 """
                 UPDATE import_runs
-                SET status = 'fully_reconstructed', completed_at = ?
+                SET status = ?, completed_at = ?
                 WHERE import_run_uuid = ?
                 """,
-                (utc_now(), import_run_uuid),
+                (final_status, utc_now(), import_run_uuid),
             )
         return True
 
@@ -564,6 +613,9 @@ class ImportMessageProcessor:
                 import_run_uuid=str(status_row["import_run_uuid"]),
                 job_uuid=str(job_uuid) if job_uuid else None,
                 model_target={
+                    "model_role": (
+                        status_row.get("model_role") or ModelRole.IMPORT_RECONSTRUCTION.value
+                    ),
                     "model_profile_uuid": status_row.get("model_profile_uuid"),
                     "provider_type": status_row.get("provider_type") or "deterministic",
                     "model_name": status_row.get("model_name") or "deterministic_extraction",
@@ -613,7 +665,9 @@ class ImportMessageProcessor:
                         (finished, job_uuid),
                     )
         except Exception as error:
-            sanitized = f"{type(error).__name__}: {str(error)}"[:240]
+            sanitized = (
+                sanitize_error_message(f"{type(error).__name__}: {error}") or type(error).__name__
+            )
             finished = utc_now()
             run = self.connection.execute(
                 """
@@ -634,7 +688,9 @@ class ImportMessageProcessor:
                     )
             self.model_control.record_usage_event(
                 UsageEventCreate(
-                    role=ModelRole.MEMORY_EXTRACTION,
+                    role=ModelRole(
+                        str(status_row.get("model_role") or ModelRole.IMPORT_RECONSTRUCTION.value)
+                    ),
                     stage="import_memory_reconstruction",
                     model_profile_uuid=status_row.get("model_profile_uuid"),
                     session_uuid=status_row.get("target_session_uuid"),
@@ -705,9 +761,14 @@ class ImportMessageProcessor:
             "job_uuid": values.get("job_uuid"),
             "memory_processing_run_uuid": values.get("memory_processing_run_uuid"),
             "prompt_execution_uuid": values.get("prompt_execution_uuid"),
+            "model_role": values.get("model_role"),
             "model_profile_uuid": values.get("model_profile_uuid"),
             "provider_type": values.get("provider_type"),
             "model_name": values.get("model_name"),
+            "pipeline_version": values.get("pipeline_version"),
+            "prompt_bundle_version": values.get("prompt_bundle_version"),
+            "prompt_id": values.get("prompt_id"),
+            "prompt_version": values.get("prompt_version"),
             "input_content_hash": values.get("input_content_hash"),
             "retry_count": 0,
             "error_sanitized": values.get("error_sanitized"),
@@ -727,9 +788,7 @@ class ImportMessageProcessor:
             )
         return row
 
-    def _artifact_metrics(
-        self, import_run_uuid: str, message_uuids: list[str]
-    ) -> dict[str, int]:
+    def _artifact_metrics(self, import_run_uuid: str, message_uuids: list[str]) -> dict[str, int]:
         if not message_uuids:
             return {
                 "processed_messages": 0,
