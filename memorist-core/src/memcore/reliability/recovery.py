@@ -128,4 +128,3 @@ def _recover_jobs(connection: sqlite3.Connection, apply: bool) -> list[dict[str,
                 (utc_now(),),
             )
     return actions
-

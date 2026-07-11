@@ -28,6 +28,7 @@ from memcore.models import (
     JakobsonAnalysisRunStatus,
     JakobsonFunction,
     Message,
+    ModelRole,
     TextUnit,
     TextUnitType,
 )
@@ -149,6 +150,7 @@ class JakobsonAnalysisService:
         self.outbox = MemoryStoreRepository(connection)
         self.router = SignalRouter()
         self.model_profile_uuid: str | None = None
+        self.model_role = ModelRole.MEMORY_EXTRACTION
 
     def run_for_message(
         self,
@@ -193,7 +195,7 @@ class JakobsonAnalysisService:
             execution = PromptExecutionRepository(self.connection).record_execution(
                 prompt_id=JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
                 prompt_version=JAKOBSON_SENTENCE_ANALYSIS_VERSION,
-                model_role="memory_extraction",
+                model_role=self.model_role,
                 provider_type=self.provider.provider_type,
                 model_name=str(self.provider.model_name or self.provider.provider_type),
                 model_profile_uuid=self.model_profile_uuid,
@@ -267,7 +269,7 @@ class JakobsonAnalysisService:
                 execution = PromptExecutionRepository(self.connection).record_execution(
                     prompt_id=JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
                     prompt_version=JAKOBSON_SENTENCE_ANALYSIS_VERSION,
-                    model_role="memory_extraction",
+                    model_role=self.model_role,
                     provider_type=self.provider.provider_type,
                     model_name=str(self.provider.model_name or self.provider.provider_type),
                     model_profile_uuid=self.model_profile_uuid,

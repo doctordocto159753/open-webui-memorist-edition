@@ -1,2 +1,1 @@
 """Local migration commands."""
-

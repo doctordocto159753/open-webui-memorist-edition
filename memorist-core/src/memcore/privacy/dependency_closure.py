@@ -36,4 +36,3 @@ def privacy_request_closure(
             for item in items
         ],
     }
-

@@ -21,7 +21,6 @@ from memcore.repositories.domain import (
     MessageVersionRepository,
     WorkspaceRepository,
 )
-from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
 
 router = APIRouter(prefix="/memcore", tags=["Base APIs"])
@@ -62,10 +61,14 @@ class MessageCreateRequest(BaseModel):
 @router.post("/workspaces", response_model=None)
 def create_workspace(request: WorkspaceCreateRequest) -> dict[str, Any]:
     with _connection() as connection:
-        return WorkspaceRepository(connection).create_workspace(
-            request.name,
-            request.description,
-        ).model_dump(mode="json")
+        return (
+            WorkspaceRepository(connection)
+            .create_workspace(
+                request.name,
+                request.description,
+            )
+            .model_dump(mode="json")
+        )
 
 
 @router.get("/workspaces", response_model=None)
@@ -95,11 +98,15 @@ def create_project(request: ProjectCreateRequest) -> dict[str, Any]:
     with _connection() as connection:
         if WorkspaceRepository(connection).get_workspace(request.workspace_uuid) is None:
             raise HTTPException(status_code=404, detail="workspace not found")
-        return ProjectRepository(connection).create_project(
-            request.workspace_uuid,
-            request.name,
-            request.description,
-        ).model_dump(mode="json")
+        return (
+            ProjectRepository(connection)
+            .create_project(
+                request.workspace_uuid,
+                request.name,
+                request.description,
+            )
+            .model_dump(mode="json")
+        )
 
 
 @router.get("/projects", response_model=None)
@@ -130,12 +137,16 @@ def get_project(project_uuid: str) -> dict[str, Any]:
 @router.post("/sessions", response_model=None)
 def create_session(request: SessionCreateRequest) -> dict[str, Any]:
     with _connection() as connection:
-        return SessionRepository(connection).create_session(
-            workspace_uuid=request.workspace_uuid,
-            project_uuid=request.project_uuid,
-            openwebui_conversation_id=request.openwebui_conversation_id,
-            title=request.title,
-        ).model_dump(mode="json")
+        return (
+            SessionRepository(connection)
+            .create_session(
+                workspace_uuid=request.workspace_uuid,
+                project_uuid=request.project_uuid,
+                openwebui_conversation_id=request.openwebui_conversation_id,
+                title=request.title,
+            )
+            .model_dump(mode="json")
+        )
 
 
 @router.get("/sessions", response_model=None)
@@ -180,11 +191,15 @@ def patch_session(session_uuid: str, request: SessionPatchRequest) -> dict[str, 
     with _connection() as connection:
         try:
             status = SessionStatus(request.status) if request.status is not None else None
-            return SessionRepository(connection).update_session_state(
-                session_uuid,
-                conceptual_state_text=request.conceptual_state_text,
-                status=status,
-            ).model_dump(mode="json")
+            return (
+                SessionRepository(connection)
+                .update_session_state(
+                    session_uuid,
+                    conceptual_state_text=request.conceptual_state_text,
+                    status=status,
+                )
+                .model_dump(mode="json")
+            )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -339,7 +354,6 @@ def _connection() -> Iterator[Any]:
     settings = get_settings()
     connection = connect(settings.db_path)
     try:
-        apply_migrations(connection)
         yield connection
     finally:
         connection.close()

@@ -260,7 +260,10 @@ def test_prompt_execution_audit_linkage(tmp_path: Path) -> None:
 def test_prompt_role_mapping() -> None:
     expected = {
         "memorist.preflight_planning": ["preflight"],
-        "memorist.jakobson_sentence_analysis": ["memory_extraction"],
+        "memorist.jakobson_sentence_analysis": [
+            "memory_extraction",
+            "import_reconstruction",
+        ],
         "memorist.memory_signal_routing_assist": ["memory_extraction"],
         "memorist.conative_instruction_extractor": ["memory_extraction"],
         "memorist.referential_context_extractor": ["memory_extraction"],

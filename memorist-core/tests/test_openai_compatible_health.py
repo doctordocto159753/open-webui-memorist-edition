@@ -12,7 +12,7 @@ from memcore.model_control.providers.openai_compatible import OpenAICompatibleLL
 
 
 def test_openai_compatible_health_check_validates_json_mode(
-    openai_json_mode_server: tuple[str, type[BaseHTTPRequestHandler]],
+    openai_json_mode_server: tuple[str, type[Any]],
 ) -> None:
     endpoint, handler = openai_json_mode_server
     provider = OpenAICompatibleLLMProvider(
@@ -30,7 +30,7 @@ def test_openai_compatible_health_check_validates_json_mode(
 
 
 def test_openai_compatible_health_check_warns_without_structured_flags(
-    openai_json_mode_server: tuple[str, type[BaseHTTPRequestHandler]],
+    openai_json_mode_server: tuple[str, type[Any]],
 ) -> None:
     endpoint, handler = openai_json_mode_server
     provider = OpenAICompatibleLLMProvider(
@@ -49,7 +49,7 @@ def test_openai_compatible_health_check_warns_without_structured_flags(
 
 
 def test_openai_compatible_health_check_reports_json_mode_unsupported(
-    openai_json_mode_server: tuple[str, type[BaseHTTPRequestHandler]],
+    openai_json_mode_server: tuple[str, type[Any]],
 ) -> None:
     endpoint, handler = openai_json_mode_server
     handler.reject_response_format = True
@@ -70,7 +70,7 @@ def test_openai_compatible_health_check_reports_json_mode_unsupported(
 
 
 def test_openai_compatible_health_check_redacts_auth_failure(
-    openai_json_mode_server: tuple[str, type[BaseHTTPRequestHandler]],
+    openai_json_mode_server: tuple[str, type[Any]],
 ) -> None:
     endpoint, handler = openai_json_mode_server
     handler.auth_failure_body = (
@@ -95,7 +95,7 @@ def test_openai_compatible_health_check_redacts_auth_failure(
 
 def test_openai_compatible_health_check_reports_missing_secret_env_var(
     monkeypatch: pytest.MonkeyPatch,
-    openai_json_mode_server: tuple[str, type[BaseHTTPRequestHandler]],
+    openai_json_mode_server: tuple[str, type[Any]],
 ) -> None:
     endpoint, handler = openai_json_mode_server
     secret_env_var_name = "MEMORIST_TEST_OPENAI_API_KEY"
@@ -114,7 +114,7 @@ def test_openai_compatible_health_check_reports_missing_secret_env_var(
 
 
 @pytest.fixture
-def openai_json_mode_server() -> Iterator[tuple[str, type[BaseHTTPRequestHandler]]]:
+def openai_json_mode_server() -> Iterator[tuple[str, type[Any]]]:
     class JsonModeHandler(BaseHTTPRequestHandler):
         reject_response_format = False
         auth_failure_body: str | None = None
@@ -128,8 +128,9 @@ def openai_json_mode_server() -> Iterator[tuple[str, type[BaseHTTPRequestHandler
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
             type(self).last_payload = payload
-            if type(self).auth_failure_body is not None:
-                body = type(self).auth_failure_body.encode("utf-8")
+            auth_failure_body = type(self).auth_failure_body
+            if auth_failure_body is not None:
+                body = auth_failure_body.encode("utf-8")
                 self.send_response(401)
                 self.send_header("Content-Type", "text/plain")
                 self.send_header("Content-Length", str(len(body)))

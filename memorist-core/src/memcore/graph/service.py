@@ -38,7 +38,9 @@ class GraphProjectionService:
             {
                 "graph_backend": self.settings.graph_backend,
                 "fallback": "postgres_retrieval" if status["status"] == "degraded" else None,
-                "outbox_lag": self._outbox_lag() if self.settings.canonical_store == "postgres" else None,
+                "outbox_lag": self._outbox_lag()
+                if self.settings.canonical_store == "postgres"
+                else None,
                 "drift_detectable": True,
             }
         )
@@ -170,7 +172,9 @@ class GraphProjectionService:
                 failed=1,
                 degraded=rebuild.get("status") == "degraded",
                 last_error_sanitized=str(
-                    rebuild.get("error_sanitized") or rebuild.get("reason") or "graph projection failed"
+                    rebuild.get("error_sanitized")
+                    or rebuild.get("reason")
+                    or "graph projection failed"
                 )[:240],
             )
         return GraphProjectionResult(projected=int(rebuild.get("projected") or 0))

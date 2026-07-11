@@ -202,7 +202,7 @@ class PostgresModelControlRepository(ModelControlRepository):
                 role_default_uuid, role, model_profile_uuid, workspace_uuid,
                 project_uuid, created_at, updated_at, schema_version
             )
-            VALUES (%s, %s, %s, %s, %s, %s, NULL, 1)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 1)
             """,
             (
                 new_uuid(),
@@ -210,7 +210,8 @@ class PostgresModelControlRepository(ModelControlRepository):
                 model_profile_uuid,
                 workspace_uuid,
                 project_uuid,
-                utc_now(),
+                (created_at := utc_now()),
+                created_at,
             ),
         )
         previous_profile_uuid = (
@@ -607,7 +608,7 @@ def _profile_insert_params(profile: ModelProfile) -> tuple[Any, ...]:
         profile.is_enabled,
         profile.privacy_acknowledged_at,
         profile.created_at,
-        profile.updated_at,
+        profile.updated_at or profile.created_at,
         profile.schema_version,
     )
 

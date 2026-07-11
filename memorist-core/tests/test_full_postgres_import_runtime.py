@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -85,11 +86,24 @@ def test_full_postgres_import_runtime_end_to_end(
         service.dry_run(run["import_run_uuid"], "full_memory_reconstruction")
         committed = service.commit(run["import_run_uuid"], "full_memory_reconstruction")
         assert committed["status"] in {"processing", "fully_reconstructed"}
-        worker = ImportReconstructionWorkerService(settings)
-        for _ in range(20):
-            if not worker.process_once("test-host:1:0:test-worker"):
-                break
-        service.repository.connection.commit()
+    worker = ImportReconstructionWorkerService(settings)
+    worker.start()
+    try:
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            with import_connection(settings) as polling_connection:
+                current = ImportService(
+                    polling_connection, settings.object_store_path
+                ).repository.get_run(run["import_run_uuid"])
+                if current["status"] in {"fully_reconstructed", "completed_with_failures"}:
+                    break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("PostgreSQL background worker did not complete before timeout")
+    finally:
+        worker.stop()
+
+    with import_connection(settings) as connection:
         service = ImportService(connection, settings.object_store_path)
         final = service.repository.get_run(run["import_run_uuid"])
         assert final["status"] == "fully_reconstructed"
@@ -104,6 +118,8 @@ def test_full_postgres_import_runtime_end_to_end(
               (SELECT COUNT(*) FROM import_message_processing_status
                WHERE import_run_uuid = ?
                  AND status IN ('succeeded', 'already_processed')) AS succeeded,
+              (SELECT COUNT(*) FROM import_message_processing_status
+               WHERE import_run_uuid = ? AND status = 'skipped') AS skipped,
               (SELECT COUNT(*) FROM memory_processing_runs) AS runs,
               (SELECT COUNT(*) FROM text_units) AS text_units,
               (SELECT COUNT(*) FROM memory_candidates) AS candidates,
@@ -117,13 +133,14 @@ def test_full_postgres_import_runtime_end_to_end(
                 run["import_run_uuid"],
                 run["import_run_uuid"],
                 run["import_run_uuid"],
+                run["import_run_uuid"],
             ),
         ).fetchone()
         assert counts["sessions"] >= 1
         assert counts["messages"] >= 2
         assert counts["mappings"] >= 3
         assert counts["statuses"] >= 2
-        assert counts["succeeded"] == counts["statuses"]
+        assert counts["succeeded"] + counts["skipped"] == counts["statuses"]
         assert counts["runs"] >= 1
         assert counts["text_units"] >= 1
         assert counts["candidates"] >= 1

@@ -15,7 +15,6 @@ from memcore.preflight import PreflightRequest, PreflightService
 from memcore.repositories import JobRepository, MemoryContextAttachmentRepository, MessageRepository
 from memcore.repositories.retrieval import RetrievalRepository
 from memcore.retrieval.runner import RetrievalRunner
-from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
 
 router = APIRouter(prefix="/memcore", tags=["retrieval"])
@@ -254,7 +253,6 @@ def _connection() -> Iterator[Any]:
     settings = get_settings()
     connection = connect(settings.db_path)
     try:
-        apply_migrations(connection)
         yield connection
     finally:
         connection.close()

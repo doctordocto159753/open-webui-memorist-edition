@@ -99,7 +99,7 @@ _SECRET_FRAGMENT_KEYS = (
     "authorization",
 )
 _KEY_VALUE_SECRET_PATTERN = re.compile(
-    r"(?i)\b(api[_-]?key|apikey|token|secret|password|credential|authorization)"
+    r"(?i)\b(api[_-]?key|apikey|token|secret(?:_env_var_name)?|password|credential|authorization)"
     r"(\s*[:=]\s*)"
     r"(?!\[redacted\]|%5Bredacted%5D)"
     r"([^\s,;&}\]\)]+)"

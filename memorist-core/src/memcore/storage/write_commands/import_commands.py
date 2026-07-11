@@ -72,9 +72,9 @@ class ImportProcessingBatchCommand:
         return max(1, self.batch_size * 20)
 
     def execute(self, connection: sqlite3.Connection) -> WriteResult:
-        result = ImportService(
-            connection, self.object_store_path
-        ).process_next_batch(self.import_run_uuid, self.batch_size)
+        result = ImportService(connection, self.object_store_path).process_next_batch(
+            self.import_run_uuid, self.batch_size
+        )
         return WriteResult(
             command_type=self.command_type,
             target_type="import_run",
@@ -129,4 +129,3 @@ def process_import_batch_via_actor(
         timeout=timeout,
     )
     return result.result
-

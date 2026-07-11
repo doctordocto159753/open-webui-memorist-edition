@@ -30,12 +30,6 @@ def _markdown_report(report: dict[str, Any]) -> str:
         lines.append("No consistency issues were found.")
     else:
         for issue in report["issues"]:
-            lines.append(
-                "- "
-                f"`{issue['severity']}` "
-                f"`{issue['check']}` "
-                f"`{issue.get('id', '-')}`"
-            )
+            lines.append(f"- `{issue['severity']}` `{issue['check']}` `{issue.get('id', '-')}`")
     lines.append("")
     return "\n".join(lines)
-

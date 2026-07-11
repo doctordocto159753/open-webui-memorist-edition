@@ -258,6 +258,39 @@ def test_duplicate_reimport_records_already_processed_without_duplicate_messages
     )
 
 
+def test_mapping_repair_dry_run_count_equals_newly_scheduled_jobs(
+    connection: sqlite3.Connection, tmp_path: Path
+) -> None:
+    first_service, first_run = _reconstructed_service(connection, tmp_path, "repair-first.json")
+    first_service.dry_run(first_run, "full_memory_reconstruction")
+    first_service.commit(first_run, "full_memory_reconstruction")
+    first_service.process_next_batch(first_run, 20)
+
+    with connection:
+        connection.execute(
+            """
+            DELETE FROM import_mappings
+            WHERE source_platform = 'chatgpt'
+              AND source_object_type = 'message'
+              AND source_object_id = 'user-1'
+            """
+        )
+    jobs_before = connection.execute(
+        "SELECT COUNT(*) FROM jobs WHERE job_type = 'memory_extraction'"
+    ).fetchone()[0]
+
+    second_service, second_run = _reconstructed_service(connection, tmp_path, "repair-second.json")
+    dry_run = second_service.dry_run(second_run, "full_memory_reconstruction")
+    report = load_ijson(dry_run["report_ijson"])
+    second_service.commit(second_run, "full_memory_reconstruction")
+    jobs_after = connection.execute(
+        "SELECT COUNT(*) FROM jobs WHERE job_type = 'memory_extraction'"
+    ).fetchone()[0]
+
+    assert report["mapping_repair_message_count"] == 1
+    assert report["expected_memory_processing_jobs"] == jobs_after - jobs_before
+
+
 def test_failed_processing_is_sanitized_and_retryable(
     connection: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -314,6 +347,7 @@ def test_configured_memory_extraction_profile_is_recorded_for_import(
             endpoint_is_local=False,
             secret_strategy="env_var",
             secret_env_var_name="MEMORIST_IMPORT_TEST_KEY",
+            supports_json_mode=True,
             privacy_acknowledged=True,
         )
     )

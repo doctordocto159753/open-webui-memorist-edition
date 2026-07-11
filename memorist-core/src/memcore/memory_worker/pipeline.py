@@ -80,7 +80,7 @@ class MemoryWorkerPipeline:
             raw_text=raw_text,
             model_target=extraction_profile,
             model_role=str(
-                extraction_profile.get("model_role") or ModelRole.IMPORT_RECONSTRUCTION.value
+                extraction_profile.get("model_role") or ModelRole.MEMORY_EXTRACTION.value
             ),
         )
         run = self.runs.get_or_create_run(
@@ -159,6 +159,7 @@ class MemoryWorkerPipeline:
                 model_name=str(extraction_profile["model_name"]),
             )
         self.jakobson.model_profile_uuid = extraction_profile_uuid
+        self.jakobson.model_role = ModelRole(identity.model_role)
         jakobson_started = perf_counter()
         jakobson_result = self.jakobson.run_for_message(
             message_uuid,

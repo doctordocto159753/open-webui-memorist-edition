@@ -11,7 +11,6 @@ from memcore.config import get_settings
 from memcore.full_mode import build_full_mode_status
 from memcore.graph.service import GraphProjectionService
 from memcore.storage.canonical.factory import create_canonical_store
-from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
 from memcore.storage.write_actor import get_write_actor
 
@@ -117,7 +116,6 @@ def _connection() -> Iterator[Any]:
     settings = get_settings()
     connection = connect(settings.db_path)
     try:
-        apply_migrations(connection)
         yield connection
     finally:
         connection.close()

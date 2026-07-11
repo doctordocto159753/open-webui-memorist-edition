@@ -114,6 +114,7 @@ class PostgresMemoryWorkerPipeline:
                     message,
                     model_name,
                     provider_type,
+                    model_role,
                     import_run_uuid,
                     job_uuid,
                 )
@@ -127,6 +128,7 @@ class PostgresMemoryWorkerPipeline:
                         model_profile_uuid=model_profile_uuid,
                         provider_type="deterministic",
                         model_name=model_name,
+                        model_role=model_role,
                         latency_ms=0,
                         input_tokens=0,
                         output_tokens=0,
@@ -135,7 +137,16 @@ class PostgresMemoryWorkerPipeline:
                     ),
                     {"input_tokens": 0, "output_tokens": 0, "latency_ms": 0},
                 )
-            self._record_usage(message, model_profile_uuid, provider_type, model_name, usage)
+            self._record_usage(
+                message,
+                model_profile_uuid,
+                provider_type,
+                model_name,
+                model_role,
+                import_run_uuid,
+                job_uuid,
+                usage,
+            )
             analysis_run_uuid = self._record_jakobson(
                 message,
                 input_payload,
@@ -336,6 +347,7 @@ class PostgresMemoryWorkerPipeline:
         message: dict[str, Any],
         model_name: str,
         provider_type: str,
+        model_role: str,
         import_run_uuid: str | None,
         job_uuid: str | None,
     ) -> tuple[dict[str, Any], str, dict[str, int]]:
@@ -357,6 +369,7 @@ class PostgresMemoryWorkerPipeline:
             model_profile_uuid=str(profile["model_profile_uuid"]),
             provider_type=provider_type,
             model_name=model_name,
+            model_role=model_role,
             latency_ms=response.latency_ms,
             input_tokens=response.input_tokens,
             output_tokens=response.output_tokens,
@@ -382,6 +395,7 @@ class PostgresMemoryWorkerPipeline:
         model_profile_uuid: str | None,
         provider_type: str,
         model_name: str,
+        model_role: str,
         latency_ms: int,
         input_tokens: int,
         output_tokens: int,
@@ -398,7 +412,7 @@ class PostgresMemoryWorkerPipeline:
             "prompt_version": PROMPT_PACK_VERSION,
             "stage": "jakobson_sentence_analysis",
             "model_profile_uuid": model_profile_uuid,
-            "model_role": "import_reconstruction",
+            "model_role": model_role,
             "provider_type": provider_type,
             "model_name": model_name,
             "workspace_uuid": message.get("workspace_uuid"),
@@ -434,18 +448,28 @@ class PostgresMemoryWorkerPipeline:
         model_profile_uuid: str | None,
         provider_type: str,
         model_name: str,
+        model_role: str,
+        import_run_uuid: str | None,
+        job_uuid: str | None,
         usage: dict[str, int],
     ) -> None:
         self.connection.execute(
             """
-            INSERT INTO model_usage_events (usage_event_uuid, model_profile_uuid, role, event_type, input_tokens, output_tokens, created_at, schema_version,
-              stage, provider_type, model_name, workspace_uuid, project_uuid, session_uuid, message_uuid, latency_ms, status)
-            VALUES (%s,%s,%s,'prompt_execution',%s,%s,%s,1,'jakobson_sentence_analysis',%s,%s,%s,%s,%s,%s,%s,'ok')
+            INSERT INTO model_usage_events (
+              usage_event_uuid, model_profile_uuid, role, event_type, input_tokens,
+              output_tokens, created_at, schema_version, stage, provider_type,
+              model_name, workspace_uuid, project_uuid, session_uuid, message_uuid,
+              import_run_uuid, job_uuid, latency_ms, status
+            )
+            VALUES (
+              %s,%s,%s,'prompt_execution',%s,%s,%s,1,'jakobson_sentence_analysis',
+              %s,%s,%s,%s,%s,%s,%s,%s,%s,'ok'
+            )
             """,
             (
                 new_uuid(),
                 model_profile_uuid,
-                "import_reconstruction",
+                model_role,
                 int(usage.get("input_tokens", 0)),
                 int(usage.get("output_tokens", 0)),
                 utc_now(),
@@ -455,6 +479,8 @@ class PostgresMemoryWorkerPipeline:
                 message.get("project_uuid"),
                 message["session_uuid"],
                 message["message_uuid"],
+                import_run_uuid,
+                job_uuid,
                 int(usage.get("latency_ms", 0)),
             ),
         )
@@ -814,7 +840,7 @@ class PostgresMemoryWorkerPipeline:
                 ),
             )
             self.connection.execute(
-                "INSERT INTO memory_versions (memory_version_uuid, memory_uuid, version_number, operation, value, normalized_text, confidence, importance, source_snapshot_hash, transaction_from, valid_from, status, created_at, schema_version, prompt_execution_uuid) VALUES (%s,%s,1,'create',%s,%s,%s,%s,%s,%s,%s,'current',%s,1,%s)",
+                "INSERT INTO memory_versions (memory_version_uuid, memory_uuid, version_number, operation, value, normalized_text, confidence, importance, source_snapshot_hash, transaction_from, valid_from, status, created_at, schema_version, prompt_execution_uuid, source_candidate_uuid) VALUES (%s,%s,1,'create',%s,%s,%s,%s,%s,%s,%s,'current',%s,1,%s,%s)",
                 (
                     version_uuid,
                     memory_uuid,
@@ -827,6 +853,7 @@ class PostgresMemoryWorkerPipeline:
                     utc_now(),
                     utc_now(),
                     prompt_execution_uuid,
+                    candidate["candidate_uuid"],
                 ),
             )
             evidence = self.connection.execute(

@@ -75,6 +75,13 @@ class ImportMessageProcessor:
         secret_configured = not secret_env or bool(os.getenv(str(secret_env)))
         provider_type = str(profile.get("provider_type") or profile.get("provider") or "")
         supported = provider_type in {"deterministic", "openai_compatible", "openai_compatible_llm"}
+        model_name_configured = bool(str(profile.get("model_name") or "").strip())
+        endpoint_configured = provider_type == "deterministic" or bool(
+            str(profile.get("endpoint_url") or "").strip()
+        )
+        structured_output_supported = provider_type == "deterministic" or bool(
+            profile.get("supports_structured_output") or profile.get("supports_json_mode")
+        )
         prefix = role.value
         if not enabled:
             warnings.append(f"configured {prefix} profile is disabled")
@@ -86,7 +93,21 @@ class ImportMessageProcessor:
             )
         if not supported:
             warnings.append(f"configured {prefix} provider type is unsupported")
-        if not (enabled and privacy_acknowledged and secret_configured and supported):
+        if not model_name_configured:
+            warnings.append(f"configured {prefix} profile is missing a model name")
+        if not endpoint_configured:
+            warnings.append(f"configured {prefix} profile is missing an endpoint")
+        if not structured_output_supported:
+            warnings.append(f"configured {prefix} profile lacks structured output capability")
+        if not (
+            enabled
+            and privacy_acknowledged
+            and secret_configured
+            and supported
+            and model_name_configured
+            and endpoint_configured
+            and structured_output_supported
+        ):
             return None
         health = self.connection.execute(
             """
@@ -396,10 +417,10 @@ class ImportMessageProcessor:
                   {import_filter}
                   AND (status.run_after IS NULL OR status.run_after <= now())
                   AND run.status = 'processing'
-                  AND COALESCE(progress.paused, FALSE) = FALSE
-                  AND COALESCE(progress.cancelled, FALSE) = FALSE
+                  AND COALESCE(progress.paused, 0) = 0
+                  AND COALESCE(progress.cancelled, 0) = 0
                 ORDER BY status.created_at, status.status_uuid
-                FOR UPDATE SKIP LOCKED
+                FOR UPDATE OF status SKIP LOCKED
                 LIMIT 1
             )
             UPDATE import_message_processing_status AS status
@@ -574,8 +595,19 @@ class ImportMessageProcessor:
             str(item["target_message_uuid"]) for item in statuses if item.get("target_message_uuid")
         ]
         metrics = self._artifact_metrics(import_run_uuid, message_uuids)
+        provider_breakdown = self._provider_breakdown(import_run_uuid, statuses)
+        last_error = next(
+            (
+                str(item["error_sanitized"])
+                for item in reversed(statuses)
+                if item.get("error_sanitized")
+            ),
+            None,
+        )
         return {
             "import_run_uuid": import_run_uuid,
+            "final_status": str(run["status"]) if run else "unknown",
+            "last_error_sanitized": last_error,
             "imported_conversations": int(run["imported_conversations"] or 0) if run else 0,
             "imported_messages": int(run["imported_messages"] or 0) if run else 0,
             "failed_messages": counts["failed"],
@@ -593,8 +625,100 @@ class ImportMessageProcessor:
             "processing_jobs_retry_scheduled": sum(
                 1 for item in statuses if item.get("run_after") and item["status"] == "queued"
             ),
+            "provider_breakdown": provider_breakdown,
             **metrics,
         }
+
+    def _provider_breakdown(
+        self, import_run_uuid: str, statuses: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        grouped: dict[tuple[str, str | None, str, str], dict[str, Any]] = {}
+        for status in statuses:
+            key = (
+                str(status.get("model_role") or ModelRole.IMPORT_RECONSTRUCTION.value),
+                str(status["model_profile_uuid"]) if status.get("model_profile_uuid") else None,
+                str(status.get("provider_type") or "deterministic"),
+                str(status.get("model_name") or "deterministic_extraction"),
+            )
+            item = grouped.setdefault(
+                key,
+                {
+                    "operational_role": key[0],
+                    "model_profile_uuid": key[1],
+                    "provider_type": key[2],
+                    "model_name": key[3],
+                    "processing_jobs": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                },
+            )
+            item["processing_jobs"] += 1
+            item["succeeded"] += int(status.get("status") in {"succeeded", "already_processed"})
+            item["failed"] += int(status.get("status") == "failed")
+
+        prompt_roles: dict[str | None, set[str]] = {}
+        for row in self.connection.execute(
+            """
+            SELECT model_profile_uuid, model_role
+            FROM prompt_execution_runs
+            WHERE import_run_uuid = ?
+            """,
+            (import_run_uuid,),
+        ).fetchall():
+            profile_uuid = str(row["model_profile_uuid"]) if row["model_profile_uuid"] else None
+            prompt_roles.setdefault(profile_uuid, set()).add(str(row["model_role"]))
+
+        for row in self.connection.execute(
+            """
+            SELECT role, model_profile_uuid, provider_type, model_name,
+                   COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS output_tokens
+            FROM model_usage_events
+            WHERE import_run_uuid = ?
+            GROUP BY role, model_profile_uuid, provider_type, model_name
+            """,
+            (import_run_uuid,),
+        ).fetchall():
+            key = (
+                str(row["role"]),
+                str(row["model_profile_uuid"]) if row["model_profile_uuid"] else None,
+                str(row["provider_type"]),
+                str(row["model_name"]),
+            )
+            item = grouped.setdefault(
+                key,
+                {
+                    "operational_role": key[0],
+                    "model_profile_uuid": key[1],
+                    "provider_type": key[2],
+                    "model_name": key[3],
+                    "processing_jobs": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                },
+            )
+            item["input_tokens"] += int(row["input_tokens"])
+            item["output_tokens"] += int(row["output_tokens"])
+
+        for item in grouped.values():
+            roles = prompt_roles.get(item["model_profile_uuid"], set())
+            if len(roles) == 1:
+                prompt_role = next(iter(roles))
+                if prompt_role != item["operational_role"]:
+                    item["prompt_role"] = prompt_role
+        return sorted(
+            grouped.values(),
+            key=lambda item: (
+                item["operational_role"],
+                item["model_profile_uuid"] or "",
+                item["provider_type"],
+                item["model_name"],
+            ),
+        )
 
     def finalize_if_terminal(self, import_run_uuid: str) -> bool:
         report = self.processing_report(import_run_uuid)
@@ -648,6 +772,15 @@ class ImportMessageProcessor:
         now = utc_now()
         job_uuid = status_row.get("job_uuid")
         worker_id = str(status_row.get("lease_owner") or _worker_id())
+        ownership = self.connection.execute(
+            """
+            SELECT 1 FROM import_message_processing_status
+            WHERE status_uuid = ? AND status = 'running' AND lease_owner = ?
+            """,
+            (status_row["status_uuid"], worker_id),
+        ).fetchone()
+        if ownership is None:
+            return
         with self.connection:
             if job_uuid:
                 self.connection.execute(
@@ -732,8 +865,22 @@ class ImportMessageProcessor:
                 """,
                 (status_row["target_message_uuid"], status_row.get("processing_identity_hash")),
             ).fetchone()
-            if run is not None:
-                with self.connection:
+            transition = _failure_transition(status_row, type(error).__name__, sanitized, finished)
+            with self.connection:
+                failure_updated = self.connection.execute(
+                    """
+                    UPDATE import_message_processing_status
+                    SET status = ?, error_sanitized = ?, error_classification = ?,
+                        retry_count = retry_count + ?,
+                        run_after = ?, updated_at = ?, finished_at = ?,
+                        lease_owner = NULL, lease_expires_at = NULL, last_transition_at = ?
+                    WHERE status_uuid = ? AND status = 'running' AND lease_owner = ?
+                    """,
+                    transition + (status_row["status_uuid"], worker_id),
+                ).rowcount
+                if not failure_updated:
+                    return
+                if run is not None:
                     self.connection.execute(
                         """
                         UPDATE memory_processing_runs
@@ -747,6 +894,23 @@ class ImportMessageProcessor:
                             sanitized,
                             run["processing_run_uuid"],
                             status_row.get("processing_identity_hash"),
+                        ),
+                    )
+                if job_uuid:
+                    self.connection.execute(
+                        """
+                        UPDATE jobs
+                        SET status = ?, last_error = ?, last_error_sanitized = ?,
+                            run_after = ?, locked_by = NULL, locked_at = NULL, updated_at = ?
+                        WHERE job_uuid = ?
+                        """,
+                        (
+                            "pending" if transition[0] == "queued" else "failed",
+                            sanitized,
+                            sanitized,
+                            transition[4],
+                            finished,
+                            job_uuid,
                         ),
                     )
             self.model_control.record_usage_event(
@@ -765,29 +929,6 @@ class ImportMessageProcessor:
                     error_message_sanitized=sanitized,
                 )
             )
-            with self.connection:
-                self.connection.execute(
-                    """
-                    UPDATE import_message_processing_status
-                    SET status = ?, error_sanitized = ?, error_classification = ?,
-                        retry_count = retry_count + ?,
-                        run_after = ?, updated_at = ?, finished_at = ?,
-                        lease_owner = NULL, lease_expires_at = NULL, last_transition_at = ?
-                    WHERE status_uuid = ? AND status = 'running' AND lease_owner = ?
-                    """,
-                    _failure_transition(status_row, type(error).__name__, sanitized, finished)
-                    + (status_row["status_uuid"], worker_id),
-                )
-                if job_uuid:
-                    self.connection.execute(
-                        """
-                        UPDATE jobs
-                        SET status = 'failed', last_error = ?, last_error_sanitized = ?,
-                            locked_by = NULL, locked_at = NULL, updated_at = ?
-                        WHERE job_uuid = ?
-                        """,
-                        (sanitized, sanitized, finished, job_uuid),
-                    )
 
     def _hydrate_execution_model_target(self, status_row: dict[str, Any]) -> dict[str, Any]:
         """Resolve the complete provider profile at execution without persisting secrets."""
@@ -947,17 +1088,23 @@ class ImportMessageProcessor:
             """,
             (import_run_uuid,),
         ).fetchone()
+        outbox_reference = (
+            "source_uuid"
+            if self.settings.runtime_profile == "full"
+            and self.settings.canonical_store == "postgres"
+            else "aggregate_uuid"
+        )
         outbox = self.connection.execute(
             f"""
             SELECT COUNT(DISTINCT g.outbox_uuid)
             FROM graph_projection_outbox g
-            WHERE g.aggregate_uuid IN (
+            WHERE g.{outbox_reference} IN (
                 SELECT mv.memory_uuid
                 FROM memory_versions mv
                 JOIN memory_candidates mc ON mc.candidate_uuid = mv.source_candidate_uuid
                 JOIN text_units tu ON tu.text_unit_uuid = mc.text_unit_uuid
                 WHERE tu.message_uuid IN ({placeholders})
-            ) OR g.aggregate_uuid IN (
+            ) OR g.{outbox_reference} IN (
                 SELECT analysis_run_uuid
                 FROM jakobson_analysis_runs
                 WHERE message_uuid IN ({placeholders})

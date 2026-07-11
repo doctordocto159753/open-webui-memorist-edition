@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,7 +11,12 @@ from memcore.imports.processing import ImportMessageProcessor
 from memcore.imports.worker import ImportReconstructionWorkerService
 
 
-def _settings(tmp_path: Path, *, profile: str = "lite", store: str = "sqlite") -> Settings:
+def _settings(
+    tmp_path: Path,
+    *,
+    profile: Literal["lite", "full", "dev"] = "lite",
+    store: Literal["sqlite", "postgres"] = "sqlite",
+) -> Settings:
     return Settings(
         runtime_profile=profile,
         canonical_store=store,
@@ -100,6 +105,7 @@ def test_worker_polling_and_heartbeat_do_not_run_migrations_after_startup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import memcore.imports.runtime as runtime
+
     settings = _settings(tmp_path)
     runtime.initialize_runtime_storage(settings)
 

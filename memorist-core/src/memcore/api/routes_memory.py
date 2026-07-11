@@ -21,7 +21,6 @@ from memcore.repositories.memory_worker import (
     MemoryStoreRepository,
     TextUnitRepository,
 )
-from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
 
 router = APIRouter(prefix="/memcore", tags=["memory-worker"])
@@ -221,9 +220,8 @@ def get_memory_evidence(memory_uuid: str) -> list[dict[str, Any]]:
 def process_message(message_uuid: str) -> dict[str, object]:
     settings = get_settings()
     if _is_full_postgres(settings):
-        with _pg_connection(settings) as connection:
-            with connection.transaction():
-                return PostgresMemoryWorkerPipeline(connection, settings).process_message(message_uuid)
+        with _pg_connection(settings) as connection, connection.transaction():
+            return PostgresMemoryWorkerPipeline(connection, settings).process_message(message_uuid)
     with _connection() as connection:
         return MemoryWorkerPipeline(connection, settings).process_message(message_uuid)
 
@@ -240,7 +238,6 @@ def _connection() -> Iterator[Any]:
     settings = get_settings()
     connection = connect(settings.db_path)
     try:
-        apply_migrations(connection)
         yield connection
     finally:
         connection.close()
@@ -264,7 +261,7 @@ def _pg_connection(settings: Settings) -> Iterator[Any]:
 
 
 def _pg_process_message_smoke(settings: Settings, message_uuid: str) -> dict[str, object]:
-    with _pg_connection(settings) as connection:
+    with _pg_connection(settings) as connection:  # noqa: SIM117
         with connection.transaction():
             message = connection.execute(
                 "SELECT * FROM messages WHERE message_uuid = %s",
@@ -282,7 +279,12 @@ def _pg_process_message_smoke(settings: Settings, message_uuid: str) -> dict[str
                 (message_uuid,),
             ).fetchone()
             if existing_run is not None:
-                return _pg_process_summary(connection, message_uuid, str(existing_run["processing_run_uuid"]), True)
+                return _pg_process_summary(
+                    connection,
+                    message_uuid,
+                    str(existing_run["processing_run_uuid"]),
+                    True,
+                )
 
             raw_text = str(message.get("raw_text") or "").strip()
             if not raw_text:
@@ -380,7 +382,15 @@ def _pg_process_message_smoke(settings: Settings, message_uuid: str) -> dict[str
                 )
                 VALUES (%s, %s, %s, %s, NULL, NULL, %s, 0, %s, %s, 1)
                 """,
-                (evidence_uuid, candidate_uuid, message_uuid, text_unit_uuid, raw_text, len(raw_text), now),
+                (
+                    evidence_uuid,
+                    candidate_uuid,
+                    message_uuid,
+                    text_unit_uuid,
+                    raw_text,
+                    len(raw_text),
+                    now,
+                ),
             )
             memory_uuid = new_uuid()
             memory_version_uuid = new_uuid()
@@ -393,7 +403,14 @@ def _pg_process_message_smoke(settings: Settings, message_uuid: str) -> dict[str
                 )
                 VALUES (%s, 'session', %s, %s, %s, 'active', %s, %s, 1)
                 """,
-                (memory_uuid, message["session_uuid"], canonical_key, memory_version_uuid, now, now),
+                (
+                    memory_uuid,
+                    message["session_uuid"],
+                    canonical_key,
+                    memory_version_uuid,
+                    now,
+                    now,
+                ),
             )
             connection.execute(
                 """

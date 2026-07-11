@@ -59,22 +59,16 @@ ALLOWED_DIRECT_WRITE_PATHS = {
     "memcore/imports/commit_batches.py": (
         "import commit batch records are bounded low-priority actor batch metadata"
     ),
-    "memcore/imports/service.py": (
-        "batch commit internals run under ImportBatchCommitCommand"
-    ),
+    "memcore/imports/service.py": ("batch commit internals run under ImportBatchCommitCommand"),
     "memcore/imports/progress.py": "import progress writes are small status updates",
     "memcore/imports/scheduler.py": "pause/resume/cancel are bounded control-plane updates",
-    "memcore/governance/privacy.py": (
-        "privacy mutation internals run under PrivacyRequestCommand"
-    ),
+    "memcore/governance/privacy.py": ("privacy mutation internals run under PrivacyRequestCommand"),
     "memcore/reliability/backup.py": "SQLite backup API does not mutate canonical content",
     "memcore/reliability/consistency/repair.py": (
         "safe repair only marks stale operational rows or rebuilds FTS"
     ),
     "memcore/reliability/recovery.py": "recovery only marks interrupted operations resumable/dead",
-    "memcore/retrieval/lexical.py": (
-        "FTS maintenance is a local index projection"
-    ),
+    "memcore/retrieval/lexical.py": ("FTS maintenance is a local index projection"),
     "memcore/heritage/package.py": "restore internals can run inside HeritageRestoreCommand",
 }
 

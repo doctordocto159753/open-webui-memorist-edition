@@ -33,4 +33,3 @@ def run_consistency_check(connection: sqlite3.Connection) -> dict[str, Any]:
         "severity_counts": severity_counts,
         "issues": issues,
     }
-

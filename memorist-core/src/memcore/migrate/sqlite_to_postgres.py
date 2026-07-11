@@ -162,10 +162,7 @@ def _copy_table(
     columns_sql = ", ".join(target_names)
     with postgres.cursor() as cursor:
         for row in rows:
-            values = [
-                _map_value(row, source, target)
-                for source, target in mapped_columns
-            ]
+            values = [_map_value(row, source, target) for source, target in mapped_columns]
             insert_sql = (
                 f"INSERT INTO {table_name} ({columns_sql}) VALUES ({placeholders}) "
                 "ON CONFLICT DO NOTHING"
@@ -233,4 +230,3 @@ def _sqlite_table_exists(connection: sqlite3.Connection, table_name: str) -> boo
         ).fetchone()
         is not None
     )
-

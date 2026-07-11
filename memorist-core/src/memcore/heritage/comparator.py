@@ -54,8 +54,7 @@ def _row_hashes(connection: sqlite3.Connection, table: str) -> list[str]:
         return []
     rows = [dict(row) for row in connection.execute(f"SELECT * FROM {table}")]
     return sorted(
-        hashlib.sha256(dump_ijson(strip_none(row)).encode("utf-8")).hexdigest()
-        for row in rows
+        hashlib.sha256(dump_ijson(strip_none(row)).encode("utf-8")).hexdigest() for row in rows
     )
 
 
@@ -69,4 +68,3 @@ def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
         (table,),
     ).fetchone()
     return row is not None
-
