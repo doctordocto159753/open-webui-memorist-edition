@@ -1,9 +1,9 @@
-﻿import type { MemoristModelRole, ModelControlProfile } from "./modelControl";
+import type { MemoristModelRole, ModelControlProfile } from "./modelControl";
 
 export type MemoristMode = "off" | "lite" | "standard" | "full";
 
 export type MemoristHealth = {
-  status: string;
+  status: ImportRunStatus;
   service: string;
   local_only: boolean;
 };
@@ -179,6 +179,66 @@ export class MemoristClient {
   }
 }
 
+
+export type ImportRunStatus =
+  | "staged" | "uploaded" | "inspected" | "reconstructed" | "dry_run" | "committing"
+  | "processing" | "paused" | "committed" | "fully_reconstructed" | "completed_with_failures"
+  | "completed" | "cancelled" | "failed";
+
+export type ImportProcessingModel = {
+  role?: string | null;
+  model_profile_uuid?: string | null;
+  provider_type?: string | null;
+  model_name?: string | null;
+  deterministic_fallback?: boolean | null;
+};
+
+export type ImportExpectedRows = { sessions?: number; messages?: number; import_mappings?: number };
+
+export type ImportDryRunReport = {
+  import_run_uuid: string;
+  plan_fingerprint: string;
+  created_at: string;
+  source_platform?: string | null;
+  source_platform_display?: string | null;
+  detected_format?: string | null;
+  conversation_count?: number | null;
+  message_count?: number | null;
+  eligible_processing_message_count?: number | null;
+  ineligible_processing_message_count?: number | null;
+  skip_reasons?: Record<string, number>;
+  duplicate_conversation_count?: number | null;
+  duplicate_message_count?: number | null;
+  expected_new_database_rows?: ImportExpectedRows | null;
+  expected_text_unitization_jobs?: number | null;
+  expected_memory_processing_jobs?: number | null;
+  processing_mode?: string | null;
+  processing_model?: ImportProcessingModel | null;
+  deterministic_fallback?: boolean | null;
+  graph_projection_enabled?: boolean | null;
+  large_reconstruction_warning?: string | null;
+};
+
+export type ImportProgress = {
+  import_run_uuid: string;
+  status: ImportRunStatus;
+  phase?: string;
+  records_total?: number;
+  records_done?: number;
+  error_count?: number;
+};
+
+export type ImportProcessingReport = {
+  import_run_uuid: string;
+  imported_conversations?: number; imported_messages?: number; processing_jobs_total?: number;
+  processing_jobs_queued?: number; processing_jobs_pending?: number; processing_jobs_running?: number;
+  processing_jobs_succeeded?: number; processing_jobs_failed?: number; processing_jobs_skipped?: number;
+  processing_jobs_already_processed?: number; failed_messages?: number; skipped_messages?: number;
+  memory_candidates?: number; memory_versions?: number; prompt_executions?: number; usage_events?: number;
+  input_tokens?: number; output_tokens?: number; graph_projection_events?: number;
+  skip_reasons?: Record<string, number>; sanitized_last_error?: string | null; final_status?: string | null; terminal?: boolean;
+};
+
 export type ImportUploadOptions = {
   mode?: string;
   processing_mode?: string;
@@ -188,7 +248,7 @@ export type ImportUploadOptions = {
 
 export type ImportRunSummary = {
   import_run_uuid: string;
-  status: string;
+  status: ImportRunStatus;
   source_platform?: string | null;
   detected_format?: string | null;
   total_conversations?: number;

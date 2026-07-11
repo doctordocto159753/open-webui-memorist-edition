@@ -30,6 +30,7 @@ from memcore.storage.write_commands.import_commands import (
     commit_import_via_actor,
     process_import_batch_via_actor,
 )
+from memcore.validators.ijson import load_ijson
 
 router = APIRouter(prefix="/memcore", tags=["imports"])
 
@@ -230,11 +231,20 @@ def import_dry_run(
 @router.get("/imports/{import_run_uuid}/dry-run-report", response_model=None)
 def import_dry_run_report(import_run_uuid: str) -> dict[str, Any]:
     with _connection() as connection:
-        return _guard(
+        row = _guard(
             lambda: ImportService(connection, get_settings().object_store_path).dry_run_report(
                 import_run_uuid
             )
         )
+    report = load_ijson(str(row["report_ijson"]))
+    if not isinstance(report, dict):
+        raise HTTPException(status_code=500, detail="Dry-run report payload is invalid")
+    return {
+        "import_run_uuid": row["import_run_uuid"],
+        "plan_fingerprint": row["plan_fingerprint"],
+        "created_at": row["created_at"],
+        **report,
+    }
 
 
 @router.post("/imports/{import_run_uuid}/commit", response_model=None)

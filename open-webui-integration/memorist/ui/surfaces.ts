@@ -1,4 +1,5 @@
 import "./processingNodes";
+import "./importWorkflow";
 
 import { MEMORIST_PROCESSING_NODES_ROUTE } from "./processingNodes";
 
@@ -54,6 +55,7 @@ export function sanitizeUiText(value: string): string {
 
 export const MEMORIST_SETTINGS_ROUTES = {
   processingNodes: MEMORIST_PROCESSING_NODES_ROUTE,
+  importWorkflow: "/settings/memorist/import",
 } as const;
 
 export const MEMORIST_SETTINGS_NAVIGATION: readonly MemoristSettingsNavigationItem[] = [
@@ -71,10 +73,15 @@ export const MEMORIST_SETTINGS_ROUTE_MOUNTS: readonly MemoristSettingsRoute[] = 
     surface: "MemoristProcessingNodesSettings",
     element: "memorist-processing-nodes-settings",
   },
+  {
+    path: MEMORIST_SETTINGS_ROUTES.importWorkflow,
+    surface: "ImportTab",
+    element: "memorist-import-workflow",
+  },
 ] as const;
 
 export function renderMemoristSettingsPanel(path: string): HTMLElement | undefined {
-  const route = MEMORIST_SETTINGS_ROUTE_MOUNTS.find((candidate) => candidate.path === path);
+  const route = MEMORIST_SETTINGS_ROUTE_MOUNTS.find((candidate) => candidate.path === path || (candidate.path === MEMORIST_SETTINGS_ROUTES.importWorkflow && path.startsWith(`${candidate.path}/`)));
   if (!route || typeof document === "undefined") return undefined;
   return document.createElement(route.element);
 }
