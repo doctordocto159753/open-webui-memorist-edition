@@ -11,8 +11,8 @@ from memcore.storage.postgres.migrations import apply_postgres_migrations
 from memcore.storage.sqlite import connect
 
 
-def initialize_import_storage(settings: Settings) -> None:
-    """Apply import/runtime schema migrations during explicit startup only."""
+def initialize_runtime_storage(settings: Settings) -> None:
+    """Apply the single authoritative runtime schema migration during startup."""
     if settings.runtime_profile == "lite" and settings.canonical_store == "sqlite":
         sqlite_connection = connect(settings.db_path)
         try:
@@ -33,6 +33,11 @@ def initialize_import_storage(settings: Settings) -> None:
         "unsupported import runtime: expected lite/sqlite or full/postgres; "
         f"got {settings.runtime_profile}/{settings.canonical_store}"
     )
+
+
+def initialize_import_storage(settings: Settings) -> None:
+    """Backward-compatible alias for the single runtime storage initializer."""
+    initialize_runtime_storage(settings)
 
 
 @contextmanager
