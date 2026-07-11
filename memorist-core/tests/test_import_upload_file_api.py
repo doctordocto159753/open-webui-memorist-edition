@@ -122,3 +122,47 @@ def test_recent_import_runs_endpoint_returns_safe_summaries(client: TestClient) 
     assert len(items) == 1
     assert "object_store_path" not in items[0]
     assert "archive_sha256" not in items[0]
+
+
+def test_dry_run_report_endpoint_returns_parsed_contract(client: TestClient) -> None:
+    upload = client.post(
+        "/memcore/imports/upload-file",
+        files={"file": ("chatgpt.zip", _zip_bytes(), "application/zip")},
+        data={"mode": "inspect", "processing_mode": "full_memory_reconstruction"},
+    )
+    run_uuid = upload.json()["import_run_uuid"]
+    assert client.post(f"/memcore/imports/{run_uuid}/inspect").status_code == 200
+    assert client.post(f"/memcore/imports/{run_uuid}/reconstruct", json={}).status_code == 200
+    assert client.post(
+        f"/memcore/imports/{run_uuid}/dry-run",
+        json={"processing_mode": "full_memory_reconstruction"},
+    ).status_code == 200
+
+    response = client.get(f"/memcore/imports/{run_uuid}/dry-run-report")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["import_run_uuid"] == run_uuid
+    assert body["plan_fingerprint"]
+    assert body["created_at"]
+    assert "report_ijson" not in body
+    assert body["source_platform"] == "chatgpt"
+    assert body["source_platform_display"] == "ChatGPT/OpenAI"
+    assert body["detected_format"] == "chatgpt_conversation_mapping"
+    assert body["conversation_count"] == 1
+    assert body["message_count"] == 0
+    assert body["eligible_processing_message_count"] == 0
+    assert body["ineligible_processing_message_count"] == 0
+    assert body["duplicate_conversation_count"] == 0
+    assert body["duplicate_message_count"] == 0
+    assert body["expected_new_database_rows"] == {
+        "sessions": 1,
+        "messages": 0,
+        "import_mappings": 1,
+    }
+    assert body["expected_text_unitization_jobs"] == 0
+    assert body["expected_memory_processing_jobs"] == 0
+    assert body["processing_mode"] == "full_memory_reconstruction"
+    assert isinstance(body["processing_model"], dict)
+    assert "deterministic_fallback" in body
+    assert "graph_projection_enabled" in body

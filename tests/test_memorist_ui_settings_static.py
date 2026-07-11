@@ -66,3 +66,14 @@ def test_processing_nodes_blocks_disabled_profile_defaults() -> None:
     assert 'Profile disabled' in component
     assert 'DISABLED_PROFILE_DEFAULT_ERROR' in component
     assert 'profile?.is_enabled === false' in component
+
+
+def test_import_workflow_component_is_registered_and_settings_mounted() -> None:
+    surfaces = SURFACES.read_text(encoding="utf-8")
+    component = Path("open-webui-integration/memorist/ui/importWorkflow.ts").read_text(encoding="utf-8")
+
+    assert 'import "./importWorkflow";' in surfaces
+    assert 'importWorkflow: "/settings/memorist/import"' in surfaces
+    assert 'element: "memorist-import-workflow"' in surfaces
+    assert 'path.startsWith(`${candidate.path}/`)' in surfaces
+    assert 'customElements.define("memorist-import-workflow"' in component
