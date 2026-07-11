@@ -8,7 +8,7 @@ from zipfile import ZipFile
 import pytest
 
 from memcore.config import Settings
-from memcore.imports.runtime import import_connection
+from memcore.imports.runtime import import_connection, initialize_runtime_storage
 from memcore.imports.service import ImportService
 from memcore.imports.worker import ImportReconstructionWorkerService
 
@@ -69,6 +69,8 @@ def test_full_postgres_import_runtime_end_to_end(
     ]
     with ZipFile(archive, "w") as zf:
         zf.writestr("conversations.json", json.dumps(export))
+
+    initialize_runtime_storage(settings)
 
     with import_connection(settings) as connection:
         service = ImportService(connection, settings.object_store_path)
