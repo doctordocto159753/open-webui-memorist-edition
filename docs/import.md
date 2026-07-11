@@ -105,10 +105,10 @@ Full reconstruction adds:
 - `GET /memcore/imports/{import_run_uuid}/processing-report`.
 - `GET /memcore/imports/{import_run_uuid}/messages/processing-status`.
 
-Commit schedules durable low-priority jobs and the runtime import worker drains them in
-bounded batches. The process endpoint remains available for operator-driven recovery and
-smoke tests, but browser flows should rely on multipart upload plus automatic background
-processing until progress is terminal.
+Commit schedules durable low-priority jobs; the current implementation requires a bounded
+worker call to drain those jobs. Use the process endpoint from the UI, CLI smoke harness, or
+an explicitly configured deployment worker until the dedicated automatic reconstruction
+worker is registered and certified.
 An import using full reconstruction is `processing` after commit and becomes
 `fully_reconstructed` only when every message has a terminal state. Failed messages are
 terminal for reporting but can be re-queued without re-importing the archive.

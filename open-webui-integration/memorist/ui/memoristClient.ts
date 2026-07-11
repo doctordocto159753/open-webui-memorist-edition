@@ -181,10 +181,12 @@ export class MemoristClient {
 
 export type ImportUploadOptions = {
   mode?: string;
-  processing_mode?: string;
+  processing_mode?: ProcessingMode;
   target_workspace_uuid?: string;
   target_project_uuid?: string;
 };
+
+export type ProcessingMode = "full_memory_reconstruction" | "none" | "extract_candidates";
 
 export type ImportRunSummary = {
   import_run_uuid: string;
@@ -203,6 +205,44 @@ export type ImportRunSummary = {
 };
 
 export type RecentImportRunsResponse = { items: ImportRunSummary[] };
+
+export type ImportDryRunReport = Record<string, unknown> & {
+  source_platform?: string | null;
+  detected_format?: string | null;
+  total_conversations?: number;
+  total_messages?: number;
+  eligible_processing_messages?: number;
+  skipped_messages?: number;
+  skipped_records?: number;
+  skip_reasons?: Record<string, number>;
+  skip_reason_counts?: Record<string, number>;
+  duplicate_conversations?: number;
+  duplicate_messages?: number;
+  expected_new_sessions?: number;
+  expected_new_messages?: number;
+  expected_processing_jobs?: number;
+  already_processed_messages?: number;
+  selected_processing_role?: string;
+  model_target?: {
+    role?: string;
+    model_profile_uuid?: string | null;
+    provider_type?: string | null;
+    model_name?: string | null;
+  };
+  processing_role?: {
+    role?: string;
+    model_profile_uuid?: string | null;
+    provider_type?: string | null;
+    model_name?: string | null;
+  };
+  deterministic_fallback?: boolean;
+  profile_enabled?: boolean;
+  privacy_acknowledged?: boolean;
+  secret_available?: boolean;
+  latest_health?: string | null;
+  graph_projection_state?: string | null;
+  token_time_warning?: string | null;
+};
 
 export async function uploadImportFile(
   baseUrl: string,

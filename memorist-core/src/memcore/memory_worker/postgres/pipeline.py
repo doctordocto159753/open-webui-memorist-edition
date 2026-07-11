@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 from hashlib import sha256
 from time import perf_counter
-from types import SimpleNamespace
 from typing import Any
 
 from fastapi import HTTPException
@@ -23,7 +22,7 @@ from memcore.memory_worker.providers.openai_compatible import (
 )
 from memcore.memory_worker.segmentation.sentence_segmenter import SentenceSegmenter
 from memcore.model_control.security import sanitize_error_message
-from memcore.models import new_uuid, utc_now
+from memcore.models import TextUnit, TextUnitType, new_uuid, utc_now
 from memcore.validators.ijson import canonical_hash_ijson
 
 
@@ -34,7 +33,13 @@ class PostgresMemoryWorkerPipeline:
         self.segmenter = SentenceSegmenter()
         self.gate = DeterministicGate()
 
-    def process_message(self, message_uuid: str, import_run_uuid: str | None = None, job_uuid: str | None = None, model_target: dict[str, Any] | None = None) -> dict[str, object]:
+    def process_message(
+        self,
+        message_uuid: str,
+        import_run_uuid: str | None = None,
+        job_uuid: str | None = None,
+        model_target: dict[str, Any] | None = None,
+    ) -> dict[str, object]:
         started = perf_counter()
         message = self.connection.execute(
             "SELECT m.*, s.workspace_uuid, s.project_uuid FROM messages m JOIN sessions s ON s.session_uuid = m.session_uuid WHERE m.message_uuid = %s",
@@ -580,8 +585,27 @@ class PostgresMemoryWorkerPipeline:
             ).fetchone()
             if existing:
                 continue
+            text = str(unit["text"])
             decision = self.gate.evaluate(
-                SimpleNamespace(text=unit["text"], speaker_role=unit["speaker_role"])
+                TextUnit(
+                    text_unit_uuid=str(unit["text_unit_uuid"]),
+                    unit_uuid=str(unit.get("unit_uuid") or unit["text_unit_uuid"]),
+                    message_uuid=str(unit["message_uuid"]),
+                    session_uuid=str(unit["session_uuid"]),
+                    unit_index=int(unit["unit_index"]),
+                    unit_type=TextUnitType(str(unit["unit_type"])),
+                    text=text,
+                    start_char=int(unit["start_char"]),
+                    end_char=int(unit["end_char"]),
+                    char_start=int(unit.get("char_start") or unit["start_char"]),
+                    char_end=int(unit.get("char_end") or unit["end_char"]),
+                    language_code=unit.get("language_code"),
+                    language_hint=unit.get("language_hint"),
+                    speaker_role=str(unit["speaker_role"]),
+                    content_hash=str(unit.get("content_hash") or sha256(text.encode()).hexdigest()),
+                    segmentation_confidence=unit.get("segmentation_confidence"),
+                    segmentation_notes=unit.get("segmentation_notes"),
+                )
             )
             self.connection.execute(
                 """
