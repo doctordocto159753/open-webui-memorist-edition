@@ -10,6 +10,7 @@ import pytest
 from memcore.config import Settings
 from memcore.imports.runtime import import_connection
 from memcore.imports.service import ImportService
+from memcore.imports.worker import ImportReconstructionWorkerService
 
 
 @pytest.mark.skipif(not os.getenv("MEMORIST_POSTGRES_DSN"), reason="requires real PostgreSQL")
@@ -82,6 +83,14 @@ def test_full_postgres_import_runtime_end_to_end(
         service.dry_run(run["import_run_uuid"], "full_memory_reconstruction")
         committed = service.commit(run["import_run_uuid"], "full_memory_reconstruction")
         assert committed["status"] in {"processing", "fully_reconstructed"}
+        worker = ImportReconstructionWorkerService(settings)
+        for _ in range(20):
+            if not worker.process_once("test-host:1:0:test-worker"):
+                break
+        service.repository.connection.commit()
+        service = ImportService(connection, settings.object_store_path)
+        final = service.repository.get_run(run["import_run_uuid"])
+        assert final["status"] == "fully_reconstructed"
         counts = connection.execute(
             """
             SELECT
@@ -89,19 +98,41 @@ def test_full_postgres_import_runtime_end_to_end(
               (SELECT COUNT(*) FROM messages) AS messages,
               (SELECT COUNT(*) FROM import_mappings WHERE import_run_uuid = ?) AS mappings,
               (SELECT COUNT(*) FROM import_message_processing_status
-               WHERE import_run_uuid = ?) AS statuses
+               WHERE import_run_uuid = ?) AS statuses,
+              (SELECT COUNT(*) FROM import_message_processing_status
+               WHERE import_run_uuid = ?
+                 AND status IN ('succeeded', 'already_processed')) AS succeeded,
+              (SELECT COUNT(*) FROM memory_processing_runs) AS runs,
+              (SELECT COUNT(*) FROM text_units) AS text_units,
+              (SELECT COUNT(*) FROM memory_candidates) AS candidates,
+              (SELECT COUNT(*) FROM prompt_execution_runs WHERE import_run_uuid = ?) AS prompts,
+              (SELECT COUNT(*) FROM model_usage_events WHERE import_run_uuid = ?) AS usage_events,
+              (SELECT COUNT(*) FROM graph_projection_outbox) AS outbox
             """,
-            (run["import_run_uuid"], run["import_run_uuid"]),
+            (
+                run["import_run_uuid"],
+                run["import_run_uuid"],
+                run["import_run_uuid"],
+                run["import_run_uuid"],
+                run["import_run_uuid"],
+            ),
         ).fetchone()
         assert counts["sessions"] >= 1
         assert counts["messages"] >= 2
         assert counts["mappings"] >= 3
         assert counts["statuses"] >= 2
+        assert counts["succeeded"] == counts["statuses"]
+        assert counts["runs"] >= 1
+        assert counts["text_units"] >= 1
+        assert counts["candidates"] >= 1
+        assert counts["prompts"] >= 1
+        assert counts["usage_events"] >= 1
+        assert counts["outbox"] >= 1
 
     with import_connection(settings) as restarted:
-        persisted = ImportService(
-            restarted, settings.object_store_path
-        ).repository.get_run(run["import_run_uuid"])
+        persisted = ImportService(restarted, settings.object_store_path).repository.get_run(
+            run["import_run_uuid"]
+        )
         assert persisted["import_run_uuid"] == run["import_run_uuid"]
 
 
@@ -135,7 +166,8 @@ def test_unsupported_import_runtime_fails_explicitly() -> None:
         db_path="unused",
         object_store_path="unused",
     )
-    with pytest.raises(RuntimeError, match="unsupported import runtime"), import_connection(
-        settings
+    with (
+        pytest.raises(RuntimeError, match="unsupported import runtime"),
+        import_connection(settings),
     ):
         pass

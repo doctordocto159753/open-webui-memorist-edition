@@ -169,3 +169,15 @@ uv run pytest tests/test_memory_worker_prompt_pack.py -q
 uv run ruff check .
 uv run mypy src tests
 ```
+
+## Import Reconstruction Worker
+
+PR3-C uses the **FastAPI lifespan background service** deployment model. The embedded service starts during application lifespan when `MEMORIST_IMPORT_RECONSTRUCTION_WORKER_ENABLED=true`, recovers expired leases, and runs `MEMORIST_IMPORT_RECONSTRUCTION_CONCURRENCY` worker loops. Operators that run multiple web server processes or autoreload must disable the embedded worker and run exactly one worker-bearing process to avoid duplicate lifecycle startup.
+
+The normal product path no longer requires `POST /imports/{run}/process`. That endpoint remains for operator recovery, bounded smoke tests, and debugging only. After a Full reconstruction import is committed, queued import messages are drained by the worker without an open browser tab, button presses, curl, or a developer shell.
+
+Worker settings are non-secret and exposed in effective configuration diagnostics: `MEMORIST_IMPORT_RECONSTRUCTION_WORKER_ENABLED`, `MEMORIST_IMPORT_RECONSTRUCTION_CONCURRENCY`, `MEMORIST_IMPORT_RECONSTRUCTION_POLL_SECONDS`, `MEMORIST_IMPORT_RECONSTRUCTION_LEASE_SECONDS`, `MEMORIST_IMPORT_RECONSTRUCTION_HEARTBEAT_SECONDS`, `MEMORIST_IMPORT_RECONSTRUCTION_MAX_ATTEMPTS`, `MEMORIST_IMPORT_RECONSTRUCTION_RETRY_BASE_SECONDS`, and `MEMORIST_IMPORT_RECONSTRUCTION_RETRY_MAX_SECONDS`. Validation enforces concurrency >= 1, poll > 0, max attempts >= 1, heartbeat < lease, and retry base <= retry max.
+
+Each worker has a unique owner in the form `hostname:pid:worker-index:uuid`. Each iteration claims one due `full_memory_reconstruction` item for a processing import run. PostgreSQL uses `FOR UPDATE SKIP LOCKED` in the runtime claim path and commits immediately before inference. SQLite also uses short claim and update transactions, so provider inference is outside the database claim transaction. A heartbeat renews the lease during slow provider inference. Completion updates use lease-owner compare-and-set semantics; if the owner loses the lease, stale success cannot overwrite another worker or a cancelled state.
+
+Paused or cancelled runs are excluded from new claims. In-flight work may finish, but stale owners cannot overwrite cancelled state. On startup the service recovers expired leases and continues queued work. Succeeded and exact-match already-processed items remain terminal and are not duplicated.

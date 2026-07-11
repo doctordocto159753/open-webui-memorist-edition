@@ -333,6 +333,8 @@ class ImportMessageProcessor:
     def claim_next(
         self, worker_id: str, lease_seconds: int, import_run_uuid: str | None = None
     ) -> dict[str, Any] | None:
+        if self.settings.runtime_profile == "full" and self.settings.canonical_store == "postgres":
+            return self._claim_next_postgres(worker_id, lease_seconds, import_run_uuid)
         now = utc_now()
         lease_expires = _add_seconds(now, lease_seconds)
         params: list[Any] = []
@@ -374,6 +376,66 @@ class ImportMessageProcessor:
             (row["status_uuid"],),
         ).fetchone()
         return dict(claimed) if claimed is not None else None
+
+    def _claim_next_postgres(
+        self, worker_id: str, lease_seconds: int, import_run_uuid: str | None = None
+    ) -> dict[str, Any] | None:
+        import_filter = "AND import_run_uuid = ?" if import_run_uuid is not None else ""
+        params: list[Any] = []
+        if import_run_uuid is not None:
+            params.append(import_run_uuid)
+        params.extend([worker_id, lease_seconds])
+        rows = self.connection.execute(
+            f"""
+            WITH candidates AS (
+                SELECT status.status_uuid
+                FROM import_message_processing_status status
+                JOIN import_runs run ON run.import_run_uuid = status.import_run_uuid
+                LEFT JOIN import_progress progress
+                  ON progress.import_run_uuid = status.import_run_uuid
+                WHERE status.processing_mode = 'full_memory_reconstruction'
+                  AND status.status = 'queued'
+                  {import_filter}
+                  AND (status.run_after IS NULL OR status.run_after <= now())
+                  AND run.status = 'processing'
+                  AND COALESCE(progress.paused, FALSE) = FALSE
+                  AND COALESCE(progress.cancelled, FALSE) = FALSE
+                ORDER BY status.created_at, status.status_uuid
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+            )
+            UPDATE import_message_processing_status AS status
+            SET status = 'running',
+                lease_owner = ?,
+                lease_acquired_at = now(),
+                lease_expires_at = now() + (? * interval '1 second'),
+                heartbeat_at = now(),
+                attempt_started_at = now(),
+                last_transition_at = now(),
+                updated_at = now()
+            FROM candidates
+            WHERE status.status_uuid = candidates.status_uuid
+            RETURNING status.*
+            """,
+            tuple(params),
+        ).fetchall()
+        self.connection.commit()
+        return dict(rows[0]) if rows else None
+
+    def release_claim(self, status_uuid: str, worker_id: str) -> bool:
+        now = utc_now()
+        with self.connection:
+            return bool(
+                self.connection.execute(
+                    """
+                    UPDATE import_message_processing_status
+                    SET status = 'queued', lease_owner = NULL, lease_expires_at = NULL,
+                        updated_at = ?, last_transition_at = ?
+                    WHERE status_uuid = ? AND status = 'running' AND lease_owner = ?
+                    """,
+                    (now, now, status_uuid, worker_id),
+                ).rowcount
+            )
 
     def renew_lease(self, status_uuid: str, worker_id: str, lease_seconds: int) -> bool:
         now = utc_now()
@@ -901,9 +963,9 @@ def _failure_transition(
 ) -> tuple[Any, ...]:
     classification, retryable = _classify_error(error_class, sanitized)
     retry_count = int(status_row.get("retry_count") or 0)
-    max_attempts = 3
+    max_attempts = int(status_row.get("max_attempts") or 5)
     if retryable and retry_count + 1 < max_attempts:
-        delay = min(300, 5 * (2**retry_count))
+        delay = min(900, 10 * (2**retry_count))
         return (
             "queued",
             sanitized,
