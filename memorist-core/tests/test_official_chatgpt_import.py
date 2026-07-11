@@ -59,9 +59,10 @@ def test_official_zip_nested_and_standalone_json_use_same_adapter(
     assert root_zip_inspect["source_platform"] == "chatgpt"
     assert standalone_inspect["detected_format"] == "chatgpt_conversation_mapping"
     assert zip_inspect["detected_format"] == "chatgpt_conversation_mapping"
-    assert service.repository.list_artifacts(standalone_run["import_run_uuid"])[0][
-        "relative_path"
-    ] == "conversations.json"
+    assert (
+        service.repository.list_artifacts(standalone_run["import_run_uuid"])[0]["relative_path"]
+        == "conversations.json"
+    )
 
 
 def test_malformed_standalone_json_and_absolute_zip_member_fail_safely(
@@ -120,15 +121,16 @@ def test_chatgpt_tree_metadata_and_reasoning_quarantine(
     assert conversation["messages"]["assistant-active"]["branch_status"] == "active"
     assert conversation["messages"]["assistant-branch"]["branch_status"] == "branch"
     assert conversation["messages"]["assistant-active"]["model_name"] == "gpt-4.1"
-    assert conversation["messages"]["assistant-active"]["metadata"]["attachments"][0][
-        "name"
-    ] == "notes.txt"
+    assert (
+        conversation["messages"]["assistant-active"]["metadata"]["attachments"][0]["name"]
+        == "notes.txt"
+    )
     reasoning = conversation["messages"]["reasoning-only"]["content_parts"][0]
     assert reasoning["part_type"] == "provider_internal_reasoning"
     assert reasoning["quarantined"] is True
-    provider_parts = conversation["messages"]["reasoning-only"]["metadata"]["provider"][
-        "chatgpt"
-    ]["message"]["content"]["parts"]
+    provider_parts = conversation["messages"]["reasoning-only"]["metadata"]["provider"]["chatgpt"][
+        "message"
+    ]["content"]["parts"]
     assert provider_parts == [{"quarantined": True}]
 
 
@@ -179,9 +181,10 @@ def test_full_reconstruction_tracks_every_message_and_creates_memory_artifacts(
     paused = service.pause(run_uuid)
     assert paused["paused"] is True
     service.process_next_batch(run_uuid, batch_size=10)
-    assert sum(
-        item["status"] == "queued" for item in service.message_processing_statuses(run_uuid)
-    ) == 3
+    assert (
+        sum(item["status"] == "queued" for item in service.message_processing_statuses(run_uuid))
+        == 3
+    )
     service.resume(run_uuid)
 
     report = service.process_next_batch(run_uuid, batch_size=10)
@@ -241,10 +244,18 @@ def test_duplicate_reimport_records_already_processed_without_duplicate_messages
     assert committed["status"] == "fully_reconstructed"
     assert connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == message_count
     assert len(statuses) == 11
-    assert {item["status"] for item in statuses} == {"already_processed"}
-    assert {item["skip_reason"] for item in statuses} == {
-        "duplicate_message_already_mapped"
+    assert {item["status"] for item in statuses} == {"already_processed", "skipped"}
+    assert {item["skip_reason"] for item in statuses if item["status"] == "skipped"} == {
+        "empty_visible_text",
+        "null_source_message_node",
+        "provider_internal_reasoning_quarantined",
+        "unsupported_role_for_memory_processing",
     }
+    assert all(
+        item["memory_processing_run_uuid"]
+        for item in statuses
+        if item["status"] == "already_processed"
+    )
 
 
 def test_failed_processing_is_sanitized_and_retryable(
@@ -261,9 +272,7 @@ def test_failed_processing_is_sanitized_and_retryable(
     monkeypatch.setattr(MemoryWorkerPipeline, "process_message", fail_once)
     failed_report = service.process_next_batch(run_uuid, 1)
     failed = next(
-        item
-        for item in service.message_processing_statuses(run_uuid)
-        if item["status"] == "failed"
+        item for item in service.message_processing_statuses(run_uuid) if item["status"] == "failed"
     )
 
     assert failed_report["processing_jobs_failed"] == 1
@@ -328,9 +337,7 @@ def test_configured_memory_extraction_profile_is_recorded_for_import(
 
     assert dry_run_report["processing_model"]["model_profile_uuid"] == profile.model_profile_uuid
     assert dry_run_report["processing_model"]["deterministic_fallback"] is False
-    assert all(
-        item["model_profile_uuid"] == profile.model_profile_uuid for item in statuses
-    )
+    assert all(item["model_profile_uuid"] == profile.model_profile_uuid for item in statuses)
     assert prompt["provider_type"] == "openai_compatible_llm"
     assert prompt["model_name"] == "synthetic-import-model"
 
@@ -421,18 +428,10 @@ def _official_payload() -> list[dict[str, object]]:
                     "assistant",
                     ["Alternate response."],
                 ),
-                "system-1": node(
-                    "system-1", "assistant-active", [], "system", ["System metadata"]
-                ),
-                "tool-1": node(
-                    "tool-1", "assistant-active", [], "tool", ["Tool output"]
-                ),
-                "plugin-1": node(
-                    "plugin-1", "assistant-active", [], "plugin", ["Plugin output"]
-                ),
-                "code-1": node(
-                    "code-1", "assistant-active", [], "code", ["print('hello')"]
-                ),
+                "system-1": node("system-1", "assistant-active", [], "system", ["System metadata"]),
+                "tool-1": node("tool-1", "assistant-active", [], "tool", ["Tool output"]),
+                "plugin-1": node("plugin-1", "assistant-active", [], "plugin", ["Plugin output"]),
+                "code-1": node("code-1", "assistant-active", [], "code", ["print('hello')"]),
                 "empty-1": node("empty-1", "assistant-active", [], "user", [""]),
                 "missing-parts": {
                     "id": "missing-parts",

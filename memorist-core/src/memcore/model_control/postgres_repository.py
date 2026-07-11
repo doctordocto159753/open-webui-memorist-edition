@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from memcore.model_control.providers.base import ProviderHealth
 from memcore.model_control.repository import (
@@ -489,7 +489,7 @@ class PostgresModelControlRepository(ModelControlRepository):
             """,
             (acknowledged_at, acknowledged_at, request.model_profile_uuid),
         )
-        values["acknowledged_data_sent"] = request.acknowledged_data_sent
+        values["acknowledged_data_sent"] = cast(Any, request.acknowledged_data_sent)
         values.pop("acknowledged_data_sent_jsonb", None)
         return values
 

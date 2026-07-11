@@ -53,7 +53,6 @@ class ImportRepository:
             self.sqlite.insert("import_runs", run)
         return run
 
-
     def list_runs(self, limit: int = 25) -> list[dict[str, Any]]:
         bounded_limit = max(1, min(int(limit), 100))
         rows = self.connection.execute(

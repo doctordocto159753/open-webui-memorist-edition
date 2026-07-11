@@ -57,6 +57,9 @@ class MemoryProcessingRunRepository:
         prompt_version: str | None = None,
         model_profile_uuid: str | None = None,
         provider_type: str | None = None,
+        model_role: str | None = None,
+        model_name: str | None = None,
+        processing_identity_hash: str | None = None,
         input_hash: str | None = None,
     ) -> MemoryProcessingRun:
         existing = _fetch_one(
@@ -72,6 +75,9 @@ class MemoryProcessingRunRepository:
               AND COALESCE(prompt_version, '') = COALESCE(?, '')
               AND COALESCE(model_profile_uuid, '') = COALESCE(?, '')
               AND COALESCE(provider_type, '') = COALESCE(?, '')
+              AND COALESCE(model_role, '') = COALESCE(?, '')
+              AND COALESCE(model_name, '') = COALESCE(?, '')
+              AND COALESCE(processing_identity_hash, '') = COALESCE(?, '')
             """,
             (
                 message_uuid,
@@ -82,6 +88,9 @@ class MemoryProcessingRunRepository:
                 prompt_version,
                 model_profile_uuid,
                 provider_type,
+                model_role,
+                model_name,
+                processing_identity_hash,
             ),
         )
         if existing is not None:
@@ -94,8 +103,11 @@ class MemoryProcessingRunRepository:
             prompt_bundle_version=prompt_bundle_version,
             prompt_id=prompt_id,
             prompt_version=prompt_version,
+            model_role=model_role,
             model_profile_uuid=model_profile_uuid,
             provider_type=provider_type,
+            model_name=model_name,
+            processing_identity_hash=processing_identity_hash,
             input_content_hash=input_content_hash,
             input_hash=input_hash or input_content_hash,
         )

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 from memcore.model_control.providers import (
     DeterministicProvider,
@@ -10,9 +10,9 @@ from memcore.model_control.providers import (
     OllamaLLMProvider,
     OpenAICompatibleEmbeddingProvider,
     OpenAICompatibleLLMProvider,
+    ProviderHealth,
     UnavailableProvider,
 )
-from memcore.model_control.providers import ProviderHealth
 from memcore.models import ModelProfile, ModelRole
 
 
@@ -117,7 +117,7 @@ def _embedding_dimension(profile: ModelProfile | dict[str, object]) -> int | Non
     if value is None:
         return None
     try:
-        dimension = int(value)
+        dimension = int(cast(Any, value))
     except (TypeError, ValueError):
         return None
     return dimension if dimension > 0 else None

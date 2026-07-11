@@ -214,9 +214,7 @@ class ImportService:
             raise RepositoryError("Imported conversation not found")
         return dict(row)
 
-    def dry_run(
-        self, import_run_uuid: str, processing_mode: str | None = None
-    ) -> dict[str, Any]:
+    def dry_run(self, import_run_uuid: str, processing_mode: str | None = None) -> dict[str, Any]:
         run = self.repository.get_run(import_run_uuid)
         run_options = load_ijson(run["options_ijson"])
         selected_mode = processing_mode or str(run_options.get("processing_mode") or "none")
@@ -292,9 +290,7 @@ class ImportService:
                 eligible_new_messages if selected_mode == "extract_candidates" else 0
             ),
             "expected_memory_processing_jobs": (
-                eligible_new_messages
-                if selected_mode == "full_memory_reconstruction"
-                else 0
+                eligible_new_messages if selected_mode == "full_memory_reconstruction" else 0
             ),
             "processing_mode": selected_mode,
             "processing_priority": "low",
@@ -305,9 +301,7 @@ class ImportService:
                 else None
             ),
             "processing_model": model_target,
-            "memory_extraction_default_configured": bool(
-                model_target.get("model_profile_uuid")
-            ),
+            "memory_extraction_default_configured": bool(model_target.get("model_profile_uuid")),
             "import_reconstruction_default_required": False,
             "deterministic_fallback": bool(model_target.get("deterministic_fallback")),
             "graph_projection_enabled": bool(get_settings().enable_graph_projection),
@@ -350,9 +344,9 @@ class ImportService:
             phase=str(run["status"]),
             records_total=int(run["total_conversations"] or 0),
         )
-        processing = ImportMessageProcessor(
-            self.connection, get_settings()
-        ).processing_report(import_run_uuid)
+        processing = ImportMessageProcessor(self.connection, get_settings()).processing_report(
+            import_run_uuid
+        )
         return {
             "status": run["status"],
             **stored_progress,
@@ -560,27 +554,21 @@ class ImportService:
         )
         return self._finalize_commit_if_complete(import_run_uuid, run, processing_mode)
 
-    def process_next_batch(
-        self, import_run_uuid: str, batch_size: int = 25
-    ) -> dict[str, Any]:
-        return ImportMessageProcessor(
-            self.connection, get_settings()
-        ).process_next_batch(import_run_uuid, batch_size)
+    def process_next_batch(self, import_run_uuid: str, batch_size: int = 25) -> dict[str, Any]:
+        return ImportMessageProcessor(self.connection, get_settings()).process_next_batch(
+            import_run_uuid, batch_size
+        )
 
     def retry_failed_processing(self, import_run_uuid: str) -> dict[str, Any]:
-        return ImportMessageProcessor(
-            self.connection, get_settings()
-        ).retry_failed(import_run_uuid)
+        return ImportMessageProcessor(self.connection, get_settings()).retry_failed(import_run_uuid)
 
     def processing_report(self, import_run_uuid: str) -> dict[str, Any]:
-        return ImportMessageProcessor(
-            self.connection, get_settings()
-        ).processing_report(import_run_uuid)
+        return ImportMessageProcessor(self.connection, get_settings()).processing_report(
+            import_run_uuid
+        )
 
     def message_processing_statuses(self, import_run_uuid: str) -> list[dict[str, Any]]:
-        return ImportMessageProcessor(
-            self.connection, get_settings()
-        ).statuses(import_run_uuid)
+        return ImportMessageProcessor(self.connection, get_settings()).statuses(import_run_uuid)
 
     def cancel(self, import_run_uuid: str) -> dict[str, Any]:
         self.repository.update_run(import_run_uuid, {"status": "cancelled"})
@@ -707,25 +695,77 @@ class ImportService:
     ) -> None:
         conversation = normalize_conversation(payload)
         processor = ImportMessageProcessor(self.connection, get_settings())
-        for source_message_id in conversation.messages:
+        session_row = self.connection.execute(
+            """
+            SELECT im.target_uuid
+            FROM import_mappings im
+            JOIN sessions s ON s.session_uuid = im.target_uuid
+            WHERE im.source_platform = ? AND im.source_object_type = 'conversation'
+              AND COALESCE(im.source_object_id, im.source_fingerprint) = COALESCE(?, ?)
+            LIMIT 1
+            """,
+            (
+                conversation.source_platform,
+                conversation.source_conversation_id,
+                canonical_hash_ijson(strip_none(payload)),
+            ),
+        ).fetchone()
+        if session_row is None:
+            return
+        session_uuid = str(session_row["target_uuid"])
+        for source_message_id, message in conversation.messages.items():
             mapping = self.connection.execute(
                 """
                 SELECT im.target_uuid, m.session_uuid
                 FROM import_mappings im
                 LEFT JOIN messages m ON m.message_uuid = im.target_uuid
-                WHERE source_platform = ? AND source_object_type = 'message'
-                  AND source_object_id = ?
+                WHERE im.source_platform = ? AND im.source_object_type = 'message'
+                  AND im.source_object_id = ?
                 LIMIT 1
                 """,
                 (conversation.source_platform, source_message_id),
             ).fetchone()
-            processor.record_duplicate(
+            target_message_uuid = (
+                str(mapping["target_uuid"]) if mapping and mapping["session_uuid"] else None
+            )
+            if target_message_uuid is None:
+                created = MessageRepository(self.connection).create_message(
+                    session_uuid,
+                    role=_message_role(message.role.value),
+                    creator_type=_creator_type(message.role.value),
+                    raw_text=visible_text(message.content_parts),
+                    snapshot={
+                        "import_run_uuid": import_run_uuid,
+                        "source_platform": conversation.source_platform,
+                        "source_conversation_id": conversation.source_conversation_id,
+                        "provider_timestamp": message.created_at,
+                        "branch_status": message.branch_status,
+                        "source_message_id": source_message_id,
+                        "metadata": message.metadata,
+                        "imported_content_is_untrusted": True,
+                        "mapping_repair": True,
+                    },
+                    job_priority=30,
+                    enqueue_text_unitization=False,
+                )
+                target_message_uuid = created.message_uuid
+                self.repository.add_mapping(
+                    import_run_uuid,
+                    conversation.source_platform,
+                    "message",
+                    canonical_hash_ijson(strip_none(message.model_dump(mode="json"))),
+                    "message",
+                    target_message_uuid,
+                    source_object_id=message.source_message_id,
+                )
+            processor.schedule(
                 import_run_uuid=import_run_uuid,
                 source_platform=conversation.source_platform,
                 source_conversation_id=conversation.source_conversation_id,
                 source_message_id=source_message_id,
-                target_session_uuid=(str(mapping["session_uuid"]) if mapping else None),
-                target_message_uuid=str(mapping["target_uuid"]) if mapping else None,
+                target_session_uuid=session_uuid,
+                target_message_uuid=target_message_uuid,
+                message=message,
                 processing_mode=processing_mode,
                 model_target=model_target,
             )

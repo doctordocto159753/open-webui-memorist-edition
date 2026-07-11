@@ -133,8 +133,11 @@ class MemoryProcessingRun(DomainModel):
     prompt_bundle_version: str | None = None
     prompt_id: str | None = None
     prompt_version: str | None = None
+    model_role: str | None = None
     model_profile_uuid: str | None = None
     provider_type: str | None = None
+    model_name: str | None = None
+    processing_identity_hash: str | None = None
     input_content_hash: str
     input_hash: str | None = None
     output_hash: str | None = None

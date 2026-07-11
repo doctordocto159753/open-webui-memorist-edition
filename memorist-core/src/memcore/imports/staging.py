@@ -104,6 +104,7 @@ def sanitize_upload_filename(filename: str | None) -> str:
     name = re.sub(r"[^A-Za-z0-9._ -]", "_", name).strip(" .")
     return name[:180] or "upload"
 
+
 def stage_trusted_upload_file(
     source_path: str | Path,
     staging_root: str | Path,
