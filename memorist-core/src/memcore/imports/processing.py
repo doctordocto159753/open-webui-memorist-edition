@@ -7,7 +7,7 @@ import threading
 import uuid
 from collections import Counter
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from memcore.config import Settings
 from memcore.imports.reconstruction.content_parts import visible_text
@@ -15,6 +15,7 @@ from memcore.imports.reconstruction.models import ImportedMessageNode
 from memcore.memory_worker.identity import build_processing_identity
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
 from memcore.memory_worker.postgres.pipeline import PostgresMemoryWorkerPipeline
+from memcore.model_control.postgres_repository import PostgresModelControlRepository
 from memcore.model_control.repository import ModelControlRepository
 from memcore.model_control.schemas import UsageEventCreate
 from memcore.model_control.security import sanitize_error_message
@@ -29,7 +30,7 @@ class ImportMessageProcessor:
     def __init__(self, connection: sqlite3.Connection, settings: Settings) -> None:
         self.connection = connection
         self.settings = settings
-        self.model_control = ModelControlRepository(connection)
+        self.model_control = _model_control_repository(connection, settings)
 
     def validate_mode(self, processing_mode: str) -> str:
         if processing_mode not in PROCESSING_MODES:
@@ -313,20 +314,17 @@ class ImportMessageProcessor:
         ).fetchone()
         if progress is not None and (progress["paused"] or progress["cancelled"]):
             return self.processing_report(import_run_uuid)
-        pending: list[dict[str, Any]] = []
         for _ in range(max(1, limit)):
-            claimed = self.claim_next(_worker_id(), 900, import_run_uuid)
-            if claimed is None:
-                break
-            pending.append(claimed)
-        for row in pending:
             control = self.connection.execute(
                 "SELECT paused, cancelled FROM import_progress WHERE import_run_uuid = ?",
                 (import_run_uuid,),
             ).fetchone()
             if control is not None and (control["paused"] or control["cancelled"]):
                 break
-            self._process_one(dict(row))
+            claimed = self.claim_next(_worker_id(), 900, import_run_uuid)
+            if claimed is None:
+                break
+            self._process_one(dict(claimed))
         self.finalize_if_terminal(import_run_uuid)
         return self.processing_report(import_run_uuid)
 
@@ -674,14 +672,7 @@ class ImportMessageProcessor:
                 str(status_row["target_message_uuid"]),
                 import_run_uuid=str(status_row["import_run_uuid"]),
                 job_uuid=str(job_uuid) if job_uuid else None,
-                model_target={
-                    "model_role": (
-                        status_row.get("model_role") or ModelRole.IMPORT_RECONSTRUCTION.value
-                    ),
-                    "model_profile_uuid": status_row.get("model_profile_uuid"),
-                    "provider_type": status_row.get("provider_type") or "deterministic",
-                    "model_name": status_row.get("model_name") or "deterministic_extraction",
-                },
+                model_target=self._hydrate_execution_model_target(status_row),
             )
             processing_run_uuid = str(result["processing_run_uuid"])
             execution = self.connection.execute(
@@ -734,9 +725,12 @@ class ImportMessageProcessor:
             run = self.connection.execute(
                 """
                 SELECT processing_run_uuid FROM memory_processing_runs
-                WHERE message_uuid = ? ORDER BY created_at DESC LIMIT 1
+                WHERE message_uuid = ?
+                  AND COALESCE(processing_identity_hash, '') = COALESCE(?, '')
+                  AND status IN ('pending', 'running')
+                ORDER BY created_at DESC LIMIT 1
                 """,
-                (status_row["target_message_uuid"],),
+                (status_row["target_message_uuid"], status_row.get("processing_identity_hash")),
             ).fetchone()
             if run is not None:
                 with self.connection:
@@ -745,8 +739,15 @@ class ImportMessageProcessor:
                         UPDATE memory_processing_runs
                         SET status = 'failed', completed_at = ?, error_text = ?
                         WHERE processing_run_uuid = ?
+                          AND COALESCE(processing_identity_hash, '') = COALESCE(?, '')
+                          AND status IN ('pending', 'running')
                         """,
-                        (finished, sanitized, run["processing_run_uuid"]),
+                        (
+                            finished,
+                            sanitized,
+                            run["processing_run_uuid"],
+                            status_row.get("processing_identity_hash"),
+                        ),
                     )
             self.model_control.record_usage_event(
                 UsageEventCreate(
@@ -787,6 +788,55 @@ class ImportMessageProcessor:
                         """,
                         (sanitized, sanitized, finished, job_uuid),
                     )
+
+    def _hydrate_execution_model_target(self, status_row: dict[str, Any]) -> dict[str, Any]:
+        """Resolve the complete provider profile at execution without persisting secrets."""
+        operational_role = str(
+            status_row.get("model_role") or ModelRole.IMPORT_RECONSTRUCTION.value
+        )
+        profile_uuid = status_row.get("model_profile_uuid")
+        if not profile_uuid:
+            return {
+                "model_role": operational_role,
+                "model_profile_uuid": None,
+                "provider_type": "deterministic",
+                "model_name": "deterministic_extraction",
+            }
+        profile = self.model_control.get_profile(str(profile_uuid))
+        if profile is None:
+            raise RuntimeError("scheduled model profile is no longer available")
+        if str(profile.model_profile_uuid) != str(profile_uuid):
+            raise RuntimeError("scheduled model profile identity mismatch")
+        if not profile.is_enabled:
+            raise RuntimeError("scheduled model profile is disabled")
+        if profile.role.value != operational_role:
+            raise RuntimeError("scheduled model profile role is not compatible")
+        provider_type = str(profile.provider_type or profile.provider or "")
+        if provider_type not in {"deterministic", "openai_compatible", "openai_compatible_llm"}:
+            raise RuntimeError("scheduled model profile provider type is unsupported")
+        if not profile.model_name:
+            raise RuntimeError("scheduled model profile model name is required")
+        if provider_type in {"openai_compatible", "openai_compatible_llm"}:
+            if not profile.endpoint_url:
+                raise RuntimeError("scheduled model profile endpoint is required")
+            # Older OpenAI-compatible profiles may not declare response-mode capability.
+            # Preserve the scheduled identity and let the provider choose the safest
+            # supported request shape instead of silently falling back to another model.
+            if profile.secret_strategy in {"env_var", "environment_reference"}:
+                if not profile.secret_env_var_name:
+                    raise RuntimeError(
+                        "scheduled model profile secret environment variable is required"
+                    )
+                if not os.getenv(profile.secret_env_var_name):
+                    raise RuntimeError(
+                        "scheduled model profile secret environment variable is not set"
+                    )
+            if profile.requires_privacy_acknowledgement and not profile.privacy_acknowledged_at:
+                raise RuntimeError("scheduled model profile requires privacy acknowledgement")
+        hydrated = cast(dict[str, Any], profile.model_dump(mode="json"))
+        hydrated["model_role"] = operational_role
+        hydrated["provider_type"] = provider_type
+        return hydrated
 
     def _upsert_status(self, **values: Any) -> dict[str, Any]:
         existing = self.connection.execute(
@@ -977,3 +1027,9 @@ def _failure_transition(
             finished,
         )
     return ("failed", sanitized, classification, 0, None, finished, finished, finished)
+
+
+def _model_control_repository(connection: Any, settings: Settings) -> Any:
+    if settings.runtime_profile == "full" and settings.canonical_store == "postgres":
+        return PostgresModelControlRepository(connection)
+    return ModelControlRepository(connection)

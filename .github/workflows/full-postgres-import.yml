@@ -1,16 +1,34 @@
-name: Full PostgreSQL Import Runtime
+name: PR3 Import Runtime Certification
 
 on:
   pull_request:
-    branches: [codex/integrate-and-validate-pr3-completion-tracks]
+    branches: [main]
   push:
-    branches: [codex/integrate-and-validate-pr3-completion-tracks, codex/pr3c-worker-postgres-e2e]
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
-  full-postgres-import:
-    name: Full PostgreSQL Import E2E
+  pr3-lite-import-integration:
+    name: PR3 Lite Import Integration
     runs-on: ubuntu-latest
-    services:
+    env:
+      MEMORIST_RUNTIME_PROFILE: lite
+      MEMORIST_CANONICAL_STORE: sqlite
+      MEMORIST_IMPORT_RECONSTRUCTION_WORKER_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Lite import integration
+        working-directory: memorist-core
+        run: uv run pytest tests/test_official_chatgpt_import.py -q
+
+  pr3-full-postgres-import-e2e:
+    name: PR3 Full PostgreSQL Import E2E
+    runs-on: ubuntu-latest
+    services: &postgres_service
       postgres:
         image: postgres:16
         env:
@@ -24,7 +42,7 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-    env:
+    env: &postgres_env
       MEMORIST_RUNTIME_PROFILE: full
       MEMORIST_CANONICAL_STORE: postgres
       MEMORIST_POSTGRES_DSN: postgresql://memorist:memorist@localhost:5432/memorist_test
@@ -32,29 +50,95 @@ jobs:
       MEMORIST_ALLOW_FULL_GRAPH_DEGRADED: "true"
       MEMORIST_HOT_SCHEDULER: in_memory
       MEMORIST_IMPORT_RECONSTRUCTION_WORKER_ENABLED: "true"
+      MEMORIST_IMPORT_TEST_KEY: ci-secret-value
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         working-directory: memorist-core
         run: uv sync --all-extras
-      - name: Full PostgreSQL Import E2E
+      - name: Full PostgreSQL import E2E
         working-directory: memorist-core
         run: uv run pytest tests/test_full_postgres_import_runtime.py -q
-      - name: Import Worker Concurrency
+
+  pr3-remote-provider-execution:
+    name: PR3 Remote Provider Execution
+    runs-on: ubuntu-latest
+    services: *postgres_service
+    env: *postgres_env
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
         working-directory: memorist-core
-        run: uv run pytest -k "import and (worker or postgres or concurrency or restart)" -q
-      - name: Import Security
+        run: uv sync --all-extras
+      - name: Remote provider execution
         working-directory: memorist-core
-        run: uv run mypy src/memcore/imports src/memcore/memory_worker/postgres
-      - name: Ruff touched runtime/test files
+        run: uv run pytest -k "import and (provider or postgres)" -q
+
+  pr3-worker-lifecycle-and-concurrency:
+    name: PR3 Worker Lifecycle and Concurrency
+    runs-on: ubuntu-latest
+    services: *postgres_service
+    env: *postgres_env
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
         working-directory: memorist-core
-        run: uv run ruff check src/memcore/imports tests/test_full_postgres_import_runtime.py
-      - name: Upload pytest cache and logs
-        if: failure()
-        uses: actions/upload-artifact@v4
+        run: uv sync --all-extras
+      - name: Worker lifecycle and concurrency
+        working-directory: memorist-core
+        run: uv run pytest -k "import and (worker or concurrency or restart)" -q
+
+  pr3-import-security:
+    name: PR3 Import Security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Import security tests
+        working-directory: memorist-core
+        run: uv run pytest -k "import and security" -q
+
+  pr3-frontend-workflow:
+    name: PR3 Frontend Workflow
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          name: full-postgres-import-artifacts
-          path: |
-            memorist-core/.pytest_cache
-            memorist-core/.mypy_cache
+          node-version: 22
+          cache: npm
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Frontend tests
+        run: npm test
+      - name: Frontend typecheck
+        run: npm run typecheck
+      - name: Frontend lint
+        run: npm run lint
+
+  pr3-type-and-lint:
+    name: PR3 Type and Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Ruff
+        working-directory: memorist-core
+        run: uv run ruff check src tests
+      - name: Format check
+        working-directory: memorist-core
+        run: uv run ruff format --check src tests
+      - name: Mypy
+        working-directory: memorist-core
+        run: uv run mypy src tests
+      - name: Diff check
+        run: git diff --check

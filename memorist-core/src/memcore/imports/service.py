@@ -14,6 +14,7 @@ from memcore.imports.reconstruction.graph import branch_count
 from memcore.imports.reconstruction.normalizer import normalize_conversation
 from memcore.imports.repositories import ImportRepository, strip_none
 from memcore.imports.staging import sha256_file, stage_import_source, stage_trusted_upload_file
+from memcore.memory_worker.identity import build_processing_identity
 from memcore.models import CreatorType, MessageRole, new_uuid, utc_now
 from memcore.repositories import (
     MessageRepository,
@@ -228,6 +229,12 @@ class ImportService:
         expected_messages = 0
         eligible_messages = 0
         eligible_new_messages = 0
+        mapped_messages_requiring_processing = 0
+        already_processed_message_count = 0
+        active_processing_message_count = 0
+        previous_identity_changed_message_count = 0
+        previous_failed_message_count = 0
+        mapping_repair_message_count = 0
         skip_reasons: dict[str, int] = {}
         duplicate_messages = 0
         for row in conversations:
@@ -256,6 +263,27 @@ class ImportService:
                     eligible_messages += 1
                     if decision == "new":
                         eligible_new_messages += 1
+                    else:
+                        classification = self._dry_run_mapped_processing_classification(
+                            source_platform=str(payload["source_platform"]),
+                            source_message_id=message.source_message_id or "",
+                            message=message,
+                            model_target=model_target,
+                        )
+                        if classification == "mapped_message_requires_processing":
+                            mapped_messages_requiring_processing += 1
+                        elif classification == "exact_identity_already_processed":
+                            already_processed_message_count += 1
+                        elif classification == "exact_identity_active":
+                            active_processing_message_count += 1
+                        elif classification == "previous_identity_differs":
+                            previous_identity_changed_message_count += 1
+                            mapped_messages_requiring_processing += 1
+                        elif classification == "previous_processing_failed":
+                            previous_failed_message_count += 1
+                            mapped_messages_requiring_processing += 1
+                        elif classification == "mapping_repair_required":
+                            mapping_repair_message_count += 1
                 else:
                     reason_key = reason or "unknown_ineligible_reason"
                     skip_reasons[reason_key] = skip_reasons.get(reason_key, 0) + 1
@@ -286,11 +314,20 @@ class ImportService:
                 "messages": expected_new_messages,
                 "import_mappings": expected_new_sessions + expected_new_messages,
             },
+            "new_messages_requiring_processing": eligible_new_messages,
+            "mapped_messages_requiring_processing": mapped_messages_requiring_processing,
+            "already_processed_message_count": already_processed_message_count,
+            "active_processing_message_count": active_processing_message_count,
+            "previous_identity_changed_message_count": previous_identity_changed_message_count,
+            "previous_failed_message_count": previous_failed_message_count,
+            "mapping_repair_message_count": mapping_repair_message_count,
             "expected_text_unitization_jobs": (
                 eligible_new_messages if selected_mode == "extract_candidates" else 0
             ),
             "expected_memory_processing_jobs": (
-                eligible_new_messages if selected_mode == "full_memory_reconstruction" else 0
+                eligible_new_messages + mapped_messages_requiring_processing
+                if selected_mode == "full_memory_reconstruction"
+                else 0
             ),
             "processing_mode": selected_mode,
             "processing_priority": "low",
@@ -769,6 +806,79 @@ class ImportService:
                 processing_mode=processing_mode,
                 model_target=model_target,
             )
+
+    def _dry_run_mapped_processing_classification(
+        self,
+        *,
+        source_platform: str,
+        source_message_id: str,
+        message: Any,
+        model_target: dict[str, Any],
+    ) -> str:
+        mapping = self.connection.execute(
+            """
+            SELECT im.target_uuid, m.raw_text
+            FROM import_mappings im
+            LEFT JOIN messages m ON m.message_uuid = im.target_uuid
+            WHERE im.source_platform = ? AND im.source_object_type = 'message'
+              AND im.source_object_id = ?
+            LIMIT 1
+            """,
+            (source_platform, source_message_id),
+        ).fetchone()
+        if mapping is None or mapping["raw_text"] is None:
+            return "mapping_repair_required"
+        target_message_uuid = str(mapping["target_uuid"])
+        text = visible_text(message.content_parts)
+        identity = build_processing_identity(
+            target_message_uuid=target_message_uuid,
+            raw_text=text,
+            model_target=model_target,
+            model_role=str(model_target.get("role") or "import_reconstruction"),
+        )
+        exact_succeeded = self.connection.execute(
+            """
+            SELECT 1 FROM memory_processing_runs
+            WHERE message_uuid = ? AND status = 'succeeded'
+              AND COALESCE(processing_identity_hash, '') = COALESCE(?, '')
+            LIMIT 1
+            """,
+            (target_message_uuid, identity.identity_hash),
+        ).fetchone()
+        if exact_succeeded is not None:
+            return "exact_identity_already_processed"
+        exact_active = self.connection.execute(
+            """
+            SELECT 1 FROM import_message_processing_status
+            WHERE target_message_uuid = ? AND status IN ('queued', 'running')
+              AND COALESCE(processing_identity_hash, '') = COALESCE(?, '')
+            LIMIT 1
+            """,
+            (target_message_uuid, identity.identity_hash),
+        ).fetchone()
+        if exact_active is not None:
+            return "exact_identity_active"
+        failed = self.connection.execute(
+            """
+            SELECT 1 FROM memory_processing_runs
+            WHERE message_uuid = ? AND status = 'failed'
+            LIMIT 1
+            """,
+            (target_message_uuid,),
+        ).fetchone()
+        if failed is not None:
+            return "previous_processing_failed"
+        previous = self.connection.execute(
+            """
+            SELECT 1 FROM memory_processing_runs
+            WHERE message_uuid = ?
+            LIMIT 1
+            """,
+            (target_message_uuid,),
+        ).fetchone()
+        if previous is not None:
+            return "previous_identity_differs"
+        return "mapped_message_requires_processing"
 
     def _conversation_count(self, import_run_uuid: str) -> int:
         return int(

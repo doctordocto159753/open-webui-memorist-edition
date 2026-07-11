@@ -18,6 +18,7 @@ from memcore.api.routes_openwebui import router as openwebui_router
 from memcore.api.routes_retrieval import router as retrieval_router
 from memcore.api.routes_scheduler import router as scheduler_router
 from memcore.config import get_settings
+from memcore.imports.runtime import initialize_import_storage
 from memcore.imports.worker import ImportReconstructionWorkerService
 from memcore.observability.logging import configure_logging
 from memcore.storage.runtime import initialize_storage
@@ -40,6 +41,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.log_level)
     initialize_storage(settings)
+    initialize_import_storage(settings)
 
     app = FastAPI(
         title="memorist-core",
