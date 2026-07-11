@@ -234,9 +234,9 @@ export type ImportProcessingReport = {
   processing_jobs_queued?: number; processing_jobs_pending?: number; processing_jobs_running?: number;
   processing_jobs_succeeded?: number; processing_jobs_failed?: number; processing_jobs_skipped?: number;
   processing_jobs_already_processed?: number; failed_messages?: number; skipped_messages?: number;
-  memory_candidates?: number; memory_versions?: number; prompt_executions?: number; usage_events?: number;
-  input_tokens?: number; output_tokens?: number; graph_projection_events?: number;
-  skip_reasons?: Record<string, number>; sanitized_last_error?: string | null; final_status?: string | null; terminal?: boolean;
+  memory_candidates_created?: number; memory_versions_created?: number; prompt_execution_runs?: number; model_usage_events?: number;
+  input_tokens?: number; output_tokens?: number; graph_projection_outbox_events?: number;
+  skip_reasons?: Record<string, number>; last_error_sanitized?: string | null; final_status?: string | null; terminal?: boolean;
 };
 
 export type ImportUploadOptions = {
