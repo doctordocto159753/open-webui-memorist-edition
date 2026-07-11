@@ -15,6 +15,7 @@ from memcore.heritage.package import (
     inspect_heritage,
     verify_heritage,
 )
+from memcore.imports.runtime import import_connection
 from memcore.imports.security import (
     MAX_COMPRESSED_BYTES,
     MAX_EXPANDED_BYTES,
@@ -24,7 +25,6 @@ from memcore.imports.security import (
 from memcore.imports.service import ImportService
 from memcore.imports.staging import sanitize_upload_filename
 from memcore.repositories.domain import RepositoryError
-from memcore.imports.runtime import import_connection
 from memcore.storage.write_commands.heritage_commands import restore_heritage_via_actor
 from memcore.storage.write_commands.import_commands import (
     commit_import_via_actor,
@@ -33,14 +33,6 @@ from memcore.storage.write_commands.import_commands import (
 from memcore.validators.ijson import load_ijson
 
 router = APIRouter(prefix="/memcore", tags=["imports"])
-
-
-class ImportUploadRequest(BaseModel):
-    archive_path: str
-    mode: str = "inspect"
-    options: dict[str, Any] = {}
-    target_workspace_uuid: str | None = None
-    target_project_uuid: str | None = None
 
 
 class ImportReconstructRequest(BaseModel):
@@ -69,7 +61,6 @@ class HeritageRestoreRequest(BaseModel):
     package_path: str
     db_path: str
     dry_run: bool = True
-
 
 
 @router.get("/imports", response_model=None)
@@ -132,20 +123,6 @@ def upload_import_file(
         finally:
             if temp_path.exists():
                 temp_path.unlink()
-
-
-@router.post("/imports/upload", response_model=None)
-def upload_import(request: ImportUploadRequest) -> dict[str, Any]:
-    with _connection() as connection:
-        return _guard(
-            lambda: ImportService(connection, get_settings().object_store_path).upload(
-                request.archive_path,
-                request.mode,
-                request.options,
-                request.target_workspace_uuid,
-                request.target_project_uuid,
-            )
-        )
 
 
 @router.post("/imports/{import_run_uuid}/inspect", response_model=None)
@@ -283,9 +260,7 @@ def import_progress(import_run_uuid: str) -> dict[str, Any]:
 
 
 @router.post("/imports/{import_run_uuid}/process", response_model=None)
-def import_process(
-    import_run_uuid: str, request: ImportProcessRequest
-) -> dict[str, Any]:
+def import_process(import_run_uuid: str, request: ImportProcessRequest) -> dict[str, Any]:
     settings = get_settings()
     if settings.runtime_profile == "full" and settings.canonical_store == "postgres":
         with _connection() as connection:
@@ -318,9 +293,9 @@ def import_retry_failed(import_run_uuid: str) -> dict[str, Any]:
 def import_processing_report(import_run_uuid: str) -> dict[str, Any]:
     with _connection() as connection:
         return _guard(
-            lambda: ImportService(
-                connection, get_settings().object_store_path
-            ).processing_report(import_run_uuid)
+            lambda: ImportService(connection, get_settings().object_store_path).processing_report(
+                import_run_uuid
+            )
         )
 
 

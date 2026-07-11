@@ -101,6 +101,17 @@ def test_browser_endpoint_does_not_accept_archive_path_json(client: TestClient) 
     assert response.status_code == 422
 
 
+def test_public_server_path_upload_route_is_not_mounted(client: TestClient, tmp_path: Path) -> None:
+    server_file = tmp_path / "server-export.json"
+    server_file.write_text('{"items": []}')
+    response = client.post(
+        "/memcore/imports/upload",
+        json={"archive_path": str(server_file), "mode": "inspect"},
+    )
+    assert response.status_code in {404, 405}
+    assert client.get("/memcore/imports").json()["items"] == []
+
+
 def test_malformed_json_stages_but_inspect_reports_safe_error(client: TestClient) -> None:
     response = client.post(
         "/memcore/imports/upload-file",
@@ -133,10 +144,13 @@ def test_dry_run_report_endpoint_returns_parsed_contract(client: TestClient) -> 
     run_uuid = upload.json()["import_run_uuid"]
     assert client.post(f"/memcore/imports/{run_uuid}/inspect").status_code == 200
     assert client.post(f"/memcore/imports/{run_uuid}/reconstruct", json={}).status_code == 200
-    assert client.post(
-        f"/memcore/imports/{run_uuid}/dry-run",
-        json={"processing_mode": "full_memory_reconstruction"},
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/memcore/imports/{run_uuid}/dry-run",
+            json={"processing_mode": "full_memory_reconstruction"},
+        ).status_code
+        == 200
+    )
 
     response = client.get(f"/memcore/imports/{run_uuid}/dry-run-report")
 

@@ -109,7 +109,13 @@ class PostgresMemoryWorkerPipeline:
             }
             if profile and provider_type in {"openai_compatible", "openai_compatible_llm"}:
                 output, prompt_execution_uuid, usage = self._run_model_prompt(
-                    profile, input_payload, message, model_name, provider_type
+                    profile,
+                    input_payload,
+                    message,
+                    model_name,
+                    provider_type,
+                    import_run_uuid,
+                    job_uuid,
                 )
             else:
                 output = self._deterministic_jakobson_output(units)
@@ -124,6 +130,8 @@ class PostgresMemoryWorkerPipeline:
                         latency_ms=0,
                         input_tokens=0,
                         output_tokens=0,
+                        import_run_uuid=import_run_uuid,
+                        job_uuid=job_uuid,
                     ),
                     {"input_tokens": 0, "output_tokens": 0, "latency_ms": 0},
                 )
@@ -328,6 +336,8 @@ class PostgresMemoryWorkerPipeline:
         message: dict[str, Any],
         model_name: str,
         provider_type: str,
+        import_run_uuid: str | None,
+        job_uuid: str | None,
     ) -> tuple[dict[str, Any], str, dict[str, int]]:
         prompt = render_prompt(
             JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID, PROMPT_PACK_VERSION, input_payload
@@ -350,6 +360,8 @@ class PostgresMemoryWorkerPipeline:
             latency_ms=response.latency_ms,
             input_tokens=response.input_tokens,
             output_tokens=response.output_tokens,
+            import_run_uuid=import_run_uuid,
+            job_uuid=job_uuid,
         )
         return (
             response.output,
@@ -373,39 +385,46 @@ class PostgresMemoryWorkerPipeline:
         latency_ms: int,
         input_tokens: int,
         output_tokens: int,
+        import_run_uuid: str | None,
+        job_uuid: str | None,
     ) -> str:
         validate_prompt_execution(
             JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID, PROMPT_PACK_VERSION, input_payload, output
         )
         prompt_execution_uuid = new_uuid()
+        row = {
+            "prompt_execution_uuid": prompt_execution_uuid,
+            "prompt_id": JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
+            "prompt_version": PROMPT_PACK_VERSION,
+            "stage": "jakobson_sentence_analysis",
+            "model_profile_uuid": model_profile_uuid,
+            "model_role": "import_reconstruction",
+            "provider_type": provider_type,
+            "model_name": model_name,
+            "workspace_uuid": message.get("workspace_uuid"),
+            "project_uuid": message.get("project_uuid"),
+            "session_uuid": message["session_uuid"],
+            "message_uuid": message["message_uuid"],
+            "import_run_uuid": import_run_uuid,
+            "job_uuid": job_uuid,
+            "input_hash": canonical_hash_ijson(input_payload),
+            "output_hash": canonical_hash_ijson(output),
+            "raw_output_ijson": json.dumps(output, sort_keys=True),
+            "validated_output_ijson": json.dumps(output, sort_keys=True),
+            "status": "ok",
+            "warnings_ijson": json.dumps(output.get("warnings", []), sort_keys=True),
+            "error_sanitized": None,
+            "latency_ms": latency_ms,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "created_at": utc_now(),
+            "schema_version": 1,
+        }
+        columns = list(row)
+        placeholders = ",".join(["%s"] * len(columns))
         self.connection.execute(
-            """
-            INSERT INTO prompt_execution_runs (prompt_execution_uuid, prompt_id, prompt_version, stage, model_profile_uuid, model_role, provider_type,
-              model_name, workspace_uuid, project_uuid, session_uuid, message_uuid, input_hash, output_hash, raw_output_ijson, validated_output_ijson,
-              status, warnings_ijson, error_sanitized, latency_ms, input_tokens, output_tokens, created_at, schema_version)
-            VALUES (%s,%s,%s,'jakobson_sentence_analysis',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'ok',%s,NULL,%s,%s,%s,%s,1)
-            """,
-            (
-                prompt_execution_uuid,
-                JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-                PROMPT_PACK_VERSION,
-                model_profile_uuid,
-                provider_type,
-                model_name,
-                message.get("workspace_uuid"),
-                message.get("project_uuid"),
-                message["session_uuid"],
-                message["message_uuid"],
-                canonical_hash_ijson(input_payload),
-                canonical_hash_ijson(output),
-                json.dumps(output, sort_keys=True),
-                json.dumps(output, sort_keys=True),
-                json.dumps(output.get("warnings", []), sort_keys=True),
-                latency_ms,
-                input_tokens,
-                output_tokens,
-                utc_now(),
-            ),
+            f"INSERT INTO prompt_execution_runs ({', '.join(columns)}) VALUES ({placeholders})",
+            tuple(row[column] for column in columns),
         )
         return prompt_execution_uuid
 
