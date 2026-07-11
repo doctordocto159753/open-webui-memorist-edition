@@ -71,6 +71,14 @@ class Settings(BaseSettings):
     import_max_write_queue_depth: int = Field(default=500, ge=1)
     import_low_priority: bool = True
     import_reconstruction_default: str = "off"
+    import_reconstruction_worker_enabled: bool = True
+    import_reconstruction_concurrency: int = Field(default=2, ge=1)
+    import_reconstruction_poll_seconds: int = Field(default=2, gt=0)
+    import_reconstruction_lease_seconds: int = Field(default=300, ge=1)
+    import_reconstruction_heartbeat_seconds: int = Field(default=60, ge=1)
+    import_reconstruction_max_attempts: int = Field(default=5, ge=1)
+    import_reconstruction_retry_base_seconds: int = Field(default=10, ge=1)
+    import_reconstruction_retry_max_seconds: int = Field(default=900, ge=1)
     fail_open: bool = True
 
     @field_validator("falkordb_url", mode="before")
@@ -141,6 +149,19 @@ class Settings(BaseSettings):
             and not self.postgres_dsn
         ):
             raise ValueError("postgres_dsn is required when canonical_store=postgres")
+        if self.import_reconstruction_heartbeat_seconds >= self.import_reconstruction_lease_seconds:
+            raise ValueError(
+                "import_reconstruction_heartbeat_seconds must be less than "
+                "import_reconstruction_lease_seconds"
+            )
+        if (
+            self.import_reconstruction_retry_base_seconds
+            > self.import_reconstruction_retry_max_seconds
+        ):
+            raise ValueError(
+                "import_reconstruction_retry_base_seconds must be <= "
+                "import_reconstruction_retry_max_seconds"
+            )
         return self
 
     def profile_warnings(self) -> list[str]:
@@ -226,6 +247,17 @@ def get_effective_config(settings: Settings) -> dict[str, Any]:
             "max_write_queue_depth": settings.import_max_write_queue_depth,
             "low_priority": settings.import_low_priority,
             "reconstruction_default": settings.import_reconstruction_default,
+            "reconstruction_worker": {
+                "enabled": settings.import_reconstruction_worker_enabled,
+                "deployment_model": "fastapi_lifespan_background_service",
+                "concurrency": settings.import_reconstruction_concurrency,
+                "poll_seconds": settings.import_reconstruction_poll_seconds,
+                "lease_seconds": settings.import_reconstruction_lease_seconds,
+                "heartbeat_seconds": settings.import_reconstruction_heartbeat_seconds,
+                "max_attempts": settings.import_reconstruction_max_attempts,
+                "retry_base_seconds": settings.import_reconstruction_retry_base_seconds,
+                "retry_max_seconds": settings.import_reconstruction_retry_max_seconds,
+            },
         },
         "scheduler": {
             "backend": settings.hot_scheduler,

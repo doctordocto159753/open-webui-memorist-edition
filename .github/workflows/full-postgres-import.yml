@@ -2,11 +2,13 @@ name: Full PostgreSQL Import Runtime
 
 on:
   pull_request:
+    branches: [codex/integrate-and-validate-pr3-completion-tracks]
   push:
-    branches: [main]
+    branches: [codex/integrate-and-validate-pr3-completion-tracks, codex/pr3c-worker-postgres-e2e]
 
 jobs:
   full-postgres-import:
+    name: Full PostgreSQL Import E2E
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -27,12 +29,32 @@ jobs:
       MEMORIST_CANONICAL_STORE: postgres
       MEMORIST_POSTGRES_DSN: postgresql://memorist:memorist@localhost:5432/memorist_test
       MEMORIST_OBJECT_STORE_PATH: /tmp/memorist-objects
+      MEMORIST_ALLOW_FULL_GRAPH_DEGRADED: "true"
+      MEMORIST_HOT_SCHEDULER: in_memory
+      MEMORIST_IMPORT_RECONSTRUCTION_WORKER_ENABLED: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - name: Run PostgreSQL import integration tests
+      - name: Install dependencies
         working-directory: memorist-core
-        run: uv run pytest tests/test_full_postgres_import_runtime.py
-      - name: Type check PostgreSQL import/runtime files
+        run: uv sync --all-extras
+      - name: Full PostgreSQL Import E2E
         working-directory: memorist-core
-        run: uv run mypy src/memcore/imports/runtime.py src/memcore/imports/processing.py src/memcore/memory_worker/postgres/pipeline.py
+        run: uv run pytest tests/test_full_postgres_import_runtime.py -q
+      - name: Import Worker Concurrency
+        working-directory: memorist-core
+        run: uv run pytest -k "import and (worker or postgres or concurrency or restart)" -q
+      - name: Import Security
+        working-directory: memorist-core
+        run: uv run mypy src/memcore/imports src/memcore/memory_worker/postgres
+      - name: Ruff touched runtime/test files
+        working-directory: memorist-core
+        run: uv run ruff check src/memcore/imports tests/test_full_postgres_import_runtime.py
+      - name: Upload pytest cache and logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-postgres-import-artifacts
+          path: |
+            memorist-core/.pytest_cache
+            memorist-core/.mypy_cache
