@@ -101,6 +101,15 @@ def test_browser_endpoint_does_not_accept_archive_path_json(client: TestClient) 
     assert response.status_code == 422
 
 
+def test_obsolete_server_path_upload_route_is_removed(client: TestClient) -> None:
+    response = client.post(
+        "/memcore/imports/upload",
+        json={"archive_path": "/etc/passwd"},
+    )
+    assert response.status_code in {404, 405}
+    assert client.get("/memcore/imports").json()["items"] == []
+
+
 def test_malformed_json_stages_but_inspect_reports_safe_error(client: TestClient) -> None:
     response = client.post(
         "/memcore/imports/upload-file",

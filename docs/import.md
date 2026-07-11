@@ -86,7 +86,8 @@ reported. Prompt executions and model usage events carry the import run and job 
 
 The existing flow remains compatible:
 
-- `POST /memcore/imports/upload`
+- `POST /memcore/imports/upload-file` as browser multipart form data. The
+  browser-facing API never accepts an arbitrary server filesystem path.
 - `POST /memcore/imports/{import_run_uuid}/inspect`
 - `POST /memcore/imports/{import_run_uuid}/reconstruct`
 - `POST /memcore/imports/{import_run_uuid}/dry-run`
@@ -104,8 +105,10 @@ Full reconstruction adds:
 - `GET /memcore/imports/{import_run_uuid}/processing-report`.
 - `GET /memcore/imports/{import_run_uuid}/messages/processing-status`.
 
-Commit only schedules durable low-priority jobs; it does not create an unbounded request.
-Call the bounded process endpoint from the import worker/UI until progress is terminal.
+Commit schedules durable low-priority jobs and the runtime import worker drains them in
+bounded batches. The process endpoint remains available for operator-driven recovery and
+smoke tests, but browser flows should rely on multipart upload plus automatic background
+processing until progress is terminal.
 An import using full reconstruction is `processing` after commit and becomes
 `fully_reconstructed` only when every message has a terminal state. Failed messages are
 terminal for reporting but can be re-queued without re-importing the archive.
@@ -129,10 +132,10 @@ processing, progress, and retry.
 
 ## UI status
 
-This repository does not currently ship a complete import UI. The API and CLI are the
-truthful primary interfaces for this release; a future UI should expose inspect,
-reconstruct, dry-run approval, processing-mode selection, progress, reports, and failed
-message retry without changing these contracts.
+The browser workflow uses multipart upload, inspect, reconstruct, dry-run approval,
+processing-mode selection, progress restoration after refresh, reports, pause/resume/cancel,
+and failed-message retry. It must use `/memcore/imports/upload-file`; the old server-path
+upload API is not part of the browser contract.
 
 ## Runtime parity: Lite SQLite and Full PostgreSQL
 
