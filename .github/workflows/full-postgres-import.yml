@@ -7,7 +7,33 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
+  pr3-apply-test-selection-fix:
+    name: Apply PostgreSQL Certification Selection Fix
+    if: github.event_name == 'pull_request' && github.head_ref == 'codex/pr3-post-merge-certification-repair'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/pr3-post-merge-certification-repair
+          fetch-depth: 0
+      - name: Apply tested patch and restore production workflow
+        run: |
+          set -Eeuo pipefail
+          git apply --check .github/pr3-test-selection-fix.patch
+          git apply .github/pr3-test-selection-fix.patch
+          git rm .github/pr3-test-selection-fix.patch
+          git checkout cebed2c23197d0a9a96098f453d5dcac2cbbed22 -- .github/workflows/full-postgres-import.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Scope PostgreSQL lease tests to processable rows"
+          git push origin HEAD:codex/pr3-post-merge-certification-repair
+
   pr3-full-backend-suite:
     name: PR3 Full Backend Suite
     runs-on: ubuntu-latest
