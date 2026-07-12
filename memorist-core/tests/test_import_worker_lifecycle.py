@@ -212,6 +212,70 @@ def test_pause_blocks_claims_and_resume_continues_automatically(
     assert final["status"] == "fully_reconstructed"
 
 
+def test_cancelled_lite_run_does_not_claim_or_churn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path)
+    run_uuid = _commit(settings, tmp_path, monkeypatch)
+    with import_connection(settings) as connection:
+        ImportService(connection, settings.object_store_path).cancel(run_uuid)
+        before_statuses = [
+            dict(row)
+            for row in connection.execute(
+                """
+                SELECT status_uuid, status, lease_owner, processing_attempt_uuid,
+                       updated_at, last_transition_at
+                FROM import_message_processing_status
+                WHERE import_run_uuid = ?
+                ORDER BY created_at, status_uuid
+                """,
+                (run_uuid,),
+            ).fetchall()
+        ]
+    original_claim = ImportMessageProcessor.claim_next
+    claim_calls = {"count": 0}
+    claim_lock = threading.Lock()
+
+    def counted_claim(
+        self: ImportMessageProcessor,
+        worker_id: str,
+        lease_seconds: int,
+        import_run_uuid: str | None = None,
+    ) -> dict[str, Any] | None:
+        with claim_lock:
+            claim_calls["count"] += 1
+        return original_claim(self, worker_id, lease_seconds, import_run_uuid)
+
+    monkeypatch.setattr(ImportMessageProcessor, "claim_next", counted_claim)
+    worker = ImportReconstructionWorkerService(settings)
+    worker.start()
+    try:
+        time.sleep(2.2)
+    finally:
+        worker.stop()
+    with import_connection(settings) as connection:
+        run = ImportService(connection, settings.object_store_path).repository.get_run(run_uuid)
+        after_statuses = [
+            dict(row)
+            for row in connection.execute(
+                """
+                SELECT status_uuid, status, lease_owner, processing_attempt_uuid,
+                       updated_at, last_transition_at
+                FROM import_message_processing_status
+                WHERE import_run_uuid = ?
+                ORDER BY created_at, status_uuid
+                """,
+                (run_uuid,),
+            ).fetchall()
+        ]
+    assert run["status"] == "cancelled"
+    assert claim_calls["count"] <= 6
+    assert before_statuses == after_statuses
+    assert not any(item["status"] == "running" for item in after_statuses)
+    assert not any(item["lease_owner"] for item in after_statuses)
+    assert not any(item["processing_attempt_uuid"] for item in after_statuses)
+
+
 def test_concurrent_operator_requests_use_distinct_request_owners_and_shared_fencing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
