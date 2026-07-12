@@ -1061,6 +1061,7 @@ class ImportMessageProcessor:
             return
         except Exception as error:
             self.connection.rollback()
+            publication_fence_locked = False
             sanitized = (
                 sanitize_error_message(f"{type(error).__name__}: {error}") or type(error).__name__
             )
