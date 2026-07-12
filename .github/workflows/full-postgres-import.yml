@@ -7,44 +7,26 @@ on:
     branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: write
-  issues: write
-  pull-requests: write
-
 jobs:
-  pr3-apply-independent-review-fix:
-    name: Apply Independent Review Fix
-    if: github.event_name == 'pull_request' && github.head_ref == 'codex/pr3-post-merge-certification-repair'
+  pr3-full-backend-suite:
+    name: PR3 Full Backend Suite
     runs-on: ubuntu-latest
+    env:
+      MEMORIST_RUNTIME_PROFILE: lite
+      MEMORIST_CANONICAL_STORE: sqlite
+      MEMORIST_IMPORT_RECONSTRUCTION_WORKER_ENABLED: "true"
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: codex/pr3-post-merge-certification-repair
-          fetch-depth: 0
-      - name: Apply exact reviewed patch as a fast-forward commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -Eeuo pipefail
-          stage=assemble
-          trap 'code=$?; gh pr comment 36 --body "Patch transport failed at stage: ${stage} (exit ${code})." || true; exit ${code}' ERR
-          cat .github/pr3-review-patch.* > /tmp/pr3.patch.gz.b64
-          test "$(wc -c < /tmp/pr3.patch.gz.b64)" -eq 30408
-          echo "9285a57f3a35bc3bd7ed3c00a2c49635cb48fed37df2ef217233f2e96f836092  /tmp/pr3.patch.gz.b64" | sha256sum --check
-          stage=decode
-          base64 --decode /tmp/pr3.patch.gz.b64 | gzip -d > /tmp/pr3.patch
-          echo "269b1240790ccc1f501afafd7086c0750d18bc4c5ac71f9aae0553ecab0d2d9f  /tmp/pr3.patch" | sha256sum --check
-          stage=apply
-          git apply --binary /tmp/pr3.patch
-          git diff --check
-          stage=commit
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Make import result commits lease-fenced and atomic"
-          stage=push
-          git push origin HEAD:codex/pr3-post-merge-certification-repair
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Complete backend suite
+        working-directory: memorist-core
+        run: uv run pytest --junitxml=backend-results.xml
+      - name: Reject zero collected backend tests
+        working-directory: memorist-core
+        run: uv run python -c "import xml.etree.ElementTree as E; r=E.parse('backend-results.xml').getroot(); assert list(r.iter('testcase'))"
 
   pr3-lite-import-integration:
     name: PR3 Lite Import Integration
