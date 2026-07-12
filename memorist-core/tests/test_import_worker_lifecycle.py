@@ -4,7 +4,9 @@ import json
 import sqlite3
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zipfile import ZipFile
@@ -418,6 +420,73 @@ def test_slow_import_inference_does_not_block_live_capture(
     release.set()
     thread.join(timeout=8)
     assert not thread.is_alive()
+
+
+def test_publication_can_finish_after_remaining_lease_expires(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path, concurrency=1)
+    run_uuid = _commit(settings, tmp_path, monkeypatch, messages=1)
+    original = MemoryWorkerPipeline.process_message
+
+    def slow_publication(
+        self: MemoryWorkerPipeline,
+        message_uuid: str,
+        import_run_uuid: str | None = None,
+        job_uuid: str | None = None,
+        model_target: dict[str, object] | None = None,
+        lease_fence: Callable[[], None] | None = None,
+        prepared_inference: PreparedJakobsonInference | None = None,
+    ) -> dict[str, object]:
+        time.sleep(1.2)
+        return original(
+            self,
+            message_uuid,
+            import_run_uuid,
+            job_uuid,
+            model_target,
+            lease_fence,
+            prepared_inference,
+        )
+
+    monkeypatch.setattr(MemoryWorkerPipeline, "process_message", slow_publication)
+    with import_connection(settings) as connection:
+        processor = ImportMessageProcessor(connection, settings)
+        claimed = processor.claim_next(
+            "slow-publication",
+            settings.import_reconstruction_lease_seconds,
+            run_uuid,
+        )
+        assert claimed is not None
+        near_expiry = (
+            (datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=1))
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        with connection:
+            connection.execute(
+                """
+                UPDATE import_message_processing_status
+                SET lease_expires_at = ?
+                WHERE status_uuid = ?
+                """,
+                (near_expiry, claimed["status_uuid"]),
+            )
+        processor._process_one(claimed)
+        status = connection.execute(
+            """
+            SELECT status, processing_stage, lease_owner, lease_expires_at
+            FROM import_message_processing_status
+            WHERE status_uuid = ?
+            """,
+            (claimed["status_uuid"],),
+        ).fetchone()
+    assert dict(status) == {
+        "status": "succeeded",
+        "processing_stage": "complete",
+        "lease_owner": None,
+        "lease_expires_at": None,
+    }
 
 
 def test_lost_lease_owner_cannot_process_or_overwrite_reclaimed_item(

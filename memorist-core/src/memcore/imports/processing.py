@@ -539,6 +539,7 @@ class ImportMessageProcessor:
         worker_id: str,
         attempt_uuid: str | None,
         lock: bool = False,
+        require_unexpired: bool = True,
     ) -> bool:
         if not attempt_uuid:
             return False
@@ -550,6 +551,10 @@ class ImportMessageProcessor:
             and self.settings.canonical_store == "postgres"
             else ""
         )
+        expiry_clause = "AND status.lease_expires_at >= ?" if require_unexpired else ""
+        params: list[Any] = [status_uuid, worker_id, attempt_uuid]
+        if require_unexpired:
+            params.append(now)
         row = self.connection.execute(
             f"""
             SELECT status.status_uuid
@@ -562,12 +567,12 @@ class ImportMessageProcessor:
               AND status.lease_owner = ?
               AND status.processing_attempt_uuid = ?
               AND status.lease_expires_at IS NOT NULL
-              AND status.lease_expires_at >= ?
+              {expiry_clause}
               AND run.status = 'processing'
               AND COALESCE(progress.cancelled, 0) = 0
             {lock_clause}
             """,
-            (status_uuid, worker_id, attempt_uuid, now),
+            tuple(params),
         ).fetchone()
         return row is not None
 
@@ -895,15 +900,20 @@ class ImportMessageProcessor:
             if status_row.get("processing_attempt_uuid")
             else None
         )
+        publication_fence_locked = False
 
         def require_fence(*, lock: bool = False) -> None:
+            nonlocal publication_fence_locked
             if not self.lease_fence_intact(
                 status_uuid=str(status_row["status_uuid"]),
                 worker_id=worker_id,
                 attempt_uuid=attempt_uuid,
                 lock=lock,
+                require_unexpired=not publication_fence_locked,
             ):
                 raise ImportLeaseLost("lease_lost")
+            if lock:
+                publication_fence_locked = True
 
         try:
             require_fence()
@@ -1010,7 +1020,7 @@ class ImportMessageProcessor:
                         lease_expires_at = NULL, last_transition_at = ?
                     WHERE status_uuid = ? AND status = 'running' AND lease_owner = ?
                       AND processing_attempt_uuid = ?
-                      AND lease_expires_at IS NOT NULL AND lease_expires_at >= ?
+                      AND lease_expires_at IS NOT NULL
                       AND EXISTS (
                         SELECT 1 FROM import_runs run
                         WHERE run.import_run_uuid = owned.import_run_uuid
@@ -1031,7 +1041,6 @@ class ImportMessageProcessor:
                         status_row["status_uuid"],
                         worker_id,
                         attempt_uuid,
-                        finished,
                     ),
                 ).rowcount
                 if not success_updated:
@@ -1069,7 +1078,7 @@ class ImportMessageProcessor:
                             last_transition_at = ?
                         WHERE status_uuid = ? AND status = 'running' AND lease_owner = ?
                           AND processing_attempt_uuid = ?
-                          AND lease_expires_at IS NOT NULL AND lease_expires_at >= ?
+                          AND lease_expires_at IS NOT NULL
                           AND EXISTS (
                             SELECT 1 FROM import_runs run
                             WHERE run.import_run_uuid = owned.import_run_uuid
@@ -1086,7 +1095,6 @@ class ImportMessageProcessor:
                             status_row["status_uuid"],
                             worker_id,
                             attempt_uuid,
-                            finished,
                         ),
                     ).rowcount
                     if not failure_updated:
