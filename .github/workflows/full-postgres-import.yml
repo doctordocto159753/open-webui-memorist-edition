@@ -9,6 +9,8 @@ on:
 
 permissions:
   contents: write
+  issues: write
+  pull-requests: write
 
 jobs:
   pr3-apply-test-selection-fix:
@@ -20,18 +22,120 @@ jobs:
         with:
           ref: codex/pr3-post-merge-certification-repair
           fetch-depth: 0
-      - name: Apply tested patch and restore production workflow
+      - name: Apply tested edits and restore production workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
-          git apply --check .github/pr3-test-selection-fix.patch
-          git apply .github/pr3-test-selection-fix.patch
+          stage=edit
+          trap 'code=$?; gh pr comment 36 --body "PostgreSQL test-selection transport failed at stage: ${stage} (exit ${code})." || true; exit ${code}' ERR
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("memorist-core/tests/test_full_postgres_import_runtime.py")
+          source = path.read_text()
+          replacements = [
+              (
+                  """            FROM import_message_processing_status
+                      WHERE import_run_uuid = ?
+                      \"\"\",
+                      (run_uuid,),
+                  ).fetchone()
+          """,
+                  """            FROM import_message_processing_status
+                      WHERE import_run_uuid = ? AND processing_stage = 'memory_extraction'
+                      \"\"\",
+                      (run_uuid,),
+                  ).fetchone()
+          """,
+              ),
+              (
+                  """    assert dict(after) == dict(before)
+              assert [row[\"status\"] for row in statuses] == [\"succeeded\", \"cancelled\"]
+              assert all(row[\"lease_owner\"] is None for row in statuses)
+          """,
+                  """    assert dict(after) == dict(before)
+              processable_statuses = {row[\"status\"] for row in statuses if row[\"status\"] != \"skipped\"}
+              assert processable_statuses == {\"succeeded\", \"cancelled\"}
+              assert all(row[\"lease_owner\"] is None for row in statuses)
+          """,
+              ),
+              (
+                  """            SELECT status, retry_count, run_after, job_uuid
+                      FROM import_message_processing_status WHERE import_run_uuid = ?
+          """,
+                  """            SELECT status_uuid, status, retry_count, run_after, job_uuid
+                      FROM import_message_processing_status
+                      WHERE import_run_uuid = ? AND processing_stage = 'memory_extraction'
+          """,
+              ),
+              (
+                  """            UPDATE import_message_processing_status
+                      SET run_after = now() - interval '1 second' WHERE import_run_uuid = ?
+                      \"\"\",
+                      (run_uuid,),
+          """,
+                  """            UPDATE import_message_processing_status
+                      SET run_after = now() - interval '1 second' WHERE status_uuid = ?
+                      \"\"\",
+                      (status[\"status_uuid\"],),
+          """,
+              ),
+              (
+                  """            SELECT status, retry_count FROM import_message_processing_status
+                      WHERE import_run_uuid = ?
+                      \"\"\",
+                      (run_uuid,),
+                  ).fetchone()
+                  final_job = connection.execute(
+          """,
+                  """            SELECT status, retry_count FROM import_message_processing_status
+                      WHERE status_uuid = ?
+                      \"\"\",
+                      (status[\"status_uuid\"],),
+                  ).fetchone()
+                  final_job = connection.execute(
+          """,
+              ),
+              (
+                  """            SELECT status FROM import_message_processing_status
+                      WHERE import_run_uuid = ?
+                      \"\"\",
+                      (run_uuid,),
+                  ).fetchall()
+              assert duplicates == []
+          """,
+                  """            SELECT status FROM import_message_processing_status
+                      WHERE import_run_uuid = ? AND processing_stage = 'memory_extraction'
+                      \"\"\",
+                      (run_uuid,),
+                  ).fetchall()
+              assert duplicates == []
+          """,
+              ),
+          ]
+          for old, new in replacements:
+              count = source.count(old)
+              if count != 1:
+                  raise RuntimeError(f"expected exactly one replacement target, found {count}")
+              source = source.replace(old, new, 1)
+          path.write_text(source)
+          PY
+          stage=cleanup
           git rm .github/pr3-test-selection-fix.patch
-          git checkout cebed2c23197d0a9a96098f453d5dcac2cbbed22 -- .github/workflows/full-postgres-import.yml
+          git show cebed2c23197d0a9a96098f453d5dcac2cbbed22:.github/workflows/full-postgres-import.yml > .github/workflows/full-postgres-import.yml
+          stage=validate
+          cd memorist-core
+          uv run ruff check tests/test_full_postgres_import_runtime.py
+          uv run ruff format --check tests/test_full_postgres_import_runtime.py
+          cd ..
+          git diff --check
+          stage=commit
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git diff --cached --check
           git commit -m "Scope PostgreSQL lease tests to processable rows"
+          stage=push
           git push origin HEAD:codex/pr3-post-merge-certification-repair
 
   pr3-full-backend-suite:
