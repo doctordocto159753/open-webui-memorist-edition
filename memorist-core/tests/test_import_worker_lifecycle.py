@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -180,10 +181,11 @@ def test_slow_provider_heartbeat_prevents_a_second_worker_from_stealing(
         import_run_uuid: str | None = None,
         job_uuid: str | None = None,
         model_target: dict[str, object] | None = None,
+        lease_fence: Callable[[], None] | None = None,
     ) -> dict[str, object]:
         entered.set()
         time.sleep(2.2)
-        return original(self, message_uuid, import_run_uuid, job_uuid, model_target)
+        return original(self, message_uuid, import_run_uuid, job_uuid, model_target, lease_fence)
 
     monkeypatch.setattr(MemoryWorkerPipeline, "process_message", slow_process)
     worker = ImportReconstructionWorkerService(settings)
@@ -251,6 +253,103 @@ def test_lost_lease_owner_cannot_process_or_overwrite_reclaimed_item(
     assert job["status"] == "pending"
 
 
+def test_midflight_lost_lease_discards_late_attempt_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path, concurrency=1)
+    run_uuid = _commit(settings, tmp_path, monkeypatch, messages=1)
+    original = MemoryWorkerPipeline.process_message
+    entered = threading.Event()
+    release_late_attempt = threading.Event()
+    calls = {"count": 0}
+
+    def fenced_process(
+        self: MemoryWorkerPipeline,
+        message_uuid: str,
+        import_run_uuid: str | None = None,
+        job_uuid: str | None = None,
+        model_target: dict[str, object] | None = None,
+        lease_fence: Callable[[], None] | None = None,
+    ) -> dict[str, object]:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            entered.set()
+            assert release_late_attempt.wait(timeout=5)
+            assert callable(lease_fence)
+            lease_fence()
+            raise AssertionError("late attempt passed the lease fence")
+        return original(self, message_uuid, import_run_uuid, job_uuid, model_target, lease_fence)
+
+    monkeypatch.setattr(MemoryWorkerPipeline, "process_message", fenced_process)
+    with import_connection(settings) as connection:
+        claimed_a = ImportMessageProcessor(connection, settings).claim_next("worker-a", 1, run_uuid)
+    assert claimed_a is not None
+
+    def run_late_attempt() -> None:
+        with import_connection(settings) as connection:
+            ImportMessageProcessor(connection, settings)._process_one(dict(claimed_a))
+
+    late_thread = threading.Thread(target=run_late_attempt, daemon=True)
+    late_thread.start()
+    assert entered.wait(timeout=3)
+
+    with import_connection(settings) as connection:
+        connection.execute(
+            """
+            UPDATE import_message_processing_status
+            SET lease_expires_at = '2000-01-01T00:00:00'
+            WHERE status_uuid = ?
+            """,
+            (claimed_a["status_uuid"],),
+        )
+        connection.commit()
+        assert ImportMessageProcessor(connection, settings).recover_expired_leases() == 1
+
+    worker_b = ImportReconstructionWorkerService(settings)
+    assert worker_b.process_one_claimed_item(worker_id="worker-b", import_run_uuid=run_uuid)
+    release_late_attempt.set()
+    late_thread.join(timeout=5)
+    assert not late_thread.is_alive()
+
+    with import_connection(settings) as connection:
+        counts = connection.execute(
+            """
+            SELECT
+              (SELECT COUNT(*) FROM import_message_processing_status
+               WHERE import_run_uuid = ? AND status = 'succeeded') AS statuses,
+              (SELECT COUNT(*) FROM memory_processing_runs WHERE status = 'succeeded') AS runs,
+              (SELECT COUNT(*) FROM prompt_execution_runs WHERE import_run_uuid = ?) AS prompts,
+              (SELECT COUNT(*) FROM model_usage_events WHERE import_run_uuid = ?
+               AND stage = 'jakobson_sentence_analysis') AS usage_events,
+              (SELECT COUNT(*) FROM jakobson_analysis_runs) AS jakobson_runs,
+              (SELECT COUNT(*) FROM memory_candidates) AS candidates,
+              (SELECT COUNT(*) FROM memory_versions) AS memory_versions,
+              (SELECT COUNT(*) FROM graph_projection_outbox) AS outbox_events
+            """,
+            (run_uuid, run_uuid, run_uuid),
+        ).fetchone()
+        status = connection.execute(
+            """
+            SELECT lease_owner, processing_attempt_uuid
+            FROM import_message_processing_status
+            WHERE import_run_uuid = ?
+            """,
+            (run_uuid,),
+        ).fetchone()
+    assert dict(counts) == {
+        "statuses": 1,
+        "runs": 1,
+        "prompts": 1,
+        "usage_events": 1,
+        "jakobson_runs": 1,
+        "candidates": 0,
+        "memory_versions": 0,
+        "outbox_events": 1,
+    }
+    assert status["lease_owner"] is None
+    assert status["processing_attempt_uuid"] is None
+
+
 def test_restart_recovery_finishes_remaining_queue_without_duplicates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -265,10 +364,11 @@ def test_restart_recovery_finishes_remaining_queue_without_duplicates(
         import_run_uuid: str | None = None,
         job_uuid: str | None = None,
         model_target: dict[str, object] | None = None,
+        lease_fence: Callable[[], None] | None = None,
     ) -> dict[str, object]:
         entered.set()
         time.sleep(0.3)
-        return original(self, message_uuid, import_run_uuid, job_uuid, model_target)
+        return original(self, message_uuid, import_run_uuid, job_uuid, model_target, lease_fence)
 
     monkeypatch.setattr(MemoryWorkerPipeline, "process_message", first_slow)
     first = ImportReconstructionWorkerService(settings)
@@ -322,3 +422,43 @@ def test_cancel_revokes_claim_and_late_worker_cannot_overwrite_state(
         ).fetchone()
     assert dict(status) == {"status": "cancelled", "lease_owner": None}
     assert job["status"] == "cancelled"
+
+
+def test_processing_report_uses_latest_error_by_updated_at(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path, concurrency=1)
+    run_uuid = _commit(settings, tmp_path, monkeypatch, messages=2)
+    with import_connection(settings) as connection:
+        statuses = connection.execute(
+            """
+            SELECT status_uuid FROM import_message_processing_status
+            WHERE import_run_uuid = ?
+            ORDER BY created_at, status_uuid
+            """,
+            (run_uuid,),
+        ).fetchall()
+        assert len(statuses) >= 2
+        earlier = statuses[0]["status_uuid"]
+        later = statuses[1]["status_uuid"]
+        with connection:
+            connection.execute(
+                """
+                UPDATE import_message_processing_status
+                SET status = 'failed', error_sanitized = 'later-created failed first',
+                    updated_at = '2026-01-01T00:00:00'
+                WHERE status_uuid = ?
+                """,
+                (later,),
+            )
+            connection.execute(
+                """
+                UPDATE import_message_processing_status
+                SET status = 'failed', error_sanitized = 'earlier-created failed afterward',
+                    updated_at = '2026-01-01T00:00:01'
+                WHERE status_uuid = ?
+                """,
+                (earlier,),
+            )
+        report = ImportMessageProcessor(connection, settings).processing_report(run_uuid)
+    assert report["last_error_sanitized"] == "earlier-created failed afterward"

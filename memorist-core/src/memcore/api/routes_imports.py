@@ -304,7 +304,6 @@ def import_process(import_run_uuid: str, request: ImportProcessRequest) -> dict[
     settings = get_settings()
     return _guard(
         lambda: ImportReconstructionWorkerService(settings).process_next_batch(
-            worker_id=f"api:{import_run_uuid}",
             import_run_uuid=import_run_uuid,
             limit=request.batch_size,
         )

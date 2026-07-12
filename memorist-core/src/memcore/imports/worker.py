@@ -150,7 +150,7 @@ class ImportReconstructionWorkerService:
                 or (progress is not None and (progress["paused"] or progress["cancelled"]))
             ):
                 processor.release_claim(claimed["status_uuid"], owner)
-                return True
+                return False
             lease_heartbeat = (
                 _Heartbeat(self.settings, claimed["status_uuid"], owner, self.config)
                 if heartbeat
@@ -175,14 +175,14 @@ class ImportReconstructionWorkerService:
     def process_next_batch(
         self,
         *,
-        worker_id: str,
         import_run_uuid: str,
         limit: int,
+        worker_id: str | None = None,
     ) -> dict[str, Any]:
         """Run up to ``limit`` items through the one-item execution primitive."""
         for _ in range(max(1, limit)):
             if not self.process_one_claimed_item(
-                worker_id=worker_id,
+                worker_id=worker_id or _worker_id("api"),
                 import_run_uuid=import_run_uuid,
             ):
                 break
@@ -228,5 +228,5 @@ class _Heartbeat:
                 self._stop.set()
 
 
-def _worker_id(index: int) -> str:
+def _worker_id(index: int | str) -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{index}:{uuid.uuid4()}"

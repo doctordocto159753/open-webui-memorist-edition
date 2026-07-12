@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # ruff: noqa: E501
 import json
+from collections.abc import Callable
 from hashlib import sha256
 from time import perf_counter
 from types import SimpleNamespace
@@ -40,6 +41,7 @@ class PostgresMemoryWorkerPipeline:
         import_run_uuid: str | None = None,
         job_uuid: str | None = None,
         model_target: dict[str, Any] | None = None,
+        lease_fence: Callable[[], None] | None = None,
     ) -> dict[str, object]:
         started = perf_counter()
         message = self.connection.execute(
@@ -117,9 +119,12 @@ class PostgresMemoryWorkerPipeline:
                     model_role,
                     import_run_uuid,
                     job_uuid,
+                    lease_fence,
                 )
             else:
                 output = self._deterministic_jakobson_output(units)
+                if lease_fence is not None:
+                    lease_fence()
                 prompt_execution_uuid, usage = (
                     self._record_prompt_execution(
                         input_payload=input_payload,
@@ -350,6 +355,7 @@ class PostgresMemoryWorkerPipeline:
         model_role: str,
         import_run_uuid: str | None,
         job_uuid: str | None,
+        lease_fence: Callable[[], None] | None = None,
     ) -> tuple[dict[str, Any], str, dict[str, int]]:
         prompt = render_prompt(
             JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID, PROMPT_PACK_VERSION, input_payload
@@ -362,6 +368,8 @@ class PostgresMemoryWorkerPipeline:
             input_payload,
             response.output,
         )
+        if lease_fence is not None:
+            lease_fence()
         prompt_execution_uuid = self._record_prompt_execution(
             input_payload=input_payload,
             output=response.output,

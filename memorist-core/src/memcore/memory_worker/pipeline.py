@@ -1,4 +1,5 @@
 import sqlite3
+from collections.abc import Callable
 from time import perf_counter
 
 from memcore.config import Settings
@@ -69,6 +70,7 @@ class MemoryWorkerPipeline:
         import_run_uuid: str | None = None,
         job_uuid: str | None = None,
         model_target: dict[str, object] | None = None,
+        lease_fence: Callable[[], None] | None = None,
     ) -> dict[str, object]:
         message = self.messages.get_message(message_uuid)
         if message is None:
@@ -165,6 +167,7 @@ class MemoryWorkerPipeline:
             message_uuid,
             import_run_uuid=import_run_uuid,
             job_uuid=job_uuid,
+            lease_fence=lease_fence,
         )
         ModelControlRepository(self.connection).record_usage_event(
             UsageEventCreate(

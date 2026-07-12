@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Callable
 from time import perf_counter
 from typing import Any, Protocol
 
@@ -157,6 +158,7 @@ class JakobsonAnalysisService:
         message_uuid: str,
         import_run_uuid: str | None = None,
         job_uuid: str | None = None,
+        lease_fence: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         message = self.messages.get_message(message_uuid)
         if message is None:
@@ -183,6 +185,8 @@ class JakobsonAnalysisService:
         try:
             output = self.provider.analyze(units, raw_text)
             validate_jakobson_provider_output(output)
+            if lease_fence is not None:
+                lease_fence()
             run.output_hash = canonical_hash_ijson(output)
             annotations, warnings = map_output_to_annotations(
                 analysis_run_uuid=run.analysis_run_uuid,

@@ -636,7 +636,8 @@ class ImportService:
                 """
                 UPDATE import_message_processing_status
                 SET status = 'cancelled', lease_owner = NULL, lease_expires_at = NULL,
-                    finished_at = ?, updated_at = ?, last_transition_at = ?
+                    processing_attempt_uuid = NULL, finished_at = ?,
+                    updated_at = ?, last_transition_at = ?
                 WHERE import_run_uuid = ? AND status IN ('queued', 'running')
                 """,
                 (now, now, now, import_run_uuid),
