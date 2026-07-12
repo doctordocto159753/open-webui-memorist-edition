@@ -1,0 +1,102 @@
+name: PR3 Post-Merge PostgreSQL Certification
+
+on:
+  push:
+    branches: [codex/pr3-post-merge-certification-repair]
+
+permissions:
+  contents: write
+
+jobs:
+  postgres-e2e:
+    name: PR3 Post-Merge PostgreSQL E2E
+    runs-on: ubuntu-latest
+    services: &postgres_service
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: memorist
+          POSTGRES_PASSWORD: memorist
+          POSTGRES_DB: memorist_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U memorist -d memorist_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env: &postgres_env
+      MEMORIST_RUNTIME_PROFILE: full
+      MEMORIST_CANONICAL_STORE: postgres
+      MEMORIST_POSTGRES_DSN: postgresql://memorist:memorist@localhost:5432/memorist_test
+      MEMORIST_OBJECT_STORE_PATH: /tmp/memorist-objects
+      MEMORIST_ALLOW_FULL_GRAPH_DEGRADED: "true"
+      MEMORIST_HOT_SCHEDULER: in_memory
+      MEMORIST_IMPORT_RECONSTRUCTION_WORKER_ENABLED: "true"
+      MEMORIST_IMPORT_TEST_KEY: ci-secret-value
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Run PostgreSQL E2E without skips
+        working-directory: memorist-core
+        run: |
+          set -o pipefail
+          uv run pytest tests/test_full_postgres_import_runtime.py -vv --tb=long --junitxml=postgres-postmerge.xml 2>&1 | tee postgres-postmerge.txt
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('postgres-postmerge.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr3-postmerge-postgres-${{ github.sha }}
+          path: |
+            memorist-core/postgres-postmerge.xml
+            memorist-core/postgres-postmerge.txt
+          if-no-files-found: error
+
+  worker-concurrency:
+    name: PR3 Post-Merge Worker Concurrency
+    runs-on: ubuntu-latest
+    services: *postgres_service
+    env: *postgres_env
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Run SQLite and PostgreSQL worker tests without skips
+        working-directory: memorist-core
+        run: |
+          set -o pipefail
+          uv run pytest tests/test_import_worker_lifecycle.py tests/test_import_lease_job_alignment.py tests/test_full_postgres_import_runtime.py -vv --tb=long --junitxml=worker-postmerge.xml 2>&1 | tee worker-postmerge.txt
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('worker-postmerge.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr3-postmerge-worker-${{ github.sha }}
+          path: |
+            memorist-core/worker-postmerge.xml
+            memorist-core/worker-postmerge.txt
+          if-no-files-found: error
+
+  cleanup:
+    name: Remove Temporary Certification Workflow
+    if: always()
+    needs: [postgres-e2e, worker-concurrency]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/pr3-postmerge-pg-cert.yml
+          git config user.name "PR3 Independent Reviewer"
+          git config user.email "pr3-reviewer@users.noreply.github.com"
+          git add -A
+          git commit -m "Remove post-merge certification workflow"
+          git push origin HEAD:codex/pr3-post-merge-certification-repair
