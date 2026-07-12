@@ -820,6 +820,34 @@ class ImportMessageProcessor:
             ),
         )
 
+    def finalize_ready_runs(self, import_run_uuid: str | None = None) -> int:
+        params: tuple[Any, ...] = ()
+        run_filter = ""
+        if import_run_uuid is not None:
+            run_filter = "AND run.import_run_uuid = ?"
+            params = (import_run_uuid,)
+        placeholders = ", ".join("?" for _ in TERMINAL_STATUSES)
+        rows = self.connection.execute(
+            f"""
+            SELECT run.import_run_uuid
+            FROM import_runs run
+            WHERE run.status = 'processing'
+              {run_filter}
+              AND NOT EXISTS (
+                SELECT 1
+                FROM import_message_processing_status status
+                WHERE status.import_run_uuid = run.import_run_uuid
+                  AND status.status NOT IN ({placeholders})
+              )
+            ORDER BY run.created_at, run.import_run_uuid
+            """,
+            params + tuple(sorted(TERMINAL_STATUSES)),
+        ).fetchall()
+        finalized = 0
+        for row in rows:
+            finalized += int(self.finalize_if_terminal(str(row["import_run_uuid"])))
+        return finalized
+
     def finalize_if_terminal(self, import_run_uuid: str) -> bool:
         report = self.processing_report(import_run_uuid)
         progress = self.connection.execute(
@@ -843,15 +871,6 @@ class ImportMessageProcessor:
         if report["processing_jobs_total"] == 0:
             final_status = "fully_reconstructed"
         elif not report["terminal"]:
-            with self.connection:
-                self.connection.execute(
-                    """
-                    UPDATE import_runs
-                    SET status = 'processing', completed_at = NULL
-                    WHERE import_run_uuid = ?
-                    """,
-                    (import_run_uuid,),
-                )
             return False
         elif report["processing_jobs_failed"] > 0:
             final_status = "completed_with_failures"

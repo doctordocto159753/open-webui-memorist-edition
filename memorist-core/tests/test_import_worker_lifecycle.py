@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 import time
 from dataclasses import replace
@@ -297,6 +298,34 @@ def test_two_worker_threads_do_not_duplicate_processing_artifacts(
         ).fetchall()
     assert duplicate_identities == []
     assert duplicate_candidates == []
+
+
+def test_idle_worker_retries_terminal_finalization_after_transient_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path, concurrency=1)
+    run_uuid = _commit(settings, tmp_path, monkeypatch, messages=1)
+    original_finalize = ImportMessageProcessor.finalize_if_terminal
+    injected = {"raised": False}
+
+    def fail_first_terminal_finalize(self: ImportMessageProcessor, target_run_uuid: str) -> bool:
+        report = self.processing_report(target_run_uuid)
+        if report["terminal"] and not injected["raised"]:
+            injected["raised"] = True
+            raise sqlite3.OperationalError("database is locked")
+        return original_finalize(self, target_run_uuid)
+
+    monkeypatch.setattr(
+        ImportMessageProcessor, "finalize_if_terminal", fail_first_terminal_finalize
+    )
+    worker = ImportReconstructionWorkerService(settings)
+    worker.start()
+    try:
+        final = _wait_terminal(settings, run_uuid, timeout=8.0)
+    finally:
+        worker.stop()
+    assert injected["raised"] is True
+    assert final["status"] == "fully_reconstructed"
 
 
 def test_slow_provider_heartbeat_prevents_a_second_worker_from_stealing(

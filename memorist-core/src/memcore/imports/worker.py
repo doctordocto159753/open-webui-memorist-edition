@@ -135,6 +135,7 @@ class ImportReconstructionWorkerService:
                 import_run_uuid=import_run_uuid,
             )
             if claimed is None:
+                processor.finalize_ready_runs(import_run_uuid)
                 return False
             run = connection.execute(
                 "SELECT status FROM import_runs WHERE import_run_uuid = ?",
