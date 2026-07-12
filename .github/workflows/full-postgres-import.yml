@@ -22,7 +22,7 @@ jobs:
         with:
           ref: codex/pr3-post-merge-certification-repair
           fetch-depth: 0
-      - name: Apply exact reviewed patch and replace transport commits
+      - name: Apply exact reviewed patch as a fast-forward commit
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -35,20 +35,16 @@ jobs:
           stage=decode
           base64 --decode /tmp/pr3.patch.gz.b64 | gzip -d > /tmp/pr3.patch
           echo "269b1240790ccc1f501afafd7086c0750d18bc4c5ac71f9aae0553ecab0d2d9f  /tmp/pr3.patch" | sha256sum --check
-          stage=reset
-          git reset --hard a15303e6a05165ad5f22770e834c52ddaa920a9f
-          git clean -fdx
           stage=apply
           git apply --binary /tmp/pr3.patch
           git diff --check
-          test ! -e .github/pr3-review-patch.00
           stage=commit
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "Make import result commits lease-fenced and atomic"
           stage=push
-          git push --force origin HEAD:codex/pr3-post-merge-certification-repair
+          git push origin HEAD:codex/pr3-post-merge-certification-repair
 
   pr3-lite-import-integration:
     name: PR3 Lite Import Integration
