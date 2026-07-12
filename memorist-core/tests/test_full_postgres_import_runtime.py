@@ -368,7 +368,7 @@ def test_full_postgres_concurrent_process_endpoint_does_not_duplicate_identity(
                      WHERE status IN ('succeeded', 'already_processed')
                    ) AS done
             FROM import_message_processing_status
-            WHERE import_run_uuid = ?
+            WHERE import_run_uuid = ? AND processing_stage = 'memory_extraction'
             """,
             (run_uuid,),
         ).fetchone()
@@ -837,7 +837,8 @@ def test_full_postgres_cancel_during_inference_discards_late_result(
             (run_uuid,),
         ).fetchall()
     assert dict(after) == dict(before)
-    assert [row["status"] for row in statuses] == ["succeeded", "cancelled"]
+    processable_statuses = {row["status"] for row in statuses if row["status"] != "skipped"}
+    assert processable_statuses == {"succeeded", "cancelled"}
     assert all(row["lease_owner"] is None for row in statuses)
 
 
@@ -866,8 +867,9 @@ def test_full_postgres_retry_schedule_is_due_gated_and_attempts_are_monotonic(
     with import_connection(settings) as connection:
         status = connection.execute(
             """
-            SELECT status, retry_count, run_after, job_uuid
-            FROM import_message_processing_status WHERE import_run_uuid = ?
+            SELECT status_uuid, status, retry_count, run_after, job_uuid
+            FROM import_message_processing_status
+            WHERE import_run_uuid = ? AND processing_stage = 'memory_extraction'
             """,
             (run_uuid,),
         ).fetchone()
@@ -892,9 +894,9 @@ def test_full_postgres_retry_schedule_is_due_gated_and_attempts_are_monotonic(
         connection.execute(
             """
             UPDATE import_message_processing_status
-            SET run_after = now() - interval '1 second' WHERE import_run_uuid = ?
+            SET run_after = now() - interval '1 second' WHERE status_uuid = ?
             """,
-            (run_uuid,),
+            (status["status_uuid"],),
         )
         connection.execute(
             """
@@ -909,9 +911,9 @@ def test_full_postgres_retry_schedule_is_due_gated_and_attempts_are_monotonic(
         final_status = connection.execute(
             """
             SELECT status, retry_count FROM import_message_processing_status
-            WHERE import_run_uuid = ?
+            WHERE status_uuid = ?
             """,
-            (run_uuid,),
+            (status["status_uuid"],),
         ).fetchone()
         final_job = connection.execute(
             "SELECT status, attempts FROM jobs WHERE job_uuid = ?",
@@ -973,7 +975,7 @@ def test_full_postgres_restart_recovers_expired_claim_and_finishes(
         statuses = connection.execute(
             """
             SELECT status FROM import_message_processing_status
-            WHERE import_run_uuid = ?
+            WHERE import_run_uuid = ? AND processing_stage = 'memory_extraction'
             """,
             (run_uuid,),
         ).fetchall()
