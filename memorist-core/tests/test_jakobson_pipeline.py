@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -85,10 +86,12 @@ def test_sentence_segmentation_persian_workflow() -> None:
         assert len(unit.content_hash) == 64
     assert [unit.model_dump() for unit in result.units] == [
         unit.model_dump()
-        for unit in SentenceSegmenter().segment(
+        for unit in SentenceSegmenter()
+        .segment(
             "11111111-1111-4111-8111-111111111111",
             GOLDEN_PERSIAN_WORKFLOW,
-        ).units
+        )
+        .units
     ]
 
 
@@ -153,10 +156,14 @@ def test_sentence_segmentation_empty_whitespace_input() -> None:
 
 
 def test_sentence_segmentation_no_punctuation_input() -> None:
-    units = SentenceSegmenter().segment(
-        "11111111-1111-4111-8111-111111111111",
-        "No punctuation here",
-    ).units
+    units = (
+        SentenceSegmenter()
+        .segment(
+            "11111111-1111-4111-8111-111111111111",
+            "No punctuation here",
+        )
+        .units
+    )
 
     assert len(units) == 1
     assert units[0].segmentation_confidence == "low"
@@ -254,8 +261,7 @@ def test_jakobson_service_persists_sentence_annotations(connection: sqlite3.Conn
 
     assert len(annotations) == result["sentence_units"]
     assert any(
-        annotation.dominant_function is JakobsonFunction.CONATIVE
-        for annotation in annotations
+        annotation.dominant_function is JakobsonFunction.CONATIVE for annotation in annotations
     )
     assert any(annotation.receiver_value == "Product Team" for annotation in annotations)
     assert any("Jira" in str(annotation.context_value) for annotation in annotations)
@@ -335,9 +341,9 @@ def test_candidate_lineage_includes_annotation_and_route(connection: sqlite3.Con
     annotation = JakobsonAnalysisRepository(connection).list_annotations_for_run(
         result["analysis_run_uuid"]
     )[0]
-    route = MemorySignalRouteRepository(connection).list_for_annotation(
-        annotation.annotation_uuid
-    )[0]
+    route = MemorySignalRouteRepository(connection).list_for_annotation(annotation.annotation_uuid)[
+        0
+    ]
     unit = TextUnitRepository(connection).get_unit(annotation.unit_uuid)
     assert unit is not None
     candidate_input = build_candidate_extraction_input(
@@ -402,7 +408,7 @@ def test_legacy_unit_analysis_not_primary() -> None:
     assert "legacy derived summary" in legacy.full_system_prompt
 
 
-def _message(connection: sqlite3.Connection, text: str):
+def _message(connection: sqlite3.Connection, text: str) -> Any:
     session = SessionRepository(connection).create_session()
     return MessageRepository(connection).create_message(
         session.session_uuid,

@@ -25,7 +25,6 @@ from memcore.repositories import ProjectRepository, SessionRepository
 from memcore.repositories.domain import WorkspaceRepository
 from memcore.storage.commands import FunctionWriteCommand
 from memcore.storage.gateway import WriteGateway
-from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
 from memcore.version import SCHEMA_VERSION, __version__
 
@@ -263,7 +262,6 @@ def _connection() -> Iterator[Any]:
     settings = get_settings()
     connection = connect(settings.db_path)
     try:
-        apply_migrations(connection)
         yield connection
     finally:
         connection.close()
@@ -293,56 +291,55 @@ def _resolve_session_payload_full(
     conversation_id = _normalize(request.openwebui_conversation_id)
     user_id = _normalize(request.user_id)
     diagnostics: list[str] = []
-    with _pg_connection(settings) as connection:
-        with connection.transaction():
-            workspace_uuid = _pg_default_workspace_uuid(connection, request.workspace_name)
-            project_uuid = _pg_default_project_uuid(connection, workspace_uuid, request.project_name)
-            session = _pg_session_for_alias(connection, conversation_id, user_id)
-            matched_alias_type = "openwebui_chat_id" if session is not None else None
-            if session is None:
-                session = _pg_legacy_session_by_conversation_id(connection, conversation_id)
-                if session is not None:
-                    matched_alias_type = "legacy_openwebui_conversation_id"
-            if session is None:
-                now = utc_now()
-                session = {
-                    "session_uuid": new_uuid(),
-                    "workspace_uuid": workspace_uuid,
-                    "project_uuid": project_uuid,
-                    "openwebui_conversation_id": conversation_id,
-                    "title": request.title,
-                }
-                connection.execute(
-                    """
+    with _pg_connection(settings) as connection, connection.transaction():
+        workspace_uuid = _pg_default_workspace_uuid(connection, request.workspace_name)
+        project_uuid = _pg_default_project_uuid(connection, workspace_uuid, request.project_name)
+        session = _pg_session_for_alias(connection, conversation_id, user_id)
+        matched_alias_type = "openwebui_chat_id" if session is not None else None
+        if session is None:
+            session = _pg_legacy_session_by_conversation_id(connection, conversation_id)
+            if session is not None:
+                matched_alias_type = "legacy_openwebui_conversation_id"
+        if session is None:
+            now = utc_now()
+            session = {
+                "session_uuid": new_uuid(),
+                "workspace_uuid": workspace_uuid,
+                "project_uuid": project_uuid,
+                "openwebui_conversation_id": conversation_id,
+                "title": request.title,
+            }
+            connection.execute(
+                """
                     INSERT INTO sessions (
                         session_uuid, workspace_uuid, project_uuid, openwebui_conversation_id,
                         title, status, created_at, updated_at, schema_version
                     )
                     VALUES (%s, %s, %s, %s, %s, 'active', %s, %s, 1)
                     """,
-                    (
-                        session["session_uuid"],
-                        workspace_uuid,
-                        project_uuid,
-                        conversation_id,
-                        request.title,
-                        now,
-                        now,
-                    ),
-                )
-                diagnostics.append("created_session_without_existing_alias")
-            if conversation_id:
-                _pg_attach_alias(connection, str(session["session_uuid"]), conversation_id, user_id)
-            aliases = _pg_aliases(connection, str(session["session_uuid"]))
-            return {
-                "session_uuid": session["session_uuid"],
-                "workspace_uuid": session.get("workspace_uuid"),
-                "project_uuid": session.get("project_uuid"),
-                "openwebui_conversation_id": session.get("openwebui_conversation_id"),
-                "matched_alias_type": matched_alias_type,
-                "aliases": aliases,
-                "diagnostics": diagnostics,
-            }
+                (
+                    session["session_uuid"],
+                    workspace_uuid,
+                    project_uuid,
+                    conversation_id,
+                    request.title,
+                    now,
+                    now,
+                ),
+            )
+            diagnostics.append("created_session_without_existing_alias")
+        if conversation_id:
+            _pg_attach_alias(connection, str(session["session_uuid"]), conversation_id, user_id)
+        aliases = _pg_aliases(connection, str(session["session_uuid"]))
+        return {
+            "session_uuid": session["session_uuid"],
+            "workspace_uuid": session.get("workspace_uuid"),
+            "project_uuid": session.get("project_uuid"),
+            "openwebui_conversation_id": session.get("openwebui_conversation_id"),
+            "matched_alias_type": matched_alias_type,
+            "aliases": aliases,
+            "diagnostics": diagnostics,
+        }
 
 
 def _capture_message_full(settings: Settings, request: MessageCaptureRequest) -> dict[str, Any]:
@@ -365,7 +362,7 @@ def _capture_message_full(settings: Settings, request: MessageCaptureRequest) ->
     content_hash = sha256(request.content.encode("utf-8")).hexdigest()
     creator_type = "user" if request.role == "user" else "model"
 
-    with _pg_connection(settings) as connection:
+    with _pg_connection(settings) as connection:  # noqa: SIM117
         with connection.transaction():
             if _pg_session_exists(connection, session_uuid) is None:
                 raise HTTPException(status_code=404, detail="session not found")
@@ -400,7 +397,8 @@ def _capture_message_full(settings: Settings, request: MessageCaptureRequest) ->
                 """
                 INSERT INTO messages (
                     message_uuid, session_uuid, turn_index, role, creator_type, raw_text,
-                    processing_status, visibility, is_deleted, created_at, updated_at, schema_version
+                    processing_status, visibility, is_deleted, created_at, updated_at,
+                    schema_version
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, 'pending', 'visible', false, %s, %s, 1)
                 """,
@@ -472,7 +470,9 @@ def _pg_default_workspace_uuid(connection: Any, name: str) -> str:
     now = utc_now()
     connection.execute(
         """
-        INSERT INTO workspaces (workspace_uuid, name, description, created_at, updated_at, schema_version)
+        INSERT INTO workspaces (
+            workspace_uuid, name, description, created_at, updated_at, schema_version
+        )
         VALUES (%s, %s, NULL, %s, %s, 1)
         """,
         (workspace_uuid, name, now, now),
@@ -497,7 +497,9 @@ def _pg_default_project_uuid(connection: Any, workspace_uuid: str, name: str) ->
     now = utc_now()
     connection.execute(
         """
-        INSERT INTO projects (project_uuid, workspace_uuid, name, description, created_at, updated_at, schema_version)
+        INSERT INTO projects (
+            project_uuid, workspace_uuid, name, description, created_at, updated_at, schema_version
+        )
         VALUES (%s, %s, %s, NULL, %s, %s, 1)
         """,
         (project_uuid, workspace_uuid, name, now, now),
@@ -505,10 +507,12 @@ def _pg_default_project_uuid(connection: Any, workspace_uuid: str, name: str) ->
     return project_uuid
 
 
-def _pg_session_for_alias(connection: Any, conversation_id: str | None, user_id: str | None) -> dict[str, Any] | None:
+def _pg_session_for_alias(
+    connection: Any, conversation_id: str | None, user_id: str | None
+) -> dict[str, Any] | None:
     if not conversation_id:
         return None
-    return connection.execute(
+    row = connection.execute(
         """
         SELECT s.*
         FROM openwebui_session_aliases AS a
@@ -520,6 +524,7 @@ def _pg_session_for_alias(connection: Any, conversation_id: str | None, user_id:
         """,
         (conversation_id, user_id),
     ).fetchone()
+    return dict(row) if row is not None else None
 
 
 def _pg_legacy_session_by_conversation_id(
@@ -528,7 +533,7 @@ def _pg_legacy_session_by_conversation_id(
 ) -> dict[str, Any] | None:
     if not conversation_id:
         return None
-    return connection.execute(
+    row = connection.execute(
         """
         SELECT *
         FROM sessions
@@ -538,13 +543,15 @@ def _pg_legacy_session_by_conversation_id(
         """,
         (conversation_id,),
     ).fetchone()
+    return dict(row) if row is not None else None
 
 
 def _pg_session_exists(connection: Any, session_uuid: str) -> dict[str, Any] | None:
-    return connection.execute(
+    row = connection.execute(
         "SELECT * FROM sessions WHERE session_uuid = %s",
         (session_uuid,),
     ).fetchone()
+    return dict(row) if row is not None else None
 
 
 def _pg_attach_alias(
@@ -620,7 +627,17 @@ def _pg_append_session_event(
         )
         VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, 1)
         """,
-        (event_uuid, session_uuid, event_type, event_index, payload_text, actor_type, actor_uuid, content_hash, utc_now()),
+        (
+            event_uuid,
+            session_uuid,
+            event_type,
+            event_index,
+            payload_text,
+            actor_type,
+            actor_uuid,
+            content_hash,
+            utc_now(),
+        ),
     )
     return event_uuid
 

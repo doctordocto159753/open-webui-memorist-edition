@@ -531,9 +531,7 @@ class MemoryBlockAdapter:
                         (record.record_uuid,),
                     )
                     counts["memory_block_source"] += cursor.rowcount
-        return ErasureResult(
-            erased_counts=dict(counts), retained_counts={}, exceptions=[]
-        )
+        return ErasureResult(erased_counts=dict(counts), retained_counts={}, exceptions=[])
 
     def verify(self, records: list[PrivacyRecord]) -> VerificationResult:
         checks = {}

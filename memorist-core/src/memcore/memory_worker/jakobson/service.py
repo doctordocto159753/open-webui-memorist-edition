@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Callable
 from time import perf_counter
 from typing import Any, Protocol
 
 from memcore.memory_worker.contracts import JOB_MEMORY_SIGNAL_ROUTING
 from memcore.memory_worker.jakobson.mapper import map_output_to_annotations
 from memcore.memory_worker.jakobson.validator import validate_jakobson_provider_output
+from memcore.memory_worker.prepared import PreparedJakobsonInference
 from memcore.memory_worker.prompts.registry import (
     PromptExecutionRepository,
     render_prompt,
@@ -28,6 +30,7 @@ from memcore.models import (
     JakobsonAnalysisRunStatus,
     JakobsonFunction,
     Message,
+    ModelRole,
     TextUnit,
     TextUnitType,
 )
@@ -149,12 +152,15 @@ class JakobsonAnalysisService:
         self.outbox = MemoryStoreRepository(connection)
         self.router = SignalRouter()
         self.model_profile_uuid: str | None = None
+        self.model_role = ModelRole.MEMORY_EXTRACTION
 
     def run_for_message(
         self,
         message_uuid: str,
         import_run_uuid: str | None = None,
         job_uuid: str | None = None,
+        lease_fence: Callable[[], None] | None = None,
+        prepared_inference: PreparedJakobsonInference | None = None,
     ) -> dict[str, Any]:
         message = self.messages.get_message(message_uuid)
         if message is None:
@@ -179,8 +185,23 @@ class JakobsonAnalysisService:
         )
         started = perf_counter()
         try:
-            output = self.provider.analyze(units, raw_text)
+            if prepared_inference is not None:
+                if prepared_inference.message_uuid != message.message_uuid:
+                    raise RepositoryError("prepared inference message identity mismatch")
+                if prepared_inference.model_role != self.model_role.value:
+                    raise RepositoryError("prepared inference model role mismatch")
+                if prepared_inference.model_profile_uuid != self.model_profile_uuid:
+                    raise RepositoryError("prepared inference model profile mismatch")
+                if prepared_inference.provider_type != self.provider.provider_type:
+                    raise RepositoryError("prepared inference provider type mismatch")
+                if prepared_inference.model_name != self.provider.model_name:
+                    raise RepositoryError("prepared inference model name mismatch")
+                output = prepared_inference.output
+            else:
+                output = self.provider.analyze(units, raw_text)
             validate_jakobson_provider_output(output)
+            if lease_fence is not None:
+                lease_fence()
             run.output_hash = canonical_hash_ijson(output)
             annotations, warnings = map_output_to_annotations(
                 analysis_run_uuid=run.analysis_run_uuid,
@@ -193,7 +214,7 @@ class JakobsonAnalysisService:
             execution = PromptExecutionRepository(self.connection).record_execution(
                 prompt_id=JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
                 prompt_version=JAKOBSON_SENTENCE_ANALYSIS_VERSION,
-                model_role="memory_extraction",
+                model_role=self.model_role,
                 provider_type=self.provider.provider_type,
                 model_name=str(self.provider.model_name or self.provider.provider_type),
                 model_profile_uuid=self.model_profile_uuid,
@@ -210,12 +231,22 @@ class JakobsonAnalysisService:
                 status="ok",
                 warnings=warnings,
                 latency_ms=int(
-                    getattr(self.provider, "latency_ms", 0) or (perf_counter() - started) * 1000
+                    prepared_inference.latency_ms
+                    if prepared_inference is not None
+                    else getattr(self.provider, "latency_ms", 0)
+                    or (perf_counter() - started) * 1000
                 ),
                 input_tokens=int(
-                    getattr(self.provider, "input_tokens", 0) or max(0, (len(raw_text) + 3) // 4)
+                    prepared_inference.input_tokens
+                    if prepared_inference is not None
+                    else getattr(self.provider, "input_tokens", 0)
+                    or max(0, (len(raw_text) + 3) // 4)
                 ),
-                output_tokens=int(getattr(self.provider, "output_tokens", 0) or len(annotations)),
+                output_tokens=int(
+                    prepared_inference.output_tokens
+                    if prepared_inference is not None
+                    else getattr(self.provider, "output_tokens", 0) or len(annotations)
+                ),
             )
             run.prompt_execution_uuid = str(execution["prompt_execution_uuid"])
             persisted_run = self.runs.create_run(run)
@@ -248,11 +279,29 @@ class JakobsonAnalysisService:
             )
             return {
                 "analysis_run_uuid": persisted_run.analysis_run_uuid,
+                "prompt_execution_uuid": execution["prompt_execution_uuid"],
                 "message_uuid": message.message_uuid,
                 "sentence_units": len(units),
                 "annotations": len(persisted_annotations),
                 "routes": len(routes),
                 "warnings": warnings,
+                "input_tokens": int(
+                    prepared_inference.input_tokens
+                    if prepared_inference is not None
+                    else getattr(self.provider, "input_tokens", 0)
+                    or max(0, (len(raw_text) + 3) // 4)
+                ),
+                "output_tokens": int(
+                    prepared_inference.output_tokens
+                    if prepared_inference is not None
+                    else getattr(self.provider, "output_tokens", 0) or len(persisted_annotations)
+                ),
+                "latency_ms": int(
+                    prepared_inference.latency_ms
+                    if prepared_inference is not None
+                    else getattr(self.provider, "latency_ms", 0)
+                    or (perf_counter() - started) * 1000
+                ),
             }
         except Exception as error:
             sanitized_error = (
@@ -267,7 +316,7 @@ class JakobsonAnalysisService:
                 execution = PromptExecutionRepository(self.connection).record_execution(
                     prompt_id=JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
                     prompt_version=JAKOBSON_SENTENCE_ANALYSIS_VERSION,
-                    model_role="memory_extraction",
+                    model_role=self.model_role,
                     provider_type=self.provider.provider_type,
                     model_name=str(self.provider.model_name or self.provider.provider_type),
                     model_profile_uuid=self.model_profile_uuid,

@@ -25,7 +25,6 @@ from memcore.model_control.schemas import (
     ProfileTestRequest,
 )
 from memcore.model_control.security import sanitize_error_message
-from memcore.storage.migrations import apply_migrations
 from memcore.storage.postgres.migrations import apply_postgres_migrations
 from memcore.storage.sqlite import connect
 
@@ -215,7 +214,6 @@ def _connection() -> Iterator[Any]:
 
     connection = connect(settings.db_path)
     try:
-        apply_migrations(connection)
         yield connection
     finally:
         connection.close()

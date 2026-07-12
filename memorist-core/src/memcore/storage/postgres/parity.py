@@ -81,9 +81,7 @@ def build_parity_report() -> dict[str, Any]:
     sqlite = sqlite_tables()
     postgres = postgres_tables()
     missing_in_postgres = sorted(REQUIRED_CANONICAL_TABLES - postgres)
-    missing_in_sqlite = sorted(
-        (REQUIRED_CANONICAL_TABLES - DOCUMENTED_FULL_ONLY_TABLES) - sqlite
-    )
+    missing_in_sqlite = sorted((REQUIRED_CANONICAL_TABLES - DOCUMENTED_FULL_ONLY_TABLES) - sqlite)
     return {
         "status": "pass" if not missing_in_postgres else "fail",
         "required_tables": sorted(REQUIRED_CANONICAL_TABLES),

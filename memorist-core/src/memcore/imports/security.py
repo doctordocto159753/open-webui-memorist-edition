@@ -40,7 +40,7 @@ def validate_zip_archive(path: str) -> list[zipfile.ZipInfo]:
 
 def _validate_member(info: zipfile.ZipInfo) -> None:
     path = PurePosixPath(info.filename.replace("\\", "/"))
-    if path.is_absolute():
+    if path.is_absolute() or (path.parts and path.parts[0].endswith(":")):
         raise ImportSecurityError("archive contains an absolute path")
     if ".." in path.parts:
         raise ImportSecurityError("archive contains path traversal")

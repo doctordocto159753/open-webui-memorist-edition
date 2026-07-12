@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 from memcore.config import get_settings
 from memcore.prompt_budget.budgeter import attachment_budget_decision
 from memcore.prompt_budget.model_context import ModelRegistry
-from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
 
 router = APIRouter(prefix="/memcore", tags=["Budget"])
@@ -98,7 +97,6 @@ def _connection() -> Iterator[Any]:
     settings = get_settings()
     connection = connect(settings.db_path)
     try:
-        apply_migrations(connection)
         yield connection
     finally:
         connection.close()

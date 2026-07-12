@@ -60,7 +60,14 @@ def apply_postgres_migrations(connection: Any, migrations_dir: Path | None = Non
 
 def postgres_schema_version(connection: Any) -> int | None:
     with connection.cursor() as cursor:
-        cursor.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'schema_migrations')")
+        cursor.execute(
+            """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = 'schema_migrations'
+            )
+            """
+        )
         row = cursor.fetchone()
         if row is None or not bool(row[0]):
             return None

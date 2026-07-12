@@ -30,6 +30,10 @@ class CompatCursor:
         row = self.cursor.fetchone()
         return self._wrap(row) if row is not None else None
 
+    @property
+    def rowcount(self) -> int:
+        return int(self.cursor.rowcount)
+
     def fetchall(self) -> list[Any]:
         return [self._wrap(row) for row in self.cursor.fetchall()]
 
@@ -51,7 +55,10 @@ class PostgresCompatConnection:
         self.raw = connection
 
     def execute(self, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> CompatCursor:
-        return CompatCursor(self.raw.execute(_translate_sql(sql), tuple(params)))
+        translated = _translate_sql(sql)
+        return CompatCursor(
+            self.raw.execute(translated, _normalize_insert_params(translated, params))
+        )
 
     def close(self) -> None:
         self.raw.close()
@@ -63,7 +70,6 @@ class PostgresCompatConnection:
         self.raw.rollback()
 
     def __enter__(self) -> PostgresCompatConnection:
-        self.raw.__enter__()
         return self
 
     def __exit__(
@@ -72,8 +78,11 @@ class PostgresCompatConnection:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> bool | None:
-        result = self.raw.__exit__(exc_type, exc, tb)
-        return bool(result) if result is not None else None
+        if exc_type is None:
+            self.raw.commit()
+        else:
+            self.raw.rollback()
+        return None
 
 
 def _translate_sql(sql: str) -> str:
@@ -94,3 +103,23 @@ def _translate_sql(sql: str) -> str:
             "schema_version = EXCLUDED.schema_version"
         )
     return translated.replace("?", "%s")
+
+
+def _normalize_insert_params(sql: str, params: tuple[Any, ...] | list[Any]) -> tuple[Any, ...]:
+    """Preserve SQLite creation semantics on stricter PostgreSQL tables."""
+    values = list(params)
+    match = re.search(
+        r"INSERT\s+INTO\s+[^\s(]+\s*\((?P<columns>[^)]+)\)\s*VALUES",
+        sql,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if match is None:
+        return tuple(values)
+    columns = [item.strip().strip('"').lower() for item in match.group("columns").split(",")]
+    if len(columns) != len(values):
+        return tuple(values)
+    if "updated_at" in columns and "created_at" in columns:
+        updated_index = columns.index("updated_at")
+        if values[updated_index] is None:
+            values[updated_index] = values[columns.index("created_at")]
+    return tuple(values)

@@ -49,4 +49,3 @@ def restore_heritage_via_actor(
         timeout=timeout,
     )
     return result.result
-

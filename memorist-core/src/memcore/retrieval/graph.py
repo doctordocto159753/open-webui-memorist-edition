@@ -48,7 +48,7 @@ class GraphCandidateGenerator:
             JOIN memories m ON m.memory_uuid = mel.memory_uuid
             JOIN memory_versions mv ON mv.memory_version_uuid = m.current_version_uuid
             WHERE m.status = 'active'
-              AND ({' OR '.join(f'({predicate})' for predicate in predicates)})
+              AND ({" OR ".join(f"({predicate})" for predicate in predicates)})
             ORDER BY jsa.dominant_function, m.memory_uuid
             LIMIT ?
             """,

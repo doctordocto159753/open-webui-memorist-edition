@@ -121,10 +121,7 @@ class HotScheduler:
         hot_candidates = [
             (index, queued) for index, queued in candidates if queued.job.lane in HOT_LANES
         ]
-        if (
-            hot_candidates
-            and self._consecutive_low_priority >= self.max_consecutive_low_priority
-        ):
+        if hot_candidates and self._consecutive_low_priority >= self.max_consecutive_low_priority:
             return min(
                 hot_candidates,
                 key=lambda item: (item[1].sort_priority, item[1].sequence),

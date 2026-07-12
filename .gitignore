@@ -15,6 +15,7 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+node_modules/
 
 # Local configuration and data
 .env

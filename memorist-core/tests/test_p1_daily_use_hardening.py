@@ -23,9 +23,7 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
 
 
 def test_base_apis_create_and_trace_lineage(client: TestClient) -> None:
-    workspace = _assert_ok(
-        client.post("/memcore/workspaces", json={"name": "Workspace"})
-    )
+    workspace = _assert_ok(client.post("/memcore/workspaces", json={"name": "Workspace"}))
     project = _assert_ok(
         client.post(
             "/memcore/projects",

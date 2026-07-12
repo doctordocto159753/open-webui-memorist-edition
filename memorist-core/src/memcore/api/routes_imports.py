@@ -24,11 +24,11 @@ from memcore.imports.security import (
 )
 from memcore.imports.service import ImportService
 from memcore.imports.staging import sanitize_upload_filename
+from memcore.imports.worker import ImportReconstructionWorkerService
 from memcore.repositories.domain import RepositoryError
 from memcore.storage.write_commands.heritage_commands import restore_heritage_via_actor
 from memcore.storage.write_commands.import_commands import (
     commit_import_via_actor,
-    process_import_batch_via_actor,
 )
 from memcore.validators.ijson import load_ijson
 
@@ -49,6 +49,46 @@ class ImportDryRunRequest(BaseModel):
 
 class ImportProcessRequest(BaseModel):
     batch_size: int = Field(default=25, ge=1, le=1_000)
+
+
+class ImportProviderBreakdown(BaseModel):
+    operational_role: str
+    prompt_role: str | None = None
+    model_profile_uuid: str | None = None
+    provider_type: str
+    model_name: str
+    processing_jobs: int
+    input_tokens: int
+    output_tokens: int
+    succeeded: int
+    failed: int
+
+
+class ImportProcessingReport(BaseModel):
+    import_run_uuid: str
+    final_status: str
+    terminal: bool
+    last_error_sanitized: str | None = None
+    imported_conversations: int
+    imported_messages: int
+    processing_jobs_total: int
+    processing_jobs_pending: int
+    processing_jobs_queued: int
+    processing_jobs_running: int
+    processing_jobs_retry_scheduled: int
+    processing_jobs_succeeded: int
+    processing_jobs_failed: int
+    processing_jobs_skipped: int
+    processing_jobs_already_processed: int
+    memory_candidates_created: int
+    memory_versions_created: int
+    prompt_execution_runs: int
+    model_usage_events: int
+    input_tokens: int
+    output_tokens: int
+    graph_projection_outbox_events: int
+    skip_reasons: dict[str, int]
+    provider_breakdown: list[ImportProviderBreakdown]
 
 
 class HeritageExportRequest(BaseModel):
@@ -262,19 +302,10 @@ def import_progress(import_run_uuid: str) -> dict[str, Any]:
 @router.post("/imports/{import_run_uuid}/process", response_model=None)
 def import_process(import_run_uuid: str, request: ImportProcessRequest) -> dict[str, Any]:
     settings = get_settings()
-    if settings.runtime_profile == "full" and settings.canonical_store == "postgres":
-        with _connection() as connection:
-            return _guard(
-                lambda: ImportService(connection, settings.object_store_path).process_next_batch(
-                    import_run_uuid, request.batch_size
-                )
-            )
     return _guard(
-        lambda: process_import_batch_via_actor(
-            settings.db_path,
-            settings.object_store_path,
-            import_run_uuid,
-            request.batch_size,
+        lambda: ImportReconstructionWorkerService(settings).process_next_batch(
+            import_run_uuid=import_run_uuid,
+            limit=request.batch_size,
         )
     )
 
@@ -289,14 +320,18 @@ def import_retry_failed(import_run_uuid: str) -> dict[str, Any]:
         )
 
 
-@router.get("/imports/{import_run_uuid}/processing-report", response_model=None)
-def import_processing_report(import_run_uuid: str) -> dict[str, Any]:
+@router.get(
+    "/imports/{import_run_uuid}/processing-report",
+    response_model=ImportProcessingReport,
+)
+def import_processing_report(import_run_uuid: str) -> ImportProcessingReport:
     with _connection() as connection:
-        return _guard(
+        report = _guard(
             lambda: ImportService(connection, get_settings().object_store_path).processing_report(
                 import_run_uuid
             )
         )
+        return ImportProcessingReport.model_validate(report)
 
 
 @router.get("/imports/{import_run_uuid}/messages/processing-status", response_model=None)

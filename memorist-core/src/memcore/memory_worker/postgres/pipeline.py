@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # ruff: noqa: E501
 import json
+from collections.abc import Callable
 from hashlib import sha256
 from time import perf_counter
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ from memcore.config import Settings
 from memcore.memory_worker.contracts import PIPELINE_VERSION, PROMPT_BUNDLE_VERSION
 from memcore.memory_worker.gating import DeterministicGate
 from memcore.memory_worker.identity import build_processing_identity
+from memcore.memory_worker.prepared import PreparedJakobsonInference
 from memcore.memory_worker.prompts import render_prompt, validate_prompt_execution
 from memcore.memory_worker.prompts.versions import (
     JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
@@ -34,12 +36,124 @@ class PostgresMemoryWorkerPipeline:
         self.segmenter = SentenceSegmenter()
         self.gate = DeterministicGate()
 
+    def prepare_message(
+        self,
+        message_uuid: str,
+        model_target: dict[str, Any] | None = None,
+    ) -> PreparedJakobsonInference:
+        """Run and validate provider inference before opening a write transaction."""
+        message = self.connection.execute(
+            "SELECT m.*, s.workspace_uuid, s.project_uuid FROM messages m JOIN sessions s ON s.session_uuid = m.session_uuid WHERE m.message_uuid = %s",
+            (message_uuid,),
+        ).fetchone()
+        if message is None:
+            raise HTTPException(status_code=404, detail="message not found")
+        raw_text = str(message.get("raw_text") or "").strip()
+        if not raw_text:
+            raise HTTPException(status_code=400, detail="message has no raw_text to process")
+        profile = model_target or self._resolve_profile() or {}
+        model_role = str(
+            profile.get("model_role") or profile.get("role") or "import_reconstruction"
+        )
+        provider_type = str(
+            profile.get("provider_type") or profile.get("provider") or "deterministic"
+        )
+        model_profile_uuid = (
+            str(profile["model_profile_uuid"]) if profile.get("model_profile_uuid") else None
+        )
+        model_name = str(profile.get("model_name") or provider_type)
+        identity = build_processing_identity(
+            target_message_uuid=message_uuid,
+            raw_text=raw_text,
+            model_target={
+                "model_profile_uuid": model_profile_uuid,
+                "provider_type": provider_type,
+                "model_name": model_name,
+            },
+            model_role=model_role,
+        )
+        units = self.segmenter.to_text_units(
+            message_uuid=message_uuid,
+            session_uuid=str(message["session_uuid"]),
+            speaker_role=str(message["role"]),
+            text=raw_text,
+        )
+        input_payload = {
+            "sentences": [
+                {
+                    "id": index + 1,
+                    "unit_uuid": unit.text_unit_uuid,
+                    "message_uuid": message_uuid,
+                    "text": unit.text,
+                    "span_start": unit.start_char,
+                    "span_end": unit.end_char,
+                }
+                for index, unit in enumerate(units)
+            ]
+        }
+        # psycopg starts a transaction even for SELECT. End that read transaction
+        # before the potentially slow HTTP request.
+        self.connection.commit()
+        if provider_type in {"openai_compatible", "openai_compatible_llm"}:
+            prompt = render_prompt(
+                JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID, PROMPT_PACK_VERSION, input_payload
+            )
+            response = OpenAICompatibleMemoryExtractionProvider.from_profile(profile).extract(
+                system_prompt=prompt, input_payload=input_payload
+            )
+            validate_prompt_execution(
+                JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
+                PROMPT_PACK_VERSION,
+                input_payload,
+                response.output,
+            )
+            output = response.output
+            input_tokens = response.input_tokens
+            output_tokens = response.output_tokens
+            latency_ms = response.latency_ms
+        else:
+            output = self._deterministic_jakobson_output(
+                [
+                    {
+                        "text_unit_uuid": unit.text_unit_uuid,
+                        "text": unit.text,
+                        "start_char": unit.start_char,
+                        "end_char": unit.end_char,
+                    }
+                    for unit in units
+                ]
+            )
+            validate_prompt_execution(
+                JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
+                PROMPT_PACK_VERSION,
+                input_payload,
+                output,
+            )
+            input_tokens = max(0, (len(raw_text) + 3) // 4)
+            output_tokens = len(output.get("sentences", []))
+            latency_ms = 0
+        return PreparedJakobsonInference(
+            message_uuid=message_uuid,
+            model_role=model_role,
+            model_profile_uuid=model_profile_uuid,
+            provider_type=provider_type,
+            model_name=model_name,
+            processing_identity_hash=identity.identity_hash,
+            input_content_hash=identity.input_content_hash,
+            output=output,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            latency_ms=latency_ms,
+        )
+
     def process_message(
         self,
         message_uuid: str,
         import_run_uuid: str | None = None,
         job_uuid: str | None = None,
         model_target: dict[str, Any] | None = None,
+        lease_fence: Callable[[], None] | None = None,
+        prepared_inference: PreparedJakobsonInference | None = None,
     ) -> dict[str, object]:
         started = perf_counter()
         message = self.connection.execute(
@@ -82,6 +196,11 @@ class PostgresMemoryWorkerPipeline:
             },
             model_role=model_role,
         )
+        if prepared_inference is not None and (
+            prepared_inference.processing_identity_hash != identity.identity_hash
+            or prepared_inference.input_content_hash != identity.input_content_hash
+        ):
+            raise RuntimeError("prepared inference processing identity mismatch")
         content_hash = identity.input_content_hash
         run = self._get_or_create_run(
             message, identity, model_profile_uuid, provider_type, model_name
@@ -107,18 +226,59 @@ class PostgresMemoryWorkerPipeline:
                     for index, unit in enumerate(units)
                 ]
             }
-            if profile and provider_type in {"openai_compatible", "openai_compatible_llm"}:
+            if prepared_inference is not None:
+                self._validate_prepared_inference(
+                    prepared_inference,
+                    message_uuid=message_uuid,
+                    model_role=model_role,
+                    model_profile_uuid=model_profile_uuid,
+                    provider_type=provider_type,
+                    model_name=model_name,
+                )
+                output = prepared_inference.output
+                validate_prompt_execution(
+                    JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
+                    PROMPT_PACK_VERSION,
+                    input_payload,
+                    output,
+                )
+                if lease_fence is not None:
+                    lease_fence()
+                prompt_execution_uuid = self._record_prompt_execution(
+                    input_payload=input_payload,
+                    output=output,
+                    message=message,
+                    model_profile_uuid=model_profile_uuid,
+                    provider_type=provider_type,
+                    model_name=model_name,
+                    model_role=model_role,
+                    latency_ms=prepared_inference.latency_ms,
+                    input_tokens=prepared_inference.input_tokens,
+                    output_tokens=prepared_inference.output_tokens,
+                    import_run_uuid=import_run_uuid,
+                    job_uuid=job_uuid,
+                )
+                usage = {
+                    "input_tokens": prepared_inference.input_tokens,
+                    "output_tokens": prepared_inference.output_tokens,
+                    "latency_ms": prepared_inference.latency_ms,
+                }
+            elif profile and provider_type in {"openai_compatible", "openai_compatible_llm"}:
                 output, prompt_execution_uuid, usage = self._run_model_prompt(
                     profile,
                     input_payload,
                     message,
                     model_name,
                     provider_type,
+                    model_role,
                     import_run_uuid,
                     job_uuid,
+                    lease_fence,
                 )
             else:
                 output = self._deterministic_jakobson_output(units)
+                if lease_fence is not None:
+                    lease_fence()
                 prompt_execution_uuid, usage = (
                     self._record_prompt_execution(
                         input_payload=input_payload,
@@ -127,6 +287,7 @@ class PostgresMemoryWorkerPipeline:
                         model_profile_uuid=model_profile_uuid,
                         provider_type="deterministic",
                         model_name=model_name,
+                        model_role=model_role,
                         latency_ms=0,
                         input_tokens=0,
                         output_tokens=0,
@@ -135,7 +296,16 @@ class PostgresMemoryWorkerPipeline:
                     ),
                     {"input_tokens": 0, "output_tokens": 0, "latency_ms": 0},
                 )
-            self._record_usage(message, model_profile_uuid, provider_type, model_name, usage)
+            self._record_usage(
+                message,
+                model_profile_uuid,
+                provider_type,
+                model_name,
+                model_role,
+                import_run_uuid,
+                job_uuid,
+                usage,
+            )
             analysis_run_uuid = self._record_jakobson(
                 message,
                 input_payload,
@@ -188,6 +358,33 @@ class PostgresMemoryWorkerPipeline:
                 (utc_now(), sanitize_error_message(str(error)), run["processing_run_uuid"]),
             )
             raise
+
+    @staticmethod
+    def _validate_prepared_inference(
+        prepared: PreparedJakobsonInference,
+        *,
+        message_uuid: str,
+        model_role: str,
+        model_profile_uuid: str | None,
+        provider_type: str,
+        model_name: str,
+    ) -> None:
+        expected = (
+            message_uuid,
+            model_role,
+            model_profile_uuid,
+            provider_type,
+            model_name,
+        )
+        actual = (
+            prepared.message_uuid,
+            prepared.model_role,
+            prepared.model_profile_uuid,
+            prepared.provider_type,
+            prepared.model_name,
+        )
+        if actual != expected:
+            raise RuntimeError("prepared inference execution identity mismatch")
 
     def _resolve_profile(self) -> dict[str, Any] | None:
         row = self.connection.execute(
@@ -336,8 +533,10 @@ class PostgresMemoryWorkerPipeline:
         message: dict[str, Any],
         model_name: str,
         provider_type: str,
+        model_role: str,
         import_run_uuid: str | None,
         job_uuid: str | None,
+        lease_fence: Callable[[], None] | None = None,
     ) -> tuple[dict[str, Any], str, dict[str, int]]:
         prompt = render_prompt(
             JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID, PROMPT_PACK_VERSION, input_payload
@@ -350,6 +549,8 @@ class PostgresMemoryWorkerPipeline:
             input_payload,
             response.output,
         )
+        if lease_fence is not None:
+            lease_fence()
         prompt_execution_uuid = self._record_prompt_execution(
             input_payload=input_payload,
             output=response.output,
@@ -357,6 +558,7 @@ class PostgresMemoryWorkerPipeline:
             model_profile_uuid=str(profile["model_profile_uuid"]),
             provider_type=provider_type,
             model_name=model_name,
+            model_role=model_role,
             latency_ms=response.latency_ms,
             input_tokens=response.input_tokens,
             output_tokens=response.output_tokens,
@@ -382,6 +584,7 @@ class PostgresMemoryWorkerPipeline:
         model_profile_uuid: str | None,
         provider_type: str,
         model_name: str,
+        model_role: str,
         latency_ms: int,
         input_tokens: int,
         output_tokens: int,
@@ -398,7 +601,7 @@ class PostgresMemoryWorkerPipeline:
             "prompt_version": PROMPT_PACK_VERSION,
             "stage": "jakobson_sentence_analysis",
             "model_profile_uuid": model_profile_uuid,
-            "model_role": "import_reconstruction",
+            "model_role": model_role,
             "provider_type": provider_type,
             "model_name": model_name,
             "workspace_uuid": message.get("workspace_uuid"),
@@ -434,18 +637,28 @@ class PostgresMemoryWorkerPipeline:
         model_profile_uuid: str | None,
         provider_type: str,
         model_name: str,
+        model_role: str,
+        import_run_uuid: str | None,
+        job_uuid: str | None,
         usage: dict[str, int],
     ) -> None:
         self.connection.execute(
             """
-            INSERT INTO model_usage_events (usage_event_uuid, model_profile_uuid, role, event_type, input_tokens, output_tokens, created_at, schema_version,
-              stage, provider_type, model_name, workspace_uuid, project_uuid, session_uuid, message_uuid, latency_ms, status)
-            VALUES (%s,%s,%s,'prompt_execution',%s,%s,%s,1,'jakobson_sentence_analysis',%s,%s,%s,%s,%s,%s,%s,'ok')
+            INSERT INTO model_usage_events (
+              usage_event_uuid, model_profile_uuid, role, event_type, input_tokens,
+              output_tokens, created_at, schema_version, stage, provider_type,
+              model_name, workspace_uuid, project_uuid, session_uuid, message_uuid,
+              import_run_uuid, job_uuid, latency_ms, status
+            )
+            VALUES (
+              %s,%s,%s,'prompt_execution',%s,%s,%s,1,'jakobson_sentence_analysis',
+              %s,%s,%s,%s,%s,%s,%s,%s,%s,'ok'
+            )
             """,
             (
                 new_uuid(),
                 model_profile_uuid,
-                "import_reconstruction",
+                model_role,
                 int(usage.get("input_tokens", 0)),
                 int(usage.get("output_tokens", 0)),
                 utc_now(),
@@ -455,6 +668,8 @@ class PostgresMemoryWorkerPipeline:
                 message.get("project_uuid"),
                 message["session_uuid"],
                 message["message_uuid"],
+                import_run_uuid,
+                job_uuid,
                 int(usage.get("latency_ms", 0)),
             ),
         )
@@ -814,7 +1029,7 @@ class PostgresMemoryWorkerPipeline:
                 ),
             )
             self.connection.execute(
-                "INSERT INTO memory_versions (memory_version_uuid, memory_uuid, version_number, operation, value, normalized_text, confidence, importance, source_snapshot_hash, transaction_from, valid_from, status, created_at, schema_version, prompt_execution_uuid) VALUES (%s,%s,1,'create',%s,%s,%s,%s,%s,%s,%s,'current',%s,1,%s)",
+                "INSERT INTO memory_versions (memory_version_uuid, memory_uuid, version_number, operation, value, normalized_text, confidence, importance, source_snapshot_hash, transaction_from, valid_from, status, created_at, schema_version, prompt_execution_uuid, source_candidate_uuid) VALUES (%s,%s,1,'create',%s,%s,%s,%s,%s,%s,%s,'current',%s,1,%s,%s)",
                 (
                     version_uuid,
                     memory_uuid,
@@ -827,6 +1042,7 @@ class PostgresMemoryWorkerPipeline:
                     utc_now(),
                     utc_now(),
                     prompt_execution_uuid,
+                    candidate["candidate_uuid"],
                 ),
             )
             evidence = self.connection.execute(

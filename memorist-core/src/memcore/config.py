@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     import_reconstruction_lease_seconds: int = Field(default=300, ge=1)
     import_reconstruction_heartbeat_seconds: int = Field(default=60, ge=1)
     import_reconstruction_max_attempts: int = Field(default=5, ge=1)
+    import_reconstruction_allow_deterministic_fallback: bool = True
     import_reconstruction_retry_base_seconds: int = Field(default=10, ge=1)
     import_reconstruction_retry_max_seconds: int = Field(default=900, ge=1)
     fail_open: bool = True
@@ -255,6 +256,9 @@ def get_effective_config(settings: Settings) -> dict[str, Any]:
                 "lease_seconds": settings.import_reconstruction_lease_seconds,
                 "heartbeat_seconds": settings.import_reconstruction_heartbeat_seconds,
                 "max_attempts": settings.import_reconstruction_max_attempts,
+                "allow_deterministic_fallback": (
+                    settings.import_reconstruction_allow_deterministic_fallback
+                ),
                 "retry_base_seconds": settings.import_reconstruction_retry_base_seconds,
                 "retry_max_seconds": settings.import_reconstruction_retry_max_seconds,
             },

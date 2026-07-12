@@ -8,7 +8,6 @@ from fastapi import APIRouter
 
 from memcore.config import get_settings
 from memcore.model_control.repository import ModelControlRepository
-from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
 
 router = APIRouter(prefix="/memcore/costs", tags=["costs"])
@@ -33,7 +32,6 @@ def _connection() -> Iterator[Any]:
     settings = get_settings()
     connection = connect(settings.db_path)
     try:
-        apply_migrations(connection)
         yield connection
     finally:
         connection.close()

@@ -101,7 +101,7 @@ class ImportReconstructionWorkerService:
         worker_id = _worker_id(index)
         while not self._stop.is_set():
             try:
-                did_work = self.process_once(worker_id)
+                did_work = self.process_one_claimed_item(worker_id=worker_id)
             except Exception:
                 LOGGER.exception("import reconstruction worker iteration failed")
                 did_work = False
@@ -109,12 +109,33 @@ class ImportReconstructionWorkerService:
                 self._stop.wait(self.config.poll_seconds)
 
     def process_once(self, worker_id: str | None = None) -> bool:
-        owner = worker_id or _worker_id(0)
+        """Compatibility wrapper for the authoritative one-item execution primitive."""
+        return self.process_one_claimed_item(worker_id=worker_id or _worker_id(0))
+
+    def process_one_claimed_item(
+        self,
+        *,
+        worker_id: str,
+        import_run_uuid: str | None = None,
+        heartbeat: bool = True,
+    ) -> bool:
+        """Claim and safely execute one reconstruction item.
+
+        Background workers and the operational ``/process`` route both use this
+        primitive, so claiming, pause/cancel checks, heartbeats, lease-owner CAS,
+        and terminal finalization cannot drift between orchestration paths.
+        """
+        owner = worker_id
         with import_connection(self.settings) as connection:
             processor = ImportMessageProcessor(connection, self.settings)
             processor.recover_expired_leases()
-            claimed = processor.claim_next(owner, self.config.lease_seconds)
+            claimed = processor.claim_next(
+                owner,
+                self.config.lease_seconds,
+                import_run_uuid=import_run_uuid,
+            )
             if claimed is None:
+                processor.finalize_ready_runs(import_run_uuid)
                 return False
             run = connection.execute(
                 "SELECT status FROM import_runs WHERE import_run_uuid = ?",
@@ -129,16 +150,58 @@ class ImportReconstructionWorkerService:
                 or run["status"] != "processing"
                 or (progress is not None and (progress["paused"] or progress["cancelled"]))
             ):
-                processor.release_claim(claimed["status_uuid"], owner)
-                return True
-            heartbeat = _Heartbeat(self.settings, claimed["status_uuid"], owner, self.config)
-            heartbeat.start()
+                processor.release_claim(
+                    claimed["status_uuid"],
+                    owner,
+                    claimed.get("processing_attempt_uuid"),
+                )
+                return False
+            lease_heartbeat = (
+                _Heartbeat(
+                    self.settings,
+                    claimed["status_uuid"],
+                    owner,
+                    claimed.get("processing_attempt_uuid"),
+                    self.config,
+                )
+                if heartbeat
+                else None
+            )
+            if lease_heartbeat is not None:
+                lease_heartbeat.start()
             try:
                 processor._process_one(claimed)
             finally:
-                heartbeat.stop()
+                if lease_heartbeat is not None:
+                    lease_heartbeat.stop()
+                    if lease_heartbeat.lease_lost:
+                        LOGGER.warning(
+                            "lease lost while processing import status %s by %s",
+                            claimed["status_uuid"],
+                            owner,
+                        )
                 processor.finalize_if_terminal(str(claimed["import_run_uuid"]))
             return True
+
+    def process_next_batch(
+        self,
+        *,
+        import_run_uuid: str,
+        limit: int,
+        worker_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Run up to ``limit`` items through the one-item execution primitive."""
+        request_owner = worker_id or _worker_id("api")
+        for _ in range(max(1, limit)):
+            if not self.process_one_claimed_item(
+                worker_id=request_owner,
+                import_run_uuid=import_run_uuid,
+            ):
+                break
+        with import_connection(self.settings) as connection:
+            processor = ImportMessageProcessor(connection, self.settings)
+            processor.finalize_if_terminal(import_run_uuid)
+            return processor.processing_report(import_run_uuid)
 
 
 class _Heartbeat:
@@ -147,11 +210,13 @@ class _Heartbeat:
         settings: Settings,
         status_uuid: str,
         worker_id: str,
+        attempt_uuid: str | None,
         config: ImportReconstructionWorkerConfig,
     ) -> None:
         self.settings = settings
         self.status_uuid = status_uuid
         self.worker_id = worker_id
+        self.attempt_uuid = attempt_uuid
         self.config = config
         self._stop = threading.Event()
         self.lease_lost = False
@@ -170,12 +235,15 @@ class _Heartbeat:
         while not self._stop.wait(self.config.heartbeat_seconds):
             with import_connection(self.settings) as connection:
                 renewed = ImportMessageProcessor(connection, self.settings).renew_lease(
-                    self.status_uuid, self.worker_id, self.config.lease_seconds
+                    self.status_uuid,
+                    self.worker_id,
+                    self.attempt_uuid,
+                    self.config.lease_seconds,
                 )
             if not renewed:
                 self.lease_lost = True
                 self._stop.set()
 
 
-def _worker_id(index: int) -> str:
+def _worker_id(index: int | str) -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{index}:{uuid.uuid4()}"

@@ -19,7 +19,6 @@ from memcore.governance.repositories import GovernanceRepository
 from memcore.privacy.dependency_closure import privacy_request_closure
 from memcore.privacy.residue_check import run_forget_residue_check
 from memcore.repositories.domain import RepositoryError
-from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
 from memcore.storage.write_commands.privacy_commands import run_privacy_request_command
 
@@ -243,9 +242,7 @@ def confirm_privacy_request(request_uuid: str, request: PrivacyConfirmRequest) -
 @router.post("/privacy/requests/{request_uuid}/execute", response_model=None)
 def execute_privacy_request(request_uuid: str) -> dict[str, Any]:
     settings = get_settings()
-    return _guard(
-        lambda: run_privacy_request_command(settings.db_path, request_uuid, "execute")
-    )
+    return _guard(lambda: run_privacy_request_command(settings.db_path, request_uuid, "execute"))
 
 
 @router.get("/privacy/requests/{request_uuid}", response_model=None)
@@ -322,7 +319,6 @@ def _connection() -> Iterator[Any]:
     settings = get_settings()
     connection = connect(settings.db_path)
     try:
-        apply_migrations(connection)
         yield connection
     finally:
         connection.close()

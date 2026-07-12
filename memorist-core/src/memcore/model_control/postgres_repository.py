@@ -202,7 +202,7 @@ class PostgresModelControlRepository(ModelControlRepository):
                 role_default_uuid, role, model_profile_uuid, workspace_uuid,
                 project_uuid, created_at, updated_at, schema_version
             )
-            VALUES (%s, %s, %s, %s, %s, %s, NULL, 1)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 1)
             """,
             (
                 new_uuid(),
@@ -210,7 +210,8 @@ class PostgresModelControlRepository(ModelControlRepository):
                 model_profile_uuid,
                 workspace_uuid,
                 project_uuid,
-                utc_now(),
+                (created_at := utc_now()),
+                created_at,
             ),
         )
         previous_profile_uuid = (
@@ -276,10 +277,12 @@ class PostgresModelControlRepository(ModelControlRepository):
                 model_profile_uuid = str(resolved["model_profile_uuid"])
         profile = self.get_profile(model_profile_uuid) if model_profile_uuid else None
         fallback = built_in_default(event.role)
-        provider_type = (
+        provider_type = event.provider_type or (
             profile.provider_type if profile is not None else str(fallback["provider_type"])
         )
-        model_name = profile.model_name if profile is not None else str(fallback["model_name"])
+        model_name = event.model_name or (
+            profile.model_name if profile is not None else str(fallback["model_name"])
+        )
         values = event.model_dump(mode="json")
         values.update(
             {
@@ -607,7 +610,7 @@ def _profile_insert_params(profile: ModelProfile) -> tuple[Any, ...]:
         profile.is_enabled,
         profile.privacy_acknowledged_at,
         profile.created_at,
-        profile.updated_at,
+        profile.updated_at or profile.created_at,
         profile.schema_version,
     )
 

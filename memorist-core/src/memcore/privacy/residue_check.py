@@ -151,8 +151,7 @@ def _columns(connection: sqlite3.Connection, table: str) -> list[str]:
 
 def _columns_with_pk(connection: sqlite3.Connection, table: str) -> list[tuple[str, bool]]:
     return [
-        (row["name"], bool(row["pk"]))
-        for row in connection.execute(f"PRAGMA table_info({table})")
+        (row["name"], bool(row["pk"])) for row in connection.execute(f"PRAGMA table_info({table})")
     ]
 
 

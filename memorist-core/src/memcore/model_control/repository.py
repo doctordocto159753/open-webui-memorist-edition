@@ -283,10 +283,12 @@ class ModelControlRepository:
                 model_profile_uuid = str(resolved["model_profile_uuid"])
         profile = self.get_profile(model_profile_uuid) if model_profile_uuid else None
         fallback = built_in_default(event.role)
-        provider_type = (
+        provider_type = event.provider_type or (
             profile.provider_type if profile is not None else str(fallback["provider_type"])
         )
-        model_name = profile.model_name if profile is not None else str(fallback["model_name"])
+        model_name = event.model_name or (
+            profile.model_name if profile is not None else str(fallback["model_name"])
+        )
         values = event.model_dump(mode="json")
         values["model_profile_uuid"] = model_profile_uuid
         values["usage_uuid"] = new_uuid()

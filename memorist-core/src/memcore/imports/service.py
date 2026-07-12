@@ -15,6 +15,7 @@ from memcore.imports.reconstruction.normalizer import normalize_conversation
 from memcore.imports.repositories import ImportRepository, strip_none
 from memcore.imports.staging import sha256_file, stage_import_source, stage_trusted_upload_file
 from memcore.memory_worker.identity import build_processing_identity
+from memcore.model_control.security import sanitize_error_message
 from memcore.models import CreatorType, MessageRole, new_uuid, utc_now
 from memcore.repositories import (
     MessageRepository,
@@ -278,10 +279,8 @@ class ImportService:
                             active_processing_message_count += 1
                         elif classification == "previous_identity_differs":
                             previous_identity_changed_message_count += 1
-                            mapped_messages_requiring_processing += 1
                         elif classification == "previous_processing_failed":
                             previous_failed_message_count += 1
-                            mapped_messages_requiring_processing += 1
                         elif classification == "mapping_repair_required":
                             mapping_repair_message_count += 1
                 else:
@@ -322,10 +321,20 @@ class ImportService:
             "previous_failed_message_count": previous_failed_message_count,
             "mapping_repair_message_count": mapping_repair_message_count,
             "expected_text_unitization_jobs": (
-                eligible_new_messages if selected_mode == "extract_candidates" else 0
+                eligible_new_messages
+                + mapped_messages_requiring_processing
+                + mapping_repair_message_count
+                + previous_identity_changed_message_count
+                + previous_failed_message_count
+                if selected_mode == "extract_candidates"
+                else 0
             ),
             "expected_memory_processing_jobs": (
-                eligible_new_messages + mapped_messages_requiring_processing
+                eligible_new_messages
+                + mapped_messages_requiring_processing
+                + mapping_repair_message_count
+                + previous_identity_changed_message_count
+                + previous_failed_message_count
                 if selected_mode == "full_memory_reconstruction"
                 else 0
             ),
@@ -491,6 +500,18 @@ class ImportService:
                 {"target_workspace_uuid": workspace_uuid},
             )
         model_target = processor.model_target(workspace_uuid, run["target_project_uuid"])
+        approved_target = dry_run_report.get("processing_model") or {}
+        identity_fields = (
+            "role",
+            "model_profile_uuid",
+            "provider_type",
+            "model_name",
+            "deterministic_fallback",
+        )
+        if any(approved_target.get(field) != model_target.get(field) for field in identity_fields):
+            raise RepositoryError(
+                "processing model target changed after dry-run; rerun dry-run before commit"
+            )
 
         pending_conversations = self._pending_commit_conversations(import_run_uuid, batch_size)
         if not pending_conversations:
@@ -560,10 +581,11 @@ class ImportService:
                     ImportIssue(
                         severity="warning",
                         issue_code="conversation_commit_failed",
-                        message=(
+                        message=sanitize_error_message(
                             "Conversation failed during bounded commit: "
                             f"{type(error).__name__}: {error}"
-                        ),
+                        )
+                        or "Conversation failed during bounded commit",
                         details={"source_conversation_id": row["source_conversation_id"]},
                     ),
                 )
@@ -608,8 +630,31 @@ class ImportService:
         return ImportMessageProcessor(self.connection, get_settings()).statuses(import_run_uuid)
 
     def cancel(self, import_run_uuid: str) -> dict[str, Any]:
-        self.repository.update_run(import_run_uuid, {"status": "cancelled"})
-        return update_progress(self.connection, import_run_uuid, cancelled=1, phase="cancelled")
+        now = utc_now()
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE import_message_processing_status
+                SET status = 'cancelled', lease_owner = NULL, lease_expires_at = NULL,
+                    processing_attempt_uuid = NULL, finished_at = ?,
+                    updated_at = ?, last_transition_at = ?
+                WHERE import_run_uuid = ? AND status IN ('queued', 'running')
+                """,
+                (now, now, now, import_run_uuid),
+            )
+            self.connection.execute(
+                """
+                UPDATE jobs SET status = 'cancelled', locked_by = NULL, locked_at = NULL,
+                    updated_at = ?
+                WHERE job_uuid IN (
+                    SELECT job_uuid FROM import_message_processing_status
+                    WHERE import_run_uuid = ? AND job_uuid IS NOT NULL
+                ) AND status IN ('pending', 'running')
+                """,
+                (now, import_run_uuid),
+            )
+            self.repository.update_run(import_run_uuid, {"status": "cancelled"})
+            return update_progress(self.connection, import_run_uuid, cancelled=1, phase="cancelled")
 
     def delete_staging(self, import_run_uuid: str) -> dict[str, str]:
         run_dir = Path(self.object_store_path) / "imports" / import_run_uuid

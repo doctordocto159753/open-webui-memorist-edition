@@ -399,7 +399,7 @@ PROMPT_LIST = [
     _definition(
         JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
         JAKOBSON_SENTENCE_ANALYSIS_STAGE,
-        [ModelRole.MEMORY_EXTRACTION],
+        [ModelRole.MEMORY_EXTRACTION, ModelRole.IMPORT_RECONSTRUCTION],
         "Primary sentence-level semantic analysis after message capture and segmentation.",
         "jakobson_sentence_analysis_v2.md",
         ["sentences"],

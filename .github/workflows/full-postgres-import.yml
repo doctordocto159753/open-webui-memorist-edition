@@ -8,6 +8,26 @@ on:
   workflow_dispatch:
 
 jobs:
+  pr3-full-backend-suite:
+    name: PR3 Full Backend Suite
+    runs-on: ubuntu-latest
+    env:
+      MEMORIST_RUNTIME_PROFILE: lite
+      MEMORIST_CANONICAL_STORE: sqlite
+      MEMORIST_IMPORT_RECONSTRUCTION_WORKER_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Complete backend suite
+        working-directory: memorist-core
+        run: uv run pytest --junitxml=backend-results.xml
+      - name: Reject zero collected backend tests
+        working-directory: memorist-core
+        run: uv run python -c "import xml.etree.ElementTree as E; r=E.parse('backend-results.xml').getroot(); assert list(r.iter('testcase'))"
+
   pr3-lite-import-integration:
     name: PR3 Lite Import Integration
     runs-on: ubuntu-latest
@@ -23,7 +43,10 @@ jobs:
         run: uv sync --all-extras
       - name: Lite import integration
         working-directory: memorist-core
-        run: uv run pytest tests/test_official_chatgpt_import.py -q
+        run: uv run pytest tests/test_official_chatgpt_import.py -q --junitxml=lite-results.xml
+      - name: Reject skipped lite certification tests
+        working-directory: memorist-core
+        run: uv run python -c "import xml.etree.ElementTree as E; r=E.parse('lite-results.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
 
   pr3-full-postgres-import-e2e:
     name: PR3 Full PostgreSQL Import E2E
@@ -59,10 +82,23 @@ jobs:
         run: uv sync --all-extras
       - name: Full PostgreSQL import E2E
         working-directory: memorist-core
-        run: uv run pytest tests/test_full_postgres_import_runtime.py -q
+        run: |
+          set -o pipefail
+          test -n "$MEMORIST_POSTGRES_DSN"
+          uv run pytest tests/test_full_postgres_import_runtime.py -vv --tb=long --junitxml=postgres-results.xml 2>&1 | tee postgres-output.txt
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('postgres-results.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+      - name: Upload PostgreSQL E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-e2e-evidence-${{ github.sha }}
+          path: |
+            memorist-core/postgres-output.txt
+            memorist-core/postgres-results.xml
+          if-no-files-found: error
 
   pr3-remote-provider-execution:
-    name: PR3 Remote Provider Execution
+    name: PR3 Full PostgreSQL Remote Provider
     runs-on: ubuntu-latest
     services: *postgres_service
     env: *postgres_env
@@ -74,7 +110,10 @@ jobs:
         run: uv sync --all-extras
       - name: Remote provider execution
         working-directory: memorist-core
-        run: uv run pytest -k "import and (provider or postgres)" -q
+        run: |
+          test -n "$MEMORIST_POSTGRES_DSN"
+          uv run pytest tests/test_full_postgres_remote_provider.py -q --junitxml=remote-provider-results.xml
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('remote-provider-results.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
 
   pr3-worker-lifecycle-and-concurrency:
     name: PR3 Worker Lifecycle and Concurrency
@@ -89,7 +128,20 @@ jobs:
         run: uv sync --all-extras
       - name: Worker lifecycle and concurrency
         working-directory: memorist-core
-        run: uv run pytest -k "import and (worker or concurrency or restart)" -q
+        run: |
+          set -o pipefail
+          test -n "$MEMORIST_POSTGRES_DSN"
+          uv run pytest tests/test_import_worker_lifecycle.py tests/test_full_postgres_import_runtime.py -vv --tb=long --junitxml=worker-results.xml 2>&1 | tee worker-output.txt
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('worker-results.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+      - name: Upload worker concurrency evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-concurrency-evidence-${{ github.sha }}
+          path: |
+            memorist-core/worker-output.txt
+            memorist-core/worker-results.xml
+          if-no-files-found: error
 
   pr3-import-security:
     name: PR3 Import Security
@@ -102,7 +154,9 @@ jobs:
         run: uv sync --all-extras
       - name: Import security tests
         working-directory: memorist-core
-        run: uv run pytest -k "import and security" -q
+        run: |
+          uv run pytest tests/test_import_security.py -q --junitxml=security-results.xml
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('security-results.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
 
   pr3-frontend-workflow:
     name: PR3 Frontend Workflow
