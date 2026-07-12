@@ -111,13 +111,45 @@ def _commit(
 
 def _wait_terminal(settings: Settings, run_uuid: str, timeout: float = 30.0) -> dict[str, object]:
     deadline = time.monotonic() + timeout
+    last_run: dict[str, object] | None = None
+    last_statuses: list[dict[str, object]] = []
+    last_jobs: list[dict[str, object]] = []
     while time.monotonic() < deadline:
         with import_connection(settings) as connection:
             run = ImportService(connection, settings.object_store_path).repository.get_run(run_uuid)
+            last_run = dict(run)
             if run["status"] in {"fully_reconstructed", "completed_with_failures", "cancelled"}:
                 return run
+            last_statuses = [
+                dict(row)
+                for row in connection.execute(
+                    """
+                    SELECT status_uuid, status, processing_stage, lease_owner,
+                           processing_attempt_uuid, retry_count, run_after, error_sanitized
+                    FROM import_message_processing_status
+                    WHERE import_run_uuid = ?
+                    ORDER BY created_at, status_uuid
+                    """,
+                    (run_uuid,),
+                ).fetchall()
+            ]
+            last_jobs = [
+                dict(row)
+                for row in connection.execute(
+                    """
+                    SELECT job_uuid, status, attempts, locked_by, run_after, last_error_sanitized
+                    FROM jobs
+                    WHERE payload_ijson LIKE ?
+                    ORDER BY created_at, job_uuid
+                    """,
+                    (f"%{run_uuid}%",),
+                ).fetchall()
+            ]
         time.sleep(0.05)
-    raise AssertionError(f"import {run_uuid} did not become terminal before timeout")
+    raise AssertionError(
+        f"import {run_uuid} did not become terminal before timeout; "
+        f"run={last_run}; statuses={last_statuses}; jobs={last_jobs}"
+    )
 
 
 def test_lite_background_worker_start_stop_completes_without_process_endpoint(

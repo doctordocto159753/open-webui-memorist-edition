@@ -368,7 +368,9 @@ def test_full_postgres_concurrent_process_endpoint_does_not_duplicate_identity(
                      WHERE status IN ('succeeded', 'already_processed')
                    ) AS done
             FROM import_message_processing_status
-            WHERE import_run_uuid = ? AND processing_stage = 'memory_extraction'
+            WHERE import_run_uuid = ?
+              AND processing_mode = 'full_memory_reconstruction'
+              AND processing_identity_hash IS NOT NULL
             """,
             (run_uuid,),
         ).fetchone()
@@ -975,7 +977,9 @@ def test_full_postgres_restart_recovers_expired_claim_and_finishes(
         statuses = connection.execute(
             """
             SELECT status FROM import_message_processing_status
-            WHERE import_run_uuid = ? AND processing_stage = 'memory_extraction'
+            WHERE import_run_uuid = ?
+              AND processing_mode = 'full_memory_reconstruction'
+              AND processing_identity_hash IS NOT NULL
             """,
             (run_uuid,),
         ).fetchall()
