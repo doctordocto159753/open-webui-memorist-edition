@@ -1,0 +1,90 @@
+name: PR3 Audited Post-Merge Certification
+
+on:
+  push:
+    branches: [codex/pr3-post-merge-certification-repair]
+
+permissions:
+  contents: write
+
+jobs:
+  audited-certification:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: memorist
+          POSTGRES_PASSWORD: memorist
+          POSTGRES_DB: memorist_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U memorist -d memorist_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MEMORIST_RUNTIME_PROFILE: full
+      MEMORIST_CANONICAL_STORE: postgres
+      MEMORIST_POSTGRES_DSN: postgresql://memorist:memorist@localhost:5432/memorist_test
+      MEMORIST_OBJECT_STORE_PATH: /tmp/memorist-objects
+      MEMORIST_ALLOW_FULL_GRAPH_DEGRADED: "true"
+      MEMORIST_HOT_SCHEDULER: in_memory
+      MEMORIST_IMPORT_RECONSTRUCTION_WORKER_ENABLED: "true"
+      MEMORIST_IMPORT_TEST_KEY: ci-secret-value
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Run and publish auditable result
+        shell: bash
+        run: |
+          set +e
+          cd memorist-core
+          uv run pytest tests/test_full_postgres_import_runtime.py -q --junitxml=/tmp/pg.xml
+          pg_exit=$?
+          uv run pytest tests/test_import_worker_lifecycle.py tests/test_import_lease_job_alignment.py tests/test_full_postgres_import_runtime.py -q --junitxml=/tmp/worker.xml
+          worker_exit=$?
+          cd ..
+          python - <<'PY' "$GITHUB_SHA" "$pg_exit" "$worker_exit"
+          import sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          sha, pg_exit, worker_exit = sys.argv[1:]
+
+          def summary(path: str) -> tuple[int, int, int, int]:
+              root = ET.parse(path).getroot()
+              cases = list(root.iter('testcase'))
+              return (
+                  len(cases),
+                  len(list(root.iter('failure'))),
+                  len(list(root.iter('error'))),
+                  len(list(root.iter('skipped'))),
+              )
+
+          pg = summary('/tmp/pg.xml')
+          worker = summary('/tmp/worker.xml')
+          result = (
+              f'certified_commit={sha}\n'
+              f'postgres_e2e_exit={pg_exit}\n'
+              f'postgres_e2e_tests={pg[0]} failures={pg[1]} errors={pg[2]} skipped={pg[3]}\n'
+              f'worker_concurrency_exit={worker_exit}\n'
+              f'worker_concurrency_tests={worker[0]} failures={worker[1]} errors={worker[2]} skipped={worker[3]}\n'
+          )
+          Path('.github/pr3-postmerge-certification-result.txt').write_text(result)
+          PY
+          rm .github/workflows/pr3-postmerge-audited-cert.yml
+          git config user.name "PR3 Independent Reviewer"
+          git config user.email "pr3-reviewer@users.noreply.github.com"
+          git add -A
+          git commit -m "Record audited post-merge PostgreSQL certification"
+          git push origin HEAD:codex/pr3-post-merge-certification-repair
+          if [ "$pg_exit" -ne 0 ] || [ "$worker_exit" -ne 0 ]; then
+            exit 1
+          fi
