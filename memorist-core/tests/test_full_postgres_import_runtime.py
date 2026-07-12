@@ -854,7 +854,7 @@ def test_full_postgres_pause_during_inference_requeues_claim_and_job_immediately
     assert status["lease_owner"] is None
     assert status["processing_attempt_uuid"] is None
     assert dict(job) == {"status": "pending", "locked_by": None, "locked_at": None}
-    assert all(int(value) == 0 for value in artifacts)
+    assert all(int(value) == 0 for value in artifacts.values())
 
     with import_connection(settings) as connection:
         ImportService(connection, settings.object_store_path).resume(run_uuid)
