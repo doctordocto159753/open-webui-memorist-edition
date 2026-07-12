@@ -443,7 +443,21 @@ def test_full_postgres_midflight_lease_loss_fences_all_attempt_artifacts(
             (claimed_a["status_uuid"],),
         )
         connection.commit()
+        job_before = connection.execute(
+            "SELECT status, locked_by FROM jobs WHERE job_uuid = ?",
+            (claimed_a["job_uuid"],),
+        ).fetchone()
+        assert dict(job_before) == {"status": "running", "locked_by": "pg-worker-a"}
         assert ImportMessageProcessor(connection, settings).recover_expired_leases() == 1
+        job_after = connection.execute(
+            "SELECT status, locked_by, locked_at FROM jobs WHERE job_uuid = ?",
+            (claimed_a["job_uuid"],),
+        ).fetchone()
+        assert dict(job_after) == {
+            "status": "pending",
+            "locked_by": None,
+            "locked_at": None,
+        }
     assert ImportReconstructionWorkerService(settings).process_one_claimed_item(
         worker_id="pg-worker-b", import_run_uuid=run_uuid
     )
@@ -756,6 +770,102 @@ def test_full_postgres_pause_has_bounded_polling_and_resume(
     finally:
         worker.stop()
     assert paused_calls <= 6
+
+
+@pytest.mark.skipif(not os.getenv("MEMORIST_POSTGRES_DSN"), reason="requires real PostgreSQL")
+def test_full_postgres_pause_during_inference_requeues_claim_and_job_immediately(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _pg_settings(tmp_path)
+    run_uuid = _pg_committed_run(settings, tmp_path, monkeypatch, messages=1)
+    original = PostgresMemoryWorkerPipeline.prepare_message
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_prepare(
+        self: PostgresMemoryWorkerPipeline,
+        message_uuid: str,
+        model_target: dict[str, object] | None = None,
+    ) -> PreparedJakobsonInference:
+        entered.set()
+        assert release.wait(timeout=15)
+        return original(self, message_uuid, model_target)
+
+    monkeypatch.setattr(PostgresMemoryWorkerPipeline, "prepare_message", blocked_prepare)
+    worker = ImportReconstructionWorkerService(settings)
+    late = threading.Thread(
+        target=lambda: worker.process_one_claimed_item(
+            worker_id="pg-paused-worker", import_run_uuid=run_uuid, heartbeat=False
+        ),
+        daemon=True,
+    )
+    late.start()
+    assert entered.wait(timeout=5)
+    with import_connection(settings) as connection:
+        ImportService(connection, settings.object_store_path).pause(run_uuid)
+    release.set()
+    late.join(timeout=15)
+    assert not late.is_alive()
+
+    with import_connection(settings) as connection:
+        status = connection.execute(
+            """
+            SELECT status, lease_owner, processing_attempt_uuid, job_uuid, target_message_uuid
+            FROM import_message_processing_status
+            WHERE import_run_uuid = ? AND skip_reason IS NULL
+            """,
+            (run_uuid,),
+        ).fetchone()
+        job = connection.execute(
+            "SELECT status, locked_by, locked_at FROM jobs WHERE job_uuid = ?",
+            (status["job_uuid"],),
+        ).fetchone()
+        message_uuid = str(status["target_message_uuid"])
+        artifacts = connection.execute(
+            """
+            SELECT
+              (SELECT COUNT(*) FROM memory_processing_runs WHERE message_uuid = ?) AS runs,
+              (SELECT COUNT(*) FROM prompt_execution_runs
+               WHERE import_run_uuid = ? AND message_uuid = ?) AS prompts,
+              (SELECT COUNT(*) FROM model_usage_events
+               WHERE import_run_uuid = ? AND message_uuid = ?
+                 AND stage = 'jakobson_sentence_analysis') AS usage,
+              (SELECT COUNT(*) FROM jakobson_analysis_runs WHERE message_uuid = ?) AS jakobson,
+              (SELECT COUNT(*) FROM memory_candidates mc
+               JOIN text_units tu ON tu.text_unit_uuid = mc.text_unit_uuid
+               WHERE tu.message_uuid = ?) AS candidates,
+              (SELECT COUNT(*) FROM memory_versions mv
+               JOIN memory_candidates mc ON mc.candidate_uuid = mv.source_candidate_uuid
+               JOIN text_units tu ON tu.text_unit_uuid = mc.text_unit_uuid
+               WHERE tu.message_uuid = ?) AS versions
+            """,
+            (
+                message_uuid,
+                run_uuid,
+                message_uuid,
+                run_uuid,
+                message_uuid,
+                message_uuid,
+                message_uuid,
+                message_uuid,
+            ),
+        ).fetchone()
+    assert status["status"] == "queued"
+    assert status["lease_owner"] is None
+    assert status["processing_attempt_uuid"] is None
+    assert dict(job) == {"status": "pending", "locked_by": None, "locked_at": None}
+    assert all(int(value) == 0 for value in artifacts)
+
+    with import_connection(settings) as connection:
+        ImportService(connection, settings.object_store_path).resume(run_uuid)
+    monkeypatch.setattr(PostgresMemoryWorkerPipeline, "prepare_message", original)
+    assert worker.process_one_claimed_item(worker_id="pg-resumed-worker", import_run_uuid=run_uuid)
+    with import_connection(settings) as connection:
+        final = connection.execute(
+            "SELECT status FROM import_runs WHERE import_run_uuid = ?",
+            (run_uuid,),
+        ).fetchone()
+    assert final["status"] == "fully_reconstructed"
 
 
 @pytest.mark.skipif(not os.getenv("MEMORIST_POSTGRES_DSN"), reason="requires real PostgreSQL")

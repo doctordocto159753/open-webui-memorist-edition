@@ -477,18 +477,30 @@ class ImportMessageProcessor:
             return False
         now = utc_now()
         with self.connection:
-            return bool(
+            released = self.connection.execute(
+                """
+                UPDATE import_message_processing_status
+                SET status = 'queued', lease_owner = NULL, lease_expires_at = NULL,
+                    processing_attempt_uuid = NULL, updated_at = ?, last_transition_at = ?
+                WHERE status_uuid = ? AND status = 'running' AND lease_owner = ?
+                  AND processing_attempt_uuid = ?
+                RETURNING job_uuid
+                """,
+                (now, now, status_uuid, worker_id, attempt_uuid),
+            ).fetchone()
+            if released is None:
+                return False
+            if released["job_uuid"]:
                 self.connection.execute(
                     """
-                    UPDATE import_message_processing_status
-                    SET status = 'queued', lease_owner = NULL, lease_expires_at = NULL,
-                        processing_attempt_uuid = NULL, updated_at = ?, last_transition_at = ?
-                    WHERE status_uuid = ? AND status = 'running' AND lease_owner = ?
-                      AND processing_attempt_uuid = ?
+                    UPDATE jobs
+                    SET status = 'pending', locked_by = NULL, locked_at = NULL, updated_at = ?
+                    WHERE job_uuid = ? AND status IN ('pending', 'running')
+                      AND (locked_by IS NULL OR locked_by = ?)
                     """,
-                    (now, now, status_uuid, worker_id, attempt_uuid),
-                ).rowcount
-            )
+                    (now, released["job_uuid"], worker_id),
+                )
+            return True
 
     def renew_lease(
         self,
@@ -579,19 +591,29 @@ class ImportMessageProcessor:
     def recover_expired_leases(self) -> int:
         now = utc_now()
         with self.connection:
-            return int(
-                self.connection.execute(
-                    """
-                    UPDATE import_message_processing_status
-                    SET status = 'queued', lease_owner = NULL, lease_expires_at = NULL,
-                        processing_attempt_uuid = NULL, last_transition_at = ?, updated_at = ?
-                    WHERE status = 'running'
-                      AND lease_expires_at IS NOT NULL
-                      AND lease_expires_at < ?
-                    """,
-                    (now, now, now),
-                ).rowcount
-            )
+            recovered = self.connection.execute(
+                """
+                UPDATE import_message_processing_status
+                SET status = 'queued', lease_owner = NULL, lease_expires_at = NULL,
+                    processing_attempt_uuid = NULL, last_transition_at = ?, updated_at = ?
+                WHERE status = 'running'
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at < ?
+                RETURNING job_uuid
+                """,
+                (now, now, now),
+            ).fetchall()
+            for row in recovered:
+                if row["job_uuid"]:
+                    self.connection.execute(
+                        """
+                        UPDATE jobs
+                        SET status = 'pending', locked_by = NULL, locked_at = NULL, updated_at = ?
+                        WHERE job_uuid = ? AND status IN ('pending', 'running')
+                        """,
+                        (now, row["job_uuid"]),
+                    )
+            return len(recovered)
 
     def retry_failed(self, import_run_uuid: str) -> dict[str, Any]:
         now = utc_now()
@@ -765,6 +787,7 @@ class ImportMessageProcessor:
             SELECT job_uuid, model_role
             FROM prompt_execution_runs
             WHERE import_run_uuid = ? AND job_uuid IS NOT NULL
+              AND stage = 'jakobson_sentence_analysis' AND status = 'ok'
             """,
             (import_run_uuid,),
         ).fetchall():
@@ -777,6 +800,7 @@ class ImportMessageProcessor:
                    COALESCE(SUM(output_tokens), 0) AS output_tokens
             FROM model_usage_events
             WHERE import_run_uuid = ?
+              AND stage = 'jakobson_sentence_analysis' AND status = 'ok'
             GROUP BY role, model_profile_uuid, provider_type, model_name
             """,
             (import_run_uuid,),
@@ -1058,6 +1082,11 @@ class ImportMessageProcessor:
                     )
         except ImportLeaseLost:
             self.connection.rollback()
+            self.release_claim(
+                str(status_row["status_uuid"]),
+                worker_id,
+                attempt_uuid,
+            )
             return
         except Exception as error:
             self.connection.rollback()
