@@ -1,0 +1,5 @@
+certified_commit=23e2b33cf9e8e7539e0dbe22cdfb1aff3e17d23c
+postgres_e2e_exit=0
+postgres_e2e_tests=15 failures=0 errors=0 skipped=0
+worker_concurrency_exit=1
+worker_concurrency_tests=36 failures=1 errors=0 skipped=0
