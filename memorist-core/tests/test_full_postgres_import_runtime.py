@@ -371,6 +371,7 @@ def test_full_postgres_concurrent_process_endpoint_does_not_duplicate_identity(
             WHERE import_run_uuid = ?
               AND processing_mode = 'full_memory_reconstruction'
               AND processing_identity_hash IS NOT NULL
+              AND job_uuid IS NOT NULL
             """,
             (run_uuid,),
         ).fetchone()
@@ -980,6 +981,7 @@ def test_full_postgres_restart_recovers_expired_claim_and_finishes(
             WHERE import_run_uuid = ?
               AND processing_mode = 'full_memory_reconstruction'
               AND processing_identity_hash IS NOT NULL
+              AND job_uuid IS NOT NULL
             """,
             (run_uuid,),
         ).fetchall()
