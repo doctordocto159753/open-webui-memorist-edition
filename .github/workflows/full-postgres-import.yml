@@ -20,11 +20,15 @@ jobs:
         with:
           ref: codex/pr3-post-merge-certification-repair
           fetch-depth: 0
-      - name: Apply tested edits and restore production workflow
+      - name: Apply tested edits
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
+          if [ ! -f .github/pr3-test-selection-fix.patch ]; then
+            echo "Selection fix already applied."
+            exit 0
+          fi
           stage=edit
           trap 'code=$?; gh pr comment 36 --body "PostgreSQL test-selection transport failed at stage: ${stage} (exit ${code})." || true; exit ${code}' ERR
           python - <<'PY'
@@ -121,7 +125,6 @@ jobs:
           PY
           stage=cleanup
           git rm .github/pr3-test-selection-fix.patch
-          git show cebed2c23197d0a9a96098f453d5dcac2cbbed22:.github/workflows/full-postgres-import.yml > .github/workflows/full-postgres-import.yml
           stage=validate
           python -m compileall -q memorist-core/tests/test_full_postgres_import_runtime.py
           git diff --check
@@ -131,4 +134,7 @@ jobs:
           git add -A
           git commit -m "Scope PostgreSQL lease tests to processable rows"
           stage=push
-          git push origin HEAD:codex/pr3-post-merge-certification-repair
+          if ! output=$(git push origin HEAD:codex/pr3-post-merge-certification-repair 2>&1); then
+            gh pr comment 36 --body "PostgreSQL test-selection push failed: ${output}"
+            exit 1
+          fi
