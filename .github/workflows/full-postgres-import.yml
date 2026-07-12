@@ -83,9 +83,19 @@ jobs:
       - name: Full PostgreSQL import E2E
         working-directory: memorist-core
         run: |
+          set -o pipefail
           test -n "$MEMORIST_POSTGRES_DSN"
-          uv run pytest tests/test_full_postgres_import_runtime.py -q --junitxml=postgres-results.xml
+          uv run pytest tests/test_full_postgres_import_runtime.py -vv --tb=long --junitxml=postgres-results.xml 2>&1 | tee postgres-output.txt
           uv run python -c "import xml.etree.ElementTree as E; r=E.parse('postgres-results.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+      - name: Upload PostgreSQL E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-e2e-evidence-${{ github.sha }}
+          path: |
+            memorist-core/postgres-output.txt
+            memorist-core/postgres-results.xml
+          if-no-files-found: error
 
   pr3-remote-provider-execution:
     name: PR3 Full PostgreSQL Remote Provider
@@ -119,9 +129,19 @@ jobs:
       - name: Worker lifecycle and concurrency
         working-directory: memorist-core
         run: |
+          set -o pipefail
           test -n "$MEMORIST_POSTGRES_DSN"
-          uv run pytest tests/test_import_worker_lifecycle.py tests/test_full_postgres_import_runtime.py -q --junitxml=worker-results.xml
+          uv run pytest tests/test_import_worker_lifecycle.py tests/test_full_postgres_import_runtime.py -vv --tb=long --junitxml=worker-results.xml 2>&1 | tee worker-output.txt
           uv run python -c "import xml.etree.ElementTree as E; r=E.parse('worker-results.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+      - name: Upload worker concurrency evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-concurrency-evidence-${{ github.sha }}
+          path: |
+            memorist-core/worker-output.txt
+            memorist-core/worker-results.xml
+          if-no-files-found: error
 
   pr3-import-security:
     name: PR3 Import Security
