@@ -3,138 +3,196 @@ name: PR3 Import Runtime Certification
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: write
-  issues: write
-  pull-requests: write
-
 jobs:
-  pr3-apply-test-selection-fix:
-    name: Apply PostgreSQL Certification Selection Fix
-    if: github.event_name == 'pull_request' && github.head_ref == 'codex/pr3-post-merge-certification-repair'
+  pr3-full-backend-suite:
+    name: PR3 Full Backend Suite
+    runs-on: ubuntu-latest
+    env:
+      MEMORIST_RUNTIME_PROFILE: lite
+      MEMORIST_CANONICAL_STORE: sqlite
+      MEMORIST_IMPORT_RECONSTRUCTION_WORKER_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Complete backend suite
+        working-directory: memorist-core
+        run: uv run pytest --junitxml=backend-results.xml
+      - name: Reject zero collected backend tests
+        working-directory: memorist-core
+        run: uv run python -c "import xml.etree.ElementTree as E; r=E.parse('backend-results.xml').getroot(); assert list(r.iter('testcase'))"
+
+  pr3-lite-import-integration:
+    name: PR3 Lite Import Integration
+    runs-on: ubuntu-latest
+    env:
+      MEMORIST_RUNTIME_PROFILE: lite
+      MEMORIST_CANONICAL_STORE: sqlite
+      MEMORIST_IMPORT_RECONSTRUCTION_WORKER_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Lite import integration
+        working-directory: memorist-core
+        run: uv run pytest tests/test_official_chatgpt_import.py -q --junitxml=lite-results.xml
+      - name: Reject skipped lite certification tests
+        working-directory: memorist-core
+        run: uv run python -c "import xml.etree.ElementTree as E; r=E.parse('lite-results.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+
+  pr3-full-postgres-import-e2e:
+    name: PR3 Full PostgreSQL Import E2E
+    runs-on: ubuntu-latest
+    services: &postgres_service
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: memorist
+          POSTGRES_PASSWORD: memorist
+          POSTGRES_DB: memorist_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U memorist -d memorist_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env: &postgres_env
+      MEMORIST_RUNTIME_PROFILE: full
+      MEMORIST_CANONICAL_STORE: postgres
+      MEMORIST_POSTGRES_DSN: postgresql://memorist:memorist@localhost:5432/memorist_test
+      MEMORIST_OBJECT_STORE_PATH: /tmp/memorist-objects
+      MEMORIST_ALLOW_FULL_GRAPH_DEGRADED: "true"
+      MEMORIST_HOT_SCHEDULER: in_memory
+      MEMORIST_IMPORT_RECONSTRUCTION_WORKER_ENABLED: "true"
+      MEMORIST_IMPORT_TEST_KEY: ci-secret-value
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Full PostgreSQL import E2E
+        working-directory: memorist-core
+        run: |
+          set -o pipefail
+          test -n "$MEMORIST_POSTGRES_DSN"
+          uv run pytest tests/test_full_postgres_import_runtime.py -vv --tb=long --junitxml=postgres-results.xml 2>&1 | tee postgres-output.txt
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('postgres-results.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+      - name: Upload PostgreSQL E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-e2e-evidence-${{ github.sha }}
+          path: |
+            memorist-core/postgres-output.txt
+            memorist-core/postgres-results.xml
+          if-no-files-found: error
+
+  pr3-remote-provider-execution:
+    name: PR3 Full PostgreSQL Remote Provider
+    runs-on: ubuntu-latest
+    services: *postgres_service
+    env: *postgres_env
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Remote provider execution
+        working-directory: memorist-core
+        run: |
+          test -n "$MEMORIST_POSTGRES_DSN"
+          uv run pytest tests/test_full_postgres_remote_provider.py -q --junitxml=remote-provider-results.xml
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('remote-provider-results.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+
+  pr3-worker-lifecycle-and-concurrency:
+    name: PR3 Worker Lifecycle and Concurrency
+    runs-on: ubuntu-latest
+    services: *postgres_service
+    env: *postgres_env
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Worker lifecycle and concurrency
+        working-directory: memorist-core
+        run: |
+          set -o pipefail
+          test -n "$MEMORIST_POSTGRES_DSN"
+          uv run pytest tests/test_import_worker_lifecycle.py tests/test_full_postgres_import_runtime.py -vv --tb=long --junitxml=worker-results.xml 2>&1 | tee worker-output.txt
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('worker-results.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+      - name: Upload worker concurrency evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-concurrency-evidence-${{ github.sha }}
+          path: |
+            memorist-core/worker-output.txt
+            memorist-core/worker-results.xml
+          if-no-files-found: error
+
+  pr3-import-security:
+    name: PR3 Import Security
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: codex/pr3-post-merge-certification-repair
-          fetch-depth: 0
-      - name: Apply tested edits
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Import security tests
+        working-directory: memorist-core
         run: |
-          set -Eeuo pipefail
-          if [ ! -f .github/pr3-test-selection-fix.patch ]; then
-            echo "Selection fix already applied."
-            exit 0
-          fi
-          stage=edit
-          trap 'code=$?; gh pr comment 36 --body "PostgreSQL test-selection transport failed at stage: ${stage} (exit ${code})." || true; exit ${code}' ERR
-          python - <<'PY'
-          from pathlib import Path
+          uv run pytest tests/test_import_security.py -q --junitxml=security-results.xml
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('security-results.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
 
-          path = Path("memorist-core/tests/test_full_postgres_import_runtime.py")
-          source = path.read_text()
-          replacements = [
-              (
-                  """            FROM import_message_processing_status
-                      WHERE import_run_uuid = ?
-                      \"\"\",
-                      (run_uuid,),
-                  ).fetchone()
-          """,
-                  """            FROM import_message_processing_status
-                      WHERE import_run_uuid = ? AND processing_stage = 'memory_extraction'
-                      \"\"\",
-                      (run_uuid,),
-                  ).fetchone()
-          """,
-              ),
-              (
-                  """    assert dict(after) == dict(before)
-              assert [row[\"status\"] for row in statuses] == [\"succeeded\", \"cancelled\"]
-              assert all(row[\"lease_owner\"] is None for row in statuses)
-          """,
-                  """    assert dict(after) == dict(before)
-              processable_statuses = {row[\"status\"] for row in statuses if row[\"status\"] != \"skipped\"}
-              assert processable_statuses == {\"succeeded\", \"cancelled\"}
-              assert all(row[\"lease_owner\"] is None for row in statuses)
-          """,
-              ),
-              (
-                  """            SELECT status, retry_count, run_after, job_uuid
-                      FROM import_message_processing_status WHERE import_run_uuid = ?
-          """,
-                  """            SELECT status_uuid, status, retry_count, run_after, job_uuid
-                      FROM import_message_processing_status
-                      WHERE import_run_uuid = ? AND processing_stage = 'memory_extraction'
-          """,
-              ),
-              (
-                  """            UPDATE import_message_processing_status
-                      SET run_after = now() - interval '1 second' WHERE import_run_uuid = ?
-                      \"\"\",
-                      (run_uuid,),
-          """,
-                  """            UPDATE import_message_processing_status
-                      SET run_after = now() - interval '1 second' WHERE status_uuid = ?
-                      \"\"\",
-                      (status[\"status_uuid\"],),
-          """,
-              ),
-              (
-                  """            SELECT status, retry_count FROM import_message_processing_status
-                      WHERE import_run_uuid = ?
-                      \"\"\",
-                      (run_uuid,),
-                  ).fetchone()
-                  final_job = connection.execute(
-          """,
-                  """            SELECT status, retry_count FROM import_message_processing_status
-                      WHERE status_uuid = ?
-                      \"\"\",
-                      (status[\"status_uuid\"],),
-                  ).fetchone()
-                  final_job = connection.execute(
-          """,
-              ),
-              (
-                  """            SELECT status FROM import_message_processing_status
-                      WHERE import_run_uuid = ?
-                      \"\"\",
-                      (run_uuid,),
-                  ).fetchall()
-              assert duplicates == []
-          """,
-                  """            SELECT status FROM import_message_processing_status
-                      WHERE import_run_uuid = ? AND processing_stage = 'memory_extraction'
-                      \"\"\",
-                      (run_uuid,),
-                  ).fetchall()
-              assert duplicates == []
-          """,
-              ),
-          ]
-          for old, new in replacements:
-              count = source.count(old)
-              if count != 1:
-                  raise RuntimeError(f"expected exactly one replacement target, found {count}")
-              source = source.replace(old, new, 1)
-          path.write_text(source)
-          PY
-          stage=cleanup
-          git rm .github/pr3-test-selection-fix.patch
-          stage=validate
-          python -m compileall -q memorist-core/tests/test_full_postgres_import_runtime.py
-          git diff --check
-          stage=commit
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Scope PostgreSQL lease tests to processable rows"
-          stage=push
-          if ! output=$(git push origin HEAD:codex/pr3-post-merge-certification-repair 2>&1); then
-            gh pr comment 36 --body "PostgreSQL test-selection push failed: ${output}"
-            exit 1
-          fi
+  pr3-frontend-workflow:
+    name: PR3 Frontend Workflow
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Frontend tests
+        run: npm test
+      - name: Frontend typecheck
+        run: npm run typecheck
+      - name: Frontend lint
+        run: npm run lint
+
+  pr3-type-and-lint:
+    name: PR3 Type and Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Ruff
+        working-directory: memorist-core
+        run: uv run ruff check src tests
+      - name: Format check
+        working-directory: memorist-core
+        run: uv run ruff format --check src tests
+      - name: Mypy
+        working-directory: memorist-core
+        run: uv run mypy src tests
+      - name: Diff check
+        run: git diff --check
