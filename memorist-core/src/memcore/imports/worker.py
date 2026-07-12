@@ -149,10 +149,20 @@ class ImportReconstructionWorkerService:
                 or run["status"] != "processing"
                 or (progress is not None and (progress["paused"] or progress["cancelled"]))
             ):
-                processor.release_claim(claimed["status_uuid"], owner)
+                processor.release_claim(
+                    claimed["status_uuid"],
+                    owner,
+                    claimed.get("processing_attempt_uuid"),
+                )
                 return False
             lease_heartbeat = (
-                _Heartbeat(self.settings, claimed["status_uuid"], owner, self.config)
+                _Heartbeat(
+                    self.settings,
+                    claimed["status_uuid"],
+                    owner,
+                    claimed.get("processing_attempt_uuid"),
+                    self.config,
+                )
                 if heartbeat
                 else None
             )
@@ -180,9 +190,10 @@ class ImportReconstructionWorkerService:
         worker_id: str | None = None,
     ) -> dict[str, Any]:
         """Run up to ``limit`` items through the one-item execution primitive."""
+        request_owner = worker_id or _worker_id("api")
         for _ in range(max(1, limit)):
             if not self.process_one_claimed_item(
-                worker_id=worker_id or _worker_id("api"),
+                worker_id=request_owner,
                 import_run_uuid=import_run_uuid,
             ):
                 break
@@ -198,11 +209,13 @@ class _Heartbeat:
         settings: Settings,
         status_uuid: str,
         worker_id: str,
+        attempt_uuid: str | None,
         config: ImportReconstructionWorkerConfig,
     ) -> None:
         self.settings = settings
         self.status_uuid = status_uuid
         self.worker_id = worker_id
+        self.attempt_uuid = attempt_uuid
         self.config = config
         self._stop = threading.Event()
         self.lease_lost = False
@@ -221,7 +234,10 @@ class _Heartbeat:
         while not self._stop.wait(self.config.heartbeat_seconds):
             with import_connection(self.settings) as connection:
                 renewed = ImportMessageProcessor(connection, self.settings).renew_lease(
-                    self.status_uuid, self.worker_id, self.config.lease_seconds
+                    self.status_uuid,
+                    self.worker_id,
+                    self.attempt_uuid,
+                    self.config.lease_seconds,
                 )
             if not renewed:
                 self.lease_lost = True

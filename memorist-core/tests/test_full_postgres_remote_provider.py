@@ -11,6 +11,7 @@ from uuid import uuid4
 from zipfile import ZipFile
 
 import pytest
+from psycopg.errors import ForeignKeyViolation
 
 from memcore.config import Settings
 from memcore.imports.runtime import import_connection, initialize_runtime_storage
@@ -196,10 +197,82 @@ def test_full_postgres_remote_provider_background_worker_e2e(
 
 
 @pytest.mark.skipif(not os.getenv("MEMORIST_POSTGRES_DSN"), reason="requires real PostgreSQL")
+def test_full_postgres_scheduled_profile_cannot_be_hard_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ProviderHandler.requests = []
+    settings = Settings(
+        runtime_profile="full",
+        canonical_store="postgres",
+        postgres_dsn=os.environ["MEMORIST_POSTGRES_DSN"],
+        object_store_path=str(tmp_path / "objects"),
+        db_path=str(tmp_path / "unused.sqlite3"),
+        allow_full_graph_degraded=True,
+        hot_scheduler="in_memory",
+        import_reconstruction_worker_enabled=True,
+    )
+    import memcore.imports.service as service_module
+
+    monkeypatch.setattr(service_module, "get_settings", lambda: settings)
+    initialize_runtime_storage(settings)
+    with import_connection(settings) as connection:
+        model_control = PostgresModelControlRepository(connection)
+        profile = model_control.create_profile(
+            ModelProfileCreate(
+                profile_name="scheduled hard-delete guard",
+                provider_type=ProviderType.OPENAI_COMPATIBLE_LLM,
+                provider_name="fake-openai-compatible",
+                model_name="fake-import-model",
+                role=ModelRole.IMPORT_RECONSTRUCTION,
+                endpoint_url="http://127.0.0.1:1/v1",
+                endpoint_is_local=False,
+                secret_strategy="env_var",
+                secret_env_var_name="MEMORIST_IMPORT_TEST_KEY",
+                supports_json_mode=True,
+                privacy_acknowledged=True,
+            )
+        )
+        model_control.set_default(ModelRole.IMPORT_RECONSTRUCTION, profile.model_profile_uuid)
+        service = ImportService(connection, settings.object_store_path)
+        run = service.upload(str(_remote_archive(tmp_path, messages=1)))
+        run_uuid = str(run["import_run_uuid"])
+        service.inspect(run_uuid)
+        service.reconstruct(run_uuid)
+        service.dry_run(run_uuid, "full_memory_reconstruction")
+        service.commit(run_uuid, "full_memory_reconstruction")
+        connection.commit()
+
+        with pytest.raises(ForeignKeyViolation), connection.raw.transaction():
+            connection.execute(
+                "DELETE FROM model_role_defaults WHERE model_profile_uuid = ?",
+                (profile.model_profile_uuid,),
+            )
+            connection.execute(
+                "DELETE FROM model_profiles WHERE model_profile_uuid = ?",
+                (profile.model_profile_uuid,),
+            )
+        persisted = connection.execute(
+            "SELECT is_enabled FROM model_profiles WHERE model_profile_uuid = ?",
+            (profile.model_profile_uuid,),
+        ).fetchone()
+        status = connection.execute(
+            """
+            SELECT model_profile_uuid, status
+            FROM import_message_processing_status WHERE import_run_uuid = ?
+            """,
+            (run_uuid,),
+        ).fetchone()
+        ImportService(connection, settings.object_store_path).cancel(run_uuid)
+    assert persisted is not None and persisted["is_enabled"]
+    assert status["model_profile_uuid"] == profile.model_profile_uuid
+    assert status["status"] == "queued"
+    assert _ProviderHandler.requests == []
+
+
+@pytest.mark.skipif(not os.getenv("MEMORIST_POSTGRES_DSN"), reason="requires real PostgreSQL")
 @pytest.mark.parametrize(
     ("case_name", "mutation"),
     [
-        ("profile_deleted_after_scheduling", "delete_profile"),
         ("profile_disabled_after_scheduling", "disable_profile"),
         ("profile_role_changed_after_scheduling", "change_role"),
         ("provider_type_unsupported", "unsupported_provider"),
@@ -266,16 +339,7 @@ def test_full_postgres_remote_profile_failures_do_not_call_provider(
             service.reconstruct(run_uuid)
             service.dry_run(run_uuid, "full_memory_reconstruction")
             service.commit(run_uuid, "full_memory_reconstruction")
-            if mutation == "delete_profile":
-                connection.execute(
-                    "DELETE FROM model_role_defaults WHERE model_profile_uuid = ?",
-                    (profile.model_profile_uuid,),
-                )
-                connection.execute(
-                    "UPDATE model_profiles SET is_enabled = false WHERE model_profile_uuid = ?",
-                    (profile.model_profile_uuid,),
-                )
-            elif mutation == "disable_profile":
+            if mutation == "disable_profile":
                 connection.execute(
                     "UPDATE model_profiles SET is_enabled = false WHERE model_profile_uuid = ?",
                     (profile.model_profile_uuid,),

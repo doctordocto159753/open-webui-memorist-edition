@@ -121,7 +121,10 @@ def test_worker_polling_and_heartbeat_do_not_run_migrations_after_startup(
     with runtime.import_connection(settings) as connection:
         assert (
             ImportMessageProcessor(connection, settings).renew_lease(
-                "missing-status", "test-worker", settings.import_reconstruction_lease_seconds
+                "missing-status",
+                "test-worker",
+                "missing-attempt",
+                settings.import_reconstruction_lease_seconds,
             )
             is False
         )

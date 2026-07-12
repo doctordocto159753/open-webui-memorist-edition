@@ -22,6 +22,8 @@ from memcore.memory_worker.jakobson.service import (
     JakobsonAnalysisService,
     OpenAICompatibleJakobsonProvider,
 )
+from memcore.memory_worker.jakobson.validator import validate_jakobson_provider_output
+from memcore.memory_worker.prepared import PreparedJakobsonInference
 from memcore.memory_worker.segmentation.sentence_segmenter import SentenceSegmenter
 from memcore.model_control.repository import ModelControlRepository
 from memcore.model_control.schemas import UsageEventCreate
@@ -64,6 +66,62 @@ class MemoryWorkerPipeline:
         self.consolidator = MemoryConsolidator(connection)
         self.jakobson = JakobsonAnalysisService(connection, segmenter=self.unitizer)
 
+    def prepare_message(
+        self,
+        message_uuid: str,
+        model_target: dict[str, object] | None = None,
+    ) -> PreparedJakobsonInference:
+        """Run and validate provider inference without writing canonical state."""
+        message = self.messages.get_message(message_uuid)
+        if message is None:
+            raise RepositoryError(f"Message not found: {message_uuid}")
+        raw_text = message.raw_text or ""
+        extraction_profile = self._resolve_memory_extraction_profile(model_target)
+        provider_type = str(extraction_profile["provider_type"])
+        model_name = str(extraction_profile.get("model_name") or provider_type)
+        model_role = str(extraction_profile.get("model_role") or ModelRole.MEMORY_EXTRACTION.value)
+        profile_uuid = _optional_string(extraction_profile.get("model_profile_uuid"))
+        identity = build_processing_identity(
+            target_message_uuid=message.message_uuid,
+            raw_text=raw_text,
+            model_target=extraction_profile,
+            model_role=model_role,
+        )
+        units = self.unitizer.to_text_units(
+            message_uuid=message.message_uuid,
+            session_uuid=message.session_uuid,
+            speaker_role=message.role.value,
+            text=raw_text,
+        )
+        provider = (
+            OpenAICompatibleJakobsonProvider(extraction_profile)
+            if provider_type in {"openai_compatible", "openai_compatible_llm"}
+            else DeterministicJakobsonProvider(
+                provider_type=provider_type,
+                model_name=model_name,
+            )
+        )
+        started = perf_counter()
+        output = provider.analyze(units, raw_text)
+        validate_jakobson_provider_output(output)
+        return PreparedJakobsonInference(
+            message_uuid=message.message_uuid,
+            model_role=model_role,
+            model_profile_uuid=profile_uuid,
+            provider_type=provider_type,
+            model_name=model_name,
+            processing_identity_hash=identity.identity_hash,
+            input_content_hash=identity.input_content_hash,
+            output=output,
+            input_tokens=int(
+                getattr(provider, "input_tokens", 0) or max(0, (len(raw_text) + 3) // 4)
+            ),
+            output_tokens=int(
+                getattr(provider, "output_tokens", 0) or len(output.get("sentences", []))
+            ),
+            latency_ms=int(getattr(provider, "latency_ms", 0) or (perf_counter() - started) * 1000),
+        )
+
     def process_message(
         self,
         message_uuid: str,
@@ -71,6 +129,7 @@ class MemoryWorkerPipeline:
         job_uuid: str | None = None,
         model_target: dict[str, object] | None = None,
         lease_fence: Callable[[], None] | None = None,
+        prepared_inference: PreparedJakobsonInference | None = None,
     ) -> dict[str, object]:
         message = self.messages.get_message(message_uuid)
         if message is None:
@@ -85,6 +144,11 @@ class MemoryWorkerPipeline:
                 extraction_profile.get("model_role") or ModelRole.MEMORY_EXTRACTION.value
             ),
         )
+        if prepared_inference is not None and (
+            prepared_inference.processing_identity_hash != identity.identity_hash
+            or prepared_inference.input_content_hash != identity.input_content_hash
+        ):
+            raise RepositoryError("prepared inference processing identity mismatch")
         run = self.runs.get_or_create_run(
             session_uuid=message.session_uuid,
             message_uuid=message.message_uuid,
@@ -140,7 +204,12 @@ class MemoryWorkerPipeline:
             }
 
         provider_type = str(extraction_profile["provider_type"])
-        if import_run_uuid is not None and provider_type in {
+        if prepared_inference is not None:
+            self.jakobson.provider = DeterministicJakobsonProvider(
+                provider_type=provider_type,
+                model_name=str(extraction_profile["model_name"]),
+            )
+        elif import_run_uuid is not None and provider_type in {
             "openai_compatible",
             "openai_compatible_llm",
         }:
@@ -168,6 +237,7 @@ class MemoryWorkerPipeline:
             import_run_uuid=import_run_uuid,
             job_uuid=job_uuid,
             lease_fence=lease_fence,
+            prepared_inference=prepared_inference,
         )
         ModelControlRepository(self.connection).record_usage_event(
             UsageEventCreate(
@@ -176,20 +246,16 @@ class MemoryWorkerPipeline:
                 ),
                 stage="jakobson_sentence_analysis",
                 model_profile_uuid=extraction_profile_uuid,
+                provider_type=provider_type,
+                model_name=str(extraction_profile["model_name"]),
                 session_uuid=message.session_uuid,
                 message_uuid=message.message_uuid,
                 import_run_uuid=import_run_uuid,
                 job_uuid=job_uuid,
-                input_tokens=int(
-                    getattr(self.jakobson.provider, "input_tokens", 0)
-                    or max(0, (len(raw_text) + 3) // 4)
-                ),
-                output_tokens=int(
-                    getattr(self.jakobson.provider, "output_tokens", 0)
-                    or jakobson_result["annotations"]
-                ),
+                input_tokens=int(jakobson_result.get("input_tokens", 0)),
+                output_tokens=int(jakobson_result.get("output_tokens", 0)),
                 latency_ms=int(
-                    getattr(self.jakobson.provider, "latency_ms", 0)
+                    jakobson_result.get("latency_ms", 0)
                     or (perf_counter() - jakobson_started) * 1000
                 ),
                 status="ok",
@@ -231,6 +297,7 @@ class MemoryWorkerPipeline:
 
         return {
             "processing_run_uuid": run.processing_run_uuid,
+            "prompt_execution_uuid": jakobson_result.get("prompt_execution_uuid"),
             "message_uuid": message_uuid,
             "units": len(units),
             "jakobson_annotations": jakobson_result["annotations"],

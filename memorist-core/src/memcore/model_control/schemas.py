@@ -126,6 +126,8 @@ class UsageEventCreate(BaseModel):
     role: ModelRole
     stage: str = Field(min_length=1)
     model_profile_uuid: str | None = None
+    provider_type: str | None = None
+    model_name: str | None = None
     workspace_uuid: str | None = None
     project_uuid: str | None = None
     session_uuid: str | None = None

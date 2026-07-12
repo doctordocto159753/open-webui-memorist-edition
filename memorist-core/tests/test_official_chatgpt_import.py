@@ -1,3 +1,4 @@
+import copy
 import json
 import sqlite3
 import zipfile
@@ -6,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from memcore.config import Settings
+from memcore.imports.processing import ImportMessageProcessor
 from memcore.imports.security import ImportSecurityError
 from memcore.imports.service import ImportService
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
@@ -30,6 +33,18 @@ def connection(tmp_path: Path) -> Generator[sqlite3.Connection, None, None]:
         yield sqlite_connection
     finally:
         sqlite_connection.close()
+
+
+def test_deterministic_import_fallback_requires_explicit_policy(
+    connection: sqlite3.Connection, tmp_path: Path
+) -> None:
+    settings = Settings(
+        db_path=str(tmp_path / "fallback.sqlite"),
+        object_store_path=str(tmp_path / "objects"),
+        import_reconstruction_allow_deterministic_fallback=False,
+    )
+    with pytest.raises(RuntimeError, match="deterministic fallback is disabled"):
+        ImportMessageProcessor(connection, settings).model_target()
 
 
 def test_official_zip_nested_and_standalone_json_use_same_adapter(
@@ -297,12 +312,12 @@ def test_failed_processing_is_sanitized_and_retryable(
     service, run_uuid = _reconstructed_service(connection, tmp_path)
     service.dry_run(run_uuid, "full_memory_reconstruction")
     service.commit(run_uuid, "full_memory_reconstruction")
-    original = MemoryWorkerPipeline.process_message
+    original = MemoryWorkerPipeline.prepare_message
 
     def fail_once(*_args: object, **_kwargs: object) -> dict[str, object]:
         raise RuntimeError("provider failed with safe test detail")
 
-    monkeypatch.setattr(MemoryWorkerPipeline, "process_message", fail_once)
+    monkeypatch.setattr(MemoryWorkerPipeline, "prepare_message", fail_once)
     failed_report = service.process_next_batch(run_uuid, 1)
     failed = next(
         item for item in service.message_processing_statuses(run_uuid) if item["status"] == "failed"
@@ -312,7 +327,7 @@ def test_failed_processing_is_sanitized_and_retryable(
     assert failed["error_sanitized"].startswith("RuntimeError:")
     retried = service.retry_failed_processing(run_uuid)
     assert retried["retried"] == 1
-    monkeypatch.setattr(MemoryWorkerPipeline, "process_message", original)
+    monkeypatch.setattr(MemoryWorkerPipeline, "prepare_message", original)
     service.process_next_batch(run_uuid, 10)
 
     updated = service.message_processing_statuses(run_uuid)
@@ -329,10 +344,21 @@ def test_configured_memory_extraction_profile_is_recorded_for_import(
         system_prompt: str,
         input_payload: dict[str, object],
     ) -> ProviderResponse:
-        del system_prompt, input_payload
-        return ProviderResponse(
-            output=valid_jakobson_output(), input_tokens=12, output_tokens=8, latency_ms=3
-        )
+        del system_prompt
+        output = valid_jakobson_output()
+        template = output["sentences"][0]
+        source_sentences = input_payload["sentences"]
+        assert isinstance(source_sentences, list)
+        output["sentences"] = []
+        for index, source in enumerate(source_sentences, start=1):
+            assert isinstance(source, dict)
+            sentence = copy.deepcopy(template)
+            sentence["id"] = index
+            sentence["text"] = str(source["text"])
+            sentence["six_factors"]["message"]["value"] = str(source["text"])
+            output["sentences"].append(sentence)
+        output["sentence_count"] = len(output["sentences"])
+        return ProviderResponse(output=output, input_tokens=12, output_tokens=8, latency_ms=3)
 
     monkeypatch.setattr(OpenAICompatibleMemoryExtractionProvider, "extract", fake_extract)
     monkeypatch.setenv("MEMORIST_IMPORT_TEST_KEY", "synthetic-test-secret")

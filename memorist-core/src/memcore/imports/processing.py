@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import os
 import socket
-import sqlite3
 import threading
 import uuid
 from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any, cast
 
@@ -21,6 +22,7 @@ from memcore.model_control.schemas import UsageEventCreate
 from memcore.model_control.security import sanitize_error_message
 from memcore.models import ModelRole, new_uuid, utc_now
 from memcore.repositories import JobRepository
+from memcore.storage.sqlite import NestedTransactionConnection
 
 PROCESSING_MODES = {"none", "extract_candidates", "full_memory_reconstruction"}
 TERMINAL_STATUSES = {"succeeded", "skipped", "already_processed", "failed", "cancelled"}
@@ -31,7 +33,7 @@ class ImportLeaseLost(RuntimeError):
 
 
 class ImportMessageProcessor:
-    def __init__(self, connection: sqlite3.Connection, settings: Settings) -> None:
+    def __init__(self, connection: Any, settings: Settings) -> None:
         self.connection = connection
         self.settings = settings
         self.model_control = _model_control_repository(connection, settings)
@@ -53,6 +55,10 @@ class ImportMessageProcessor:
             target = self._usable_model_target(role, profile, warnings)
             if target is not None:
                 return target
+        if not self.settings.import_reconstruction_allow_deterministic_fallback:
+            raise RuntimeError(
+                "no configured import reconstruction profile and deterministic fallback is disabled"
+            )
         return {
             "role": ModelRole.IMPORT_RECONSTRUCTION.value,
             "model_role": ModelRole.IMPORT_RECONSTRUCTION.value,
@@ -60,6 +66,7 @@ class ImportMessageProcessor:
             "provider_type": "deterministic",
             "model_name": "deterministic_extraction",
             "deterministic_fallback": True,
+            "deterministic_fallback_policy": "explicitly_allowed",
             "profile_enabled": True,
             "privacy_acknowledged": True,
             "secret_configured": True,
@@ -465,7 +472,9 @@ class ImportMessageProcessor:
         self.connection.commit()
         return dict(rows[0]) if rows else None
 
-    def release_claim(self, status_uuid: str, worker_id: str) -> bool:
+    def release_claim(self, status_uuid: str, worker_id: str, attempt_uuid: str | None) -> bool:
+        if not attempt_uuid:
+            return False
         now = utc_now()
         with self.connection:
             return bool(
@@ -475,22 +484,51 @@ class ImportMessageProcessor:
                     SET status = 'queued', lease_owner = NULL, lease_expires_at = NULL,
                         processing_attempt_uuid = NULL, updated_at = ?, last_transition_at = ?
                     WHERE status_uuid = ? AND status = 'running' AND lease_owner = ?
+                      AND processing_attempt_uuid = ?
                     """,
-                    (now, now, status_uuid, worker_id),
+                    (now, now, status_uuid, worker_id, attempt_uuid),
                 ).rowcount
             )
 
-    def renew_lease(self, status_uuid: str, worker_id: str, lease_seconds: int) -> bool:
+    def renew_lease(
+        self,
+        status_uuid: str,
+        worker_id: str,
+        attempt_uuid: str | None,
+        lease_seconds: int,
+    ) -> bool:
+        if not attempt_uuid:
+            return False
         now = utc_now()
         with self.connection:
             return bool(
                 self.connection.execute(
                     """
-                    UPDATE import_message_processing_status
+                    UPDATE import_message_processing_status AS owned
                     SET lease_expires_at = ?, heartbeat_at = ?, updated_at = ?
                     WHERE status_uuid = ? AND status = 'running' AND lease_owner = ?
+                      AND processing_attempt_uuid = ?
+                      AND lease_expires_at IS NOT NULL AND lease_expires_at >= ?
+                      AND EXISTS (
+                        SELECT 1 FROM import_runs run
+                        WHERE run.import_run_uuid = owned.import_run_uuid
+                          AND run.status = 'processing'
+                      )
+                      AND NOT EXISTS (
+                        SELECT 1 FROM import_progress progress
+                        WHERE progress.import_run_uuid = owned.import_run_uuid
+                          AND COALESCE(progress.cancelled, 0) <> 0
+                      )
                     """,
-                    (_add_seconds(now, lease_seconds), now, now, status_uuid, worker_id),
+                    (
+                        _add_seconds(now, lease_seconds),
+                        now,
+                        now,
+                        status_uuid,
+                        worker_id,
+                        attempt_uuid,
+                        now,
+                    ),
                 ).rowcount
             )
 
@@ -500,12 +538,20 @@ class ImportMessageProcessor:
         status_uuid: str,
         worker_id: str,
         attempt_uuid: str | None,
+        lock: bool = False,
     ) -> bool:
         if not attempt_uuid:
             return False
         now = utc_now()
+        lock_clause = (
+            " FOR UPDATE OF status"
+            if lock
+            and self.settings.runtime_profile == "full"
+            and self.settings.canonical_store == "postgres"
+            else ""
+        )
         row = self.connection.execute(
-            """
+            f"""
             SELECT status.status_uuid
             FROM import_message_processing_status status
             JOIN import_runs run ON run.import_run_uuid = status.import_run_uuid
@@ -515,9 +561,11 @@ class ImportMessageProcessor:
               AND status.status = 'running'
               AND status.lease_owner = ?
               AND status.processing_attempt_uuid = ?
-              AND (status.lease_expires_at IS NULL OR status.lease_expires_at >= ?)
+              AND status.lease_expires_at IS NOT NULL
+              AND status.lease_expires_at >= ?
               AND run.status = 'processing'
               AND COALESCE(progress.cancelled, 0) = 0
+            {lock_clause}
             """,
             (status_uuid, worker_id, attempt_uuid, now),
         ).fetchone()
@@ -540,43 +588,6 @@ class ImportMessageProcessor:
                 ).rowcount
             )
 
-    def _claim_postgres_work(self, import_run_uuid: str, limit: int) -> list[dict[str, Any]]:
-        owner = _worker_id()
-        progress = self.connection.execute(
-            "SELECT paused, cancelled FROM import_progress WHERE import_run_uuid = ?",
-            (import_run_uuid,),
-        ).fetchone()
-        if progress is not None and (progress["paused"] or progress["cancelled"]):
-            return []
-        rows = self.connection.execute(
-            """
-            WITH candidates AS (
-                SELECT status_uuid
-                FROM import_message_processing_status
-                WHERE import_run_uuid = ?
-                  AND processing_mode = 'full_memory_reconstruction'
-                  AND status = 'queued'
-                  AND (run_after IS NULL OR run_after <= now())
-                ORDER BY created_at, status_uuid
-                FOR UPDATE SKIP LOCKED
-                LIMIT ?
-            )
-            UPDATE import_message_processing_status AS status
-            SET status = 'running',
-                lease_owner = ?,
-                processing_attempt_uuid = md5(status.status_uuid || clock_timestamp()::text),
-                lease_expires_at = now() + interval '15 minutes',
-                attempt_started_at = now(),
-                updated_at = now()
-            FROM candidates
-            WHERE status.status_uuid = candidates.status_uuid
-            RETURNING status.*
-            """,
-            (import_run_uuid, limit, owner),
-        ).fetchall()
-        self.connection.commit()
-        return [dict(row) for row in rows]
-
     def retry_failed(self, import_run_uuid: str) -> dict[str, Any]:
         now = utc_now()
         failed = self.connection.execute(
@@ -594,7 +605,9 @@ class ImportMessageProcessor:
                     UPDATE import_message_processing_status
                     SET status = 'queued', processing_stage = 'memory_extraction',
                         retry_count = retry_count + 1, error_sanitized = NULL,
-                        updated_at = ?, finished_at = NULL
+                        error_classification = NULL, run_after = NULL,
+                        lease_owner = NULL, lease_expires_at = NULL,
+                        processing_attempt_uuid = NULL, updated_at = ?, finished_at = NULL
                     WHERE status_uuid = ?
                     """,
                     (now, row["status_uuid"]),
@@ -603,8 +616,9 @@ class ImportMessageProcessor:
                     self.connection.execute(
                         """
                         UPDATE jobs
-                        SET status = 'pending', attempts = 0, last_error = NULL,
-                            last_error_sanitized = NULL, locked_by = NULL, locked_at = NULL,
+                        SET status = 'pending', last_error = NULL,
+                            last_error_sanitized = NULL, run_after = NULL,
+                            locked_by = NULL, locked_at = NULL,
                             updated_at = ?
                         WHERE job_uuid = ?
                         """,
@@ -680,12 +694,33 @@ class ImportMessageProcessor:
             "processing_jobs_skipped": counts["skipped"],
             "processing_jobs_already_processed": counts["already_processed"],
             "terminal": all(str(item["status"]) in TERMINAL_STATUSES for item in statuses),
-            "processing_jobs_retry_scheduled": sum(
-                1 for item in statuses if item.get("run_after") and item["status"] == "queued"
-            ),
+            "processing_jobs_retry_scheduled": self._retry_scheduled_count(import_run_uuid),
             "provider_breakdown": provider_breakdown,
             **metrics,
         }
+
+    def _retry_scheduled_count(self, import_run_uuid: str) -> int:
+        if self._is_postgres_runtime:
+            row = self.connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM import_message_processing_status
+                WHERE import_run_uuid = ? AND status = 'queued'
+                  AND run_after IS NOT NULL AND run_after > now()
+                """,
+                (import_run_uuid,),
+            ).fetchone()
+        else:
+            row = self.connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM import_message_processing_status
+                WHERE import_run_uuid = ? AND status = 'queued'
+                  AND run_after IS NOT NULL AND run_after > ?
+                """,
+                (import_run_uuid, utc_now()),
+            ).fetchone()
+        return int(row[0]) if row is not None else 0
 
     def _provider_breakdown(
         self, import_run_uuid: str, statuses: list[dict[str, Any]]
@@ -710,23 +745,25 @@ class ImportMessageProcessor:
                     "output_tokens": 0,
                     "succeeded": 0,
                     "failed": 0,
+                    "_job_uuids": set(),
                 },
             )
             item["processing_jobs"] += 1
             item["succeeded"] += int(status.get("status") in {"succeeded", "already_processed"})
             item["failed"] += int(status.get("status") == "failed")
+            if status.get("job_uuid"):
+                item["_job_uuids"].add(str(status["job_uuid"]))
 
-        prompt_roles: dict[str | None, set[str]] = {}
+        prompt_roles_by_job: dict[str, set[str]] = {}
         for row in self.connection.execute(
             """
-            SELECT model_profile_uuid, model_role
+            SELECT job_uuid, model_role
             FROM prompt_execution_runs
-            WHERE import_run_uuid = ?
+            WHERE import_run_uuid = ? AND job_uuid IS NOT NULL
             """,
             (import_run_uuid,),
         ).fetchall():
-            profile_uuid = str(row["model_profile_uuid"]) if row["model_profile_uuid"] else None
-            prompt_roles.setdefault(profile_uuid, set()).add(str(row["model_role"]))
+            prompt_roles_by_job.setdefault(str(row["job_uuid"]), set()).add(str(row["model_role"]))
 
         for row in self.connection.execute(
             """
@@ -757,19 +794,24 @@ class ImportMessageProcessor:
                     "output_tokens": 0,
                     "succeeded": 0,
                     "failed": 0,
+                    "_job_uuids": set(),
                 },
             )
             item["input_tokens"] += int(row["input_tokens"])
             item["output_tokens"] += int(row["output_tokens"])
 
+        result: list[dict[str, Any]] = []
         for item in grouped.values():
-            roles = prompt_roles.get(item["model_profile_uuid"], set())
+            roles: set[str] = set()
+            for job_uuid in item.pop("_job_uuids"):
+                roles.update(prompt_roles_by_job.get(job_uuid, set()))
             if len(roles) == 1:
                 prompt_role = next(iter(roles))
                 if prompt_role != item["operational_role"]:
                     item["prompt_role"] = prompt_role
+            result.append(item)
         return sorted(
-            grouped.values(),
+            result,
             key=lambda item: (
                 item["operational_role"],
                 item["model_profile_uuid"] or "",
@@ -827,7 +869,6 @@ class ImportMessageProcessor:
         return True
 
     def _process_one(self, status_row: dict[str, Any]) -> None:
-        now = utc_now()
         job_uuid = status_row.get("job_uuid")
         worker_id = str(status_row.get("lease_owner") or _worker_id())
         attempt_uuid = (
@@ -835,179 +876,293 @@ class ImportMessageProcessor:
             if status_row.get("processing_attempt_uuid")
             else None
         )
-        ownership = self.connection.execute(
-            """
-            SELECT 1 FROM import_message_processing_status
-            WHERE status_uuid = ? AND status = 'running' AND lease_owner = ?
-              AND processing_attempt_uuid = ?
-            """,
-            (status_row["status_uuid"], worker_id, attempt_uuid),
-        ).fetchone()
-        if ownership is None:
-            return
-        with self.connection:
-            if job_uuid:
-                self.connection.execute(
-                    """
-                    UPDATE jobs
-                    SET status = 'running', attempts = attempts + 1, locked_by = ?,
-                        locked_at = ?, updated_at = ?
-                    WHERE job_uuid = ?
-                    """,
-                    (worker_id, now, now, job_uuid),
-                )
+
+        def require_fence(*, lock: bool = False) -> None:
+            if not self.lease_fence_intact(
+                status_uuid=str(status_row["status_uuid"]),
+                worker_id=worker_id,
+                attempt_uuid=attempt_uuid,
+                lock=lock,
+            ):
+                raise ImportLeaseLost("lease_lost")
+
         try:
+            require_fence()
+            now = utc_now()
+            if job_uuid:
+                with self.connection:
+                    updated = self.connection.execute(
+                        """
+                        UPDATE jobs
+                        SET status = 'running', attempts = attempts + 1, locked_by = ?,
+                            locked_at = ?, updated_at = ?
+                        WHERE job_uuid = ?
+                          AND EXISTS (
+                            SELECT 1 FROM import_message_processing_status status
+                            WHERE status.status_uuid = ?
+                              AND status.status = 'running'
+                              AND status.lease_owner = ?
+                              AND status.processing_attempt_uuid = ?
+                              AND status.lease_expires_at IS NOT NULL
+                              AND status.lease_expires_at >= ?
+                              AND EXISTS (
+                                SELECT 1 FROM import_runs run
+                                WHERE run.import_run_uuid = status.import_run_uuid
+                                  AND run.status = 'processing'
+                              )
+                              AND NOT EXISTS (
+                                SELECT 1 FROM import_progress progress
+                                WHERE progress.import_run_uuid = status.import_run_uuid
+                                  AND COALESCE(progress.cancelled, 0) <> 0
+                              )
+                          )
+                        """,
+                        (
+                            worker_id,
+                            now,
+                            now,
+                            job_uuid,
+                            status_row["status_uuid"],
+                            worker_id,
+                            attempt_uuid,
+                            now,
+                        ),
+                    ).rowcount
+                    if not updated:
+                        raise ImportLeaseLost("lease_lost")
+
             pipeline = (
                 PostgresMemoryWorkerPipeline(self.connection, self.settings)
-                if (
-                    self.settings.runtime_profile == "full"
-                    and self.settings.canonical_store == "postgres"
-                )
+                if self._is_postgres_runtime
                 else MemoryWorkerPipeline(self.connection, self.settings)
             )
-
-            def require_fence() -> None:
-                if not self.lease_fence_intact(
-                    status_uuid=str(status_row["status_uuid"]),
-                    worker_id=worker_id,
-                    attempt_uuid=attempt_uuid,
-                ):
-                    raise ImportLeaseLost("lease_lost")
-
-            result = pipeline.process_message(
+            prepared_target = self._hydrate_execution_model_target(status_row)
+            prepared = pipeline.prepare_message(
                 str(status_row["target_message_uuid"]),
-                import_run_uuid=str(status_row["import_run_uuid"]),
-                job_uuid=str(job_uuid) if job_uuid else None,
-                model_target=self._hydrate_execution_model_target(status_row),
-                lease_fence=require_fence,
+                model_target=prepared_target,
             )
-            processing_run_uuid = str(result["processing_run_uuid"])
-            execution = self.connection.execute(
-                """
-                SELECT prompt_execution_uuid
-                FROM prompt_execution_runs
-                WHERE import_run_uuid = ? AND message_uuid = ?
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                (status_row["import_run_uuid"], status_row["target_message_uuid"]),
-            ).fetchone()
-            finished = utc_now()
-            with self.connection:
+
+            with self._result_transaction():
+                require_fence(lock=True)
+                commit_target = self._hydrate_execution_model_target(status_row)
+                self._require_same_execution_target(
+                    status_row=status_row,
+                    prepared_target=prepared_target,
+                    commit_target=commit_target,
+                    prepared=prepared,
+                )
+                result = pipeline.process_message(
+                    str(status_row["target_message_uuid"]),
+                    import_run_uuid=str(status_row["import_run_uuid"]),
+                    job_uuid=str(job_uuid) if job_uuid else None,
+                    model_target=commit_target,
+                    lease_fence=require_fence,
+                    prepared_inference=prepared,
+                )
+                processing_run_uuid = str(result["processing_run_uuid"])
+                prompt_execution_uuid = result.get("prompt_execution_uuid")
+                if prompt_execution_uuid is None:
+                    execution = self.connection.execute(
+                        """
+                        SELECT prompt_execution_uuid
+                        FROM prompt_execution_runs
+                        WHERE import_run_uuid = ? AND message_uuid = ?
+                          AND job_uuid = ?
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        """,
+                        (
+                            status_row["import_run_uuid"],
+                            status_row["target_message_uuid"],
+                            job_uuid,
+                        ),
+                    ).fetchone()
+                    prompt_execution_uuid = (
+                        execution["prompt_execution_uuid"] if execution else None
+                    )
+                finished = utc_now()
                 success_updated = self.connection.execute(
                     """
-                    UPDATE import_message_processing_status
+                    UPDATE import_message_processing_status AS owned
                     SET status = 'succeeded', processing_stage = 'complete',
                         memory_processing_run_uuid = ?, prompt_execution_uuid = ?,
-                        error_sanitized = NULL, updated_at = ?, finished_at = ?,
-                        lease_owner = NULL, lease_expires_at = NULL, last_transition_at = ?
+                        error_sanitized = NULL, error_classification = NULL, run_after = NULL,
+                        updated_at = ?, finished_at = ?, lease_owner = NULL,
+                        lease_expires_at = NULL, last_transition_at = ?
                     WHERE status_uuid = ? AND status = 'running' AND lease_owner = ?
                       AND processing_attempt_uuid = ?
+                      AND lease_expires_at IS NOT NULL AND lease_expires_at >= ?
+                      AND EXISTS (
+                        SELECT 1 FROM import_runs run
+                        WHERE run.import_run_uuid = owned.import_run_uuid
+                          AND run.status = 'processing'
+                      )
+                      AND NOT EXISTS (
+                        SELECT 1 FROM import_progress progress
+                        WHERE progress.import_run_uuid = owned.import_run_uuid
+                          AND COALESCE(progress.cancelled, 0) <> 0
+                      )
                     """,
                     (
                         processing_run_uuid,
-                        execution["prompt_execution_uuid"] if execution else None,
+                        prompt_execution_uuid,
                         finished,
                         finished,
                         finished,
                         status_row["status_uuid"],
                         worker_id,
                         attempt_uuid,
+                        finished,
                     ),
                 ).rowcount
                 if not success_updated:
-                    return
+                    raise ImportLeaseLost("lease_lost")
                 if job_uuid:
                     self.connection.execute(
                         """
                         UPDATE jobs
-                        SET status = 'succeeded', locked_by = NULL, locked_at = NULL, updated_at = ?
-                        WHERE job_uuid = ?
+                        SET status = 'succeeded', locked_by = NULL, locked_at = NULL,
+                            last_error = NULL, last_error_sanitized = NULL, run_after = NULL,
+                            updated_at = ?
+                        WHERE job_uuid = ? AND locked_by = ?
                         """,
-                        (finished, job_uuid),
+                        (finished, job_uuid, worker_id),
                     )
         except ImportLeaseLost:
+            self.connection.rollback()
             return
         except Exception as error:
+            self.connection.rollback()
             sanitized = (
                 sanitize_error_message(f"{type(error).__name__}: {error}") or type(error).__name__
             )
             finished = utc_now()
-            run = self.connection.execute(
-                """
-                SELECT processing_run_uuid FROM memory_processing_runs
-                WHERE message_uuid = ?
-                  AND COALESCE(processing_identity_hash, '') = COALESCE(?, '')
-                  AND status IN ('pending', 'running')
-                ORDER BY created_at DESC LIMIT 1
-                """,
-                (status_row["target_message_uuid"], status_row.get("processing_identity_hash")),
-            ).fetchone()
             transition = _failure_transition(status_row, type(error).__name__, sanitized, finished)
-            with self.connection:
-                failure_updated = self.connection.execute(
-                    """
-                    UPDATE import_message_processing_status
-                    SET status = ?, error_sanitized = ?, error_classification = ?,
-                        retry_count = retry_count + ?,
-                        run_after = ?, updated_at = ?, finished_at = ?,
-                        lease_owner = NULL, lease_expires_at = NULL, last_transition_at = ?
-                    WHERE status_uuid = ? AND status = 'running' AND lease_owner = ?
-                      AND processing_attempt_uuid = ?
-                    """,
-                    transition + (status_row["status_uuid"], worker_id, attempt_uuid),
-                ).rowcount
-                if not failure_updated:
-                    return
-                if run is not None:
-                    self.connection.execute(
+            try:
+                with self._result_transaction():
+                    require_fence(lock=True)
+                    failure_updated = self.connection.execute(
                         """
-                        UPDATE memory_processing_runs
-                        SET status = 'failed', completed_at = ?, error_text = ?
-                        WHERE processing_run_uuid = ?
-                          AND COALESCE(processing_identity_hash, '') = COALESCE(?, '')
-                          AND status IN ('pending', 'running')
+                        UPDATE import_message_processing_status AS owned
+                        SET status = ?, error_sanitized = ?, error_classification = ?,
+                            retry_count = retry_count + ?, run_after = ?, updated_at = ?,
+                            finished_at = ?, lease_owner = NULL, lease_expires_at = NULL,
+                            last_transition_at = ?
+                        WHERE status_uuid = ? AND status = 'running' AND lease_owner = ?
+                          AND processing_attempt_uuid = ?
+                          AND lease_expires_at IS NOT NULL AND lease_expires_at >= ?
+                          AND EXISTS (
+                            SELECT 1 FROM import_runs run
+                            WHERE run.import_run_uuid = owned.import_run_uuid
+                              AND run.status = 'processing'
+                          )
+                          AND NOT EXISTS (
+                            SELECT 1 FROM import_progress progress
+                            WHERE progress.import_run_uuid = owned.import_run_uuid
+                              AND COALESCE(progress.cancelled, 0) <> 0
+                          )
                         """,
-                        (
+                        transition
+                        + (
+                            status_row["status_uuid"],
+                            worker_id,
+                            attempt_uuid,
                             finished,
-                            sanitized,
-                            run["processing_run_uuid"],
-                            status_row.get("processing_identity_hash"),
                         ),
+                    ).rowcount
+                    if not failure_updated:
+                        raise ImportLeaseLost("lease_lost")
+                    if job_uuid:
+                        self.connection.execute(
+                            """
+                            UPDATE jobs
+                            SET status = ?, last_error = ?, last_error_sanitized = ?,
+                                run_after = ?, locked_by = NULL, locked_at = NULL, updated_at = ?
+                            WHERE job_uuid = ? AND locked_by = ?
+                            """,
+                            (
+                                "pending" if transition[0] == "queued" else "failed",
+                                sanitized,
+                                sanitized,
+                                transition[4],
+                                finished,
+                                job_uuid,
+                                worker_id,
+                            ),
+                        )
+                    self.model_control.record_usage_event(
+                        UsageEventCreate(
+                            role=ModelRole(
+                                str(
+                                    status_row.get("model_role")
+                                    or ModelRole.IMPORT_RECONSTRUCTION.value
+                                )
+                            ),
+                            stage="import_memory_reconstruction",
+                            model_profile_uuid=status_row.get("model_profile_uuid"),
+                            provider_type=str(status_row.get("provider_type") or "deterministic"),
+                            model_name=str(
+                                status_row.get("model_name") or "deterministic_extraction"
+                            ),
+                            session_uuid=status_row.get("target_session_uuid"),
+                            message_uuid=status_row.get("target_message_uuid"),
+                            import_run_uuid=status_row.get("import_run_uuid"),
+                            job_uuid=job_uuid,
+                            status="error",
+                            error_class=type(error).__name__,
+                            error_message_sanitized=sanitized,
+                        )
                     )
-                if job_uuid:
-                    self.connection.execute(
-                        """
-                        UPDATE jobs
-                        SET status = ?, last_error = ?, last_error_sanitized = ?,
-                            run_after = ?, locked_by = NULL, locked_at = NULL, updated_at = ?
-                        WHERE job_uuid = ?
-                        """,
-                        (
-                            "pending" if transition[0] == "queued" else "failed",
-                            sanitized,
-                            sanitized,
-                            transition[4],
-                            finished,
-                            job_uuid,
-                        ),
-                    )
-            self.model_control.record_usage_event(
-                UsageEventCreate(
-                    role=ModelRole(
-                        str(status_row.get("model_role") or ModelRole.IMPORT_RECONSTRUCTION.value)
-                    ),
-                    stage="import_memory_reconstruction",
-                    model_profile_uuid=status_row.get("model_profile_uuid"),
-                    session_uuid=status_row.get("target_session_uuid"),
-                    message_uuid=status_row.get("target_message_uuid"),
-                    import_run_uuid=status_row.get("import_run_uuid"),
-                    job_uuid=job_uuid,
-                    status="error",
-                    error_class=type(error).__name__,
-                    error_message_sanitized=sanitized,
-                )
-            )
+            except ImportLeaseLost:
+                self.connection.rollback()
+                return
+
+    @property
+    def _is_postgres_runtime(self) -> bool:
+        return (
+            self.settings.runtime_profile == "full" and self.settings.canonical_store == "postgres"
+        )
+
+    @contextmanager
+    def _result_transaction(self) -> Iterator[None]:
+        if self._is_postgres_runtime:
+            with self.connection.raw.transaction():
+                yield
+            return
+        if not isinstance(self.connection, NestedTransactionConnection):
+            raise RuntimeError("SQLite import result requires atomic connection support")
+        with self.connection.atomic(immediate=True):
+            yield
+
+    @staticmethod
+    def _require_same_execution_target(
+        *,
+        status_row: dict[str, Any],
+        prepared_target: dict[str, Any],
+        commit_target: dict[str, Any],
+        prepared: Any,
+    ) -> None:
+        fields = ("model_role", "model_profile_uuid", "provider_type", "model_name")
+        scheduled = {field: status_row.get(field) for field in fields}
+        if scheduled["model_role"] is None:
+            scheduled["model_role"] = ModelRole.IMPORT_RECONSTRUCTION.value
+        if scheduled["provider_type"] is None:
+            scheduled["provider_type"] = "deterministic"
+        if scheduled["model_name"] is None:
+            scheduled["model_name"] = "deterministic_extraction"
+        prepared_identity = {field: getattr(prepared, field) for field in fields}
+        prepared_target_identity = {field: prepared_target.get(field) for field in fields}
+        commit_target_identity = {field: commit_target.get(field) for field in fields}
+        if not (
+            scheduled == prepared_identity == prepared_target_identity == commit_target_identity
+        ):
+            raise RuntimeError("scheduled model profile execution identity changed")
+        if (
+            str(status_row.get("processing_identity_hash") or "")
+            != prepared.processing_identity_hash
+            or str(status_row.get("input_content_hash") or "") != prepared.input_content_hash
+        ):
+            raise RuntimeError("scheduled message processing identity changed")
 
     def _hydrate_execution_model_target(self, status_row: dict[str, Any]) -> dict[str, Any]:
         """Resolve the complete provider profile at execution without persisting secrets."""
@@ -1016,6 +1171,10 @@ class ImportMessageProcessor:
         )
         profile_uuid = status_row.get("model_profile_uuid")
         if not profile_uuid:
+            if not self.settings.import_reconstruction_allow_deterministic_fallback:
+                raise RuntimeError(
+                    "scheduled deterministic fallback is no longer allowed by policy"
+                )
             return {
                 "model_role": operational_role,
                 "model_profile_uuid": None,
@@ -1054,9 +1213,16 @@ class ImportMessageProcessor:
                     )
             if profile.requires_privacy_acknowledgement and not profile.privacy_acknowledged_at:
                 raise RuntimeError("scheduled model profile requires privacy acknowledgement")
+        scheduled_provider = str(status_row.get("provider_type") or provider_type)
+        scheduled_model = str(status_row.get("model_name") or profile.model_name or "")
+        if provider_type != scheduled_provider:
+            raise RuntimeError("scheduled model profile provider type changed")
+        if str(profile.model_name) != scheduled_model:
+            raise RuntimeError("scheduled model profile model name changed")
         hydrated = cast(dict[str, Any], profile.model_dump(mode="json"))
         hydrated["model_role"] = operational_role
         hydrated["provider_type"] = provider_type
+        hydrated["model_name"] = str(profile.model_name)
         return hydrated
 
     def _upsert_status(self, **values: Any) -> dict[str, Any]:
@@ -1232,6 +1398,7 @@ def _classify_error(error_class: str, message: str) -> tuple[str, bool]:
         "privacy acknowledgement" in lowered
         or "secret" in lowered
         or "scheduled model profile" in lowered
+        or "deterministic fallback" in lowered
     ):
         return "configuration_error", False
     if "400" in lowered or "invalid request" in lowered:

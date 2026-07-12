@@ -254,6 +254,7 @@ def test_effective_config_endpoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
                 "lease_seconds": 300,
                 "heartbeat_seconds": 60,
                 "max_attempts": 5,
+                "allow_deterministic_fallback": True,
                 "retry_base_seconds": 10,
                 "retry_max_seconds": 900,
             },
