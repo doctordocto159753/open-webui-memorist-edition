@@ -90,8 +90,13 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      <<: *full_env
+      MEMORIST_RUNTIME_PROFILE: full
+      MEMORIST_CANONICAL_STORE: postgres
+      MEMORIST_POSTGRES_DSN: postgresql://memorist:memorist@localhost:5432/memorist_test
       MEMORIST_FALKORDB_URL: redis://localhost:6379
+      MEMORIST_ALLOW_FULL_GRAPH_DEGRADED: "true"
+      MEMORIST_HOT_SCHEDULER: in_memory
+      MEMORIST_OBJECT_STORE_PATH: /tmp/memorist-objects
       MEMORIST_REAL_FALKORDB: "1"
     steps:
       - uses: actions/checkout@v4
