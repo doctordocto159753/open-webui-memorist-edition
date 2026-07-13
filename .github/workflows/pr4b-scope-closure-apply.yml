@@ -8,6 +8,7 @@ on:
       - scripts/pr4b_scope_closure.py
       - scripts/pr4b_scope_closure_post.py
       - scripts/pr4b_scope_closure_commit.py
+      - scripts/pr4b_scope_closure_connection.py
       - memorist-core/src/memcore/storage/postgres/compat.py
       - memorist-core/src/memcore/storage/postgres/migrations/0014_scoped_model_role_defaults.sql
       - .github/workflows/pr4b-scope-closure-apply.yml
@@ -50,6 +51,7 @@ jobs:
           python scripts/pr4b_scope_closure.py
           python scripts/pr4b_scope_closure_post.py
           python scripts/pr4b_scope_closure_commit.py
+          python scripts/pr4b_scope_closure_connection.py
       - name: Install dependencies
         working-directory: memorist-core
         run: uv sync --all-extras
@@ -147,7 +149,7 @@ jobs:
           rm -f scope-closure-ruff.log scope-closure-lite.log scope-closure-full.log
           rm -f memorist-core/scope-closure-full.xml
           rm -f scripts/pr4b_scope_closure.py scripts/pr4b_scope_closure_post.py
-          rm -f scripts/pr4b_scope_closure_commit.py
+          rm -f scripts/pr4b_scope_closure_commit.py scripts/pr4b_scope_closure_connection.py
           rm -f .github/workflows/pr4b-scope-closure-apply.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
