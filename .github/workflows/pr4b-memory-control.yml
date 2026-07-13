@@ -163,16 +163,14 @@ jobs:
     name: Trusted Actor Authentication — Full
     runs-on: ubuntu-latest
     services: *postgres
-    env:
-      <<: *full_env
-      MEMORIST_AUTH_TEST_RUNTIME: full
+    env: *full_env
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - working-directory: memorist-core
         run: uv sync --all-extras
       - working-directory: memorist-core
-        run: uv run pytest tests/test_trusted_actor_authentication.py -q --junitxml=actor-full.xml
+        run: MEMORIST_AUTH_TEST_RUNTIME=full uv run pytest tests/test_trusted_actor_authentication.py -q --junitxml=actor-full.xml
       - working-directory: memorist-core
         run: uv run python -c "import xml.etree.ElementTree as E; r=E.parse('actor-full.xml').getroot(); assert list(r.iter('testcase')) and not list(r.iter('skipped'))"
 

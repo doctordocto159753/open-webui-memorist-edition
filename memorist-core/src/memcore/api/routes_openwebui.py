@@ -659,8 +659,8 @@ def _pg_enqueue_capture_jobs(
                     provider_type, model_name, session_uuid, message_uuid, job_uuid,
                     input_tokens, output_tokens, embedding_count, status, created_at,
                     schema_version
-                ) VALUES (?, ?, 'memory_extraction', 'queued', 'memory_extraction_queued',
-                          ?, ?, ?, ?, ?, 0, 0, 0, 'queued', ?, 1)
+                ) VALUES (%s, %s, 'memory_extraction', 'queued', 'memory_extraction_queued',
+                          %s, %s, %s, %s, %s, 0, 0, 0, 'queued', %s, 1)
                 ON CONFLICT (usage_event_uuid) DO NOTHING
                 """,
                 (
