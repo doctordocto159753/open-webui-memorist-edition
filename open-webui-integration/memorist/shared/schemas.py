@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
@@ -29,6 +29,19 @@ class PreflightResult:
     budget_reason: str | None = None
     token_estimation_method: str | None = None
     attachment_mode: str | None = None
+    attachment_review: bool = False
+
+
+@dataclass(frozen=True)
+class ResolvedTurnPolicy:
+    mode: str
+    capture_enabled: bool
+    recall_enabled: bool
+    attachment_enabled: bool
+    private: bool
+    source: str
+    attachment_review: bool
+    runtime_profile: str
 
 
 def as_dict(value: Any) -> dict[str, Any]:

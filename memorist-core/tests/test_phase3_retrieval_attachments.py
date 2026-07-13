@@ -10,6 +10,8 @@ from memcore.api.routes_retrieval import (
 )
 from memcore.attachments.budget import conservative_token_count
 from memcore.config import Settings, get_settings
+from memcore.memory_control.policy import normalize_turn_policy
+from memcore.memory_control.repository import MemoryControlRepository, ResolvedTurnPolicy
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
 from memcore.models import RetrievalMode
 from memcore.preflight import PreflightRequest, PreflightService
@@ -490,12 +492,29 @@ def test_assistant_response_completed_dedupes_callbacks(
     db_path = tmp_path / "api.sqlite"
     connection = connect(db_path)
     apply_migrations(connection)
-    session = SessionRepository(connection).create_session()
+    workspace = WorkspaceRepository(connection).create_workspace("Workspace")
+    project = ProjectRepository(connection).create_project(workspace.workspace_uuid, "Project")
+    session = SessionRepository(connection).create_session(
+        workspace_uuid=workspace.workspace_uuid,
+        project_uuid=project.project_uuid,
+    )
     input_message = MessageRepository(connection).create_message(
         session.session_uuid,
         role="user",
         creator_type="user",
         raw_text="What is my preference?",
+    )
+    MemoryControlRepository(connection, "lite").record_turn_contract(
+        input_message_uuid=input_message.message_uuid,
+        session_uuid=session.session_uuid,
+        workspace_uuid=session.workspace_uuid,
+        user_uuid="test-user",
+        chat_uuid=None,
+        resolved=ResolvedTurnPolicy(
+            policy=normalize_turn_policy("full"),
+            source="test",
+            attachment_review=False,
+        ),
     )
     connection.close()
     monkeypatch.setenv("MEMORIST_DB_PATH", str(db_path))
@@ -506,6 +525,8 @@ def test_assistant_response_completed_dedupes_callbacks(
         input_message_uuid=input_message.message_uuid,
         assistant_text="Your preference is concise answers.",
         provider_response_id="provider-response-1",
+        user_uuid="test-user",
+        workspace_uuid=session.workspace_uuid,
     )
     first = assistant_response_completed(request)
     second = assistant_response_completed(request)

@@ -6,10 +6,16 @@ services:
     environment:
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-change-me-local-only}
       MEMORIST_CORE_URL: http://memorist-core:8777
+      MEMORIST_ACTOR_ASSERTION_SECRET: ${MEMORIST_ACTOR_ASSERTION_SECRET:?required}
+      MEMORIST_ACTOR_SERVICE_TOKEN: ${MEMORIST_ACTOR_SERVICE_TOKEN:?required}
+      MEMORIST_OPENWEBUI_WORKSPACE_UUID: ${MEMORIST_OPENWEBUI_WORKSPACE_UUID:?required}
+      PYTHONPATH: /memorist-integration
+    command: ["python", "-m", "memorist.backend.openwebui_entrypoint"]
     ports:
       - "${OPEN_WEBUI_PORT:-3000}:8080"
     volumes:
       - openwebui-data:/app/backend/data
+      - ./open-webui-integration/memorist:/memorist-integration/memorist:ro
     depends_on:
       memorist-core:
         condition: service_started
@@ -36,8 +42,10 @@ services:
       MEMORIST_ATTACHMENT_MIN_TOKENS: ${MEMORIST_ATTACHMENT_MIN_TOKENS:-256}
       MEMORIST_ATTACHMENT_RESERVED_COMPLETION_TOKENS: ${MEMORIST_ATTACHMENT_RESERVED_COMPLETION_TOKENS:-1024}
       MEMORIST_ATTACHMENT_FALLBACK_CONTEXT_WINDOW: ${MEMORIST_ATTACHMENT_FALLBACK_CONTEXT_WINDOW:-8192}
+      MEMORIST_ACTOR_ASSERTION_SECRET: ${MEMORIST_ACTOR_ASSERTION_SECRET:?required}
+      MEMORIST_ACTOR_SERVICE_TOKEN: ${MEMORIST_ACTOR_SERVICE_TOKEN:?required}
     ports:
-      - "${MEMORIST_PORT:-8777}:8777"
+      - "127.0.0.1:${MEMORIST_PORT:-8777}:8777"
     volumes:
       - memorist-objects:/data/objects
       - memorist-imports:/data/imports
@@ -65,7 +73,7 @@ services:
       - memorist-postgres-data:/var/lib/postgresql/data
 
   falkordb:
-    image: falkordb/falkordb:latest
+    image: falkordb/falkordb:v4.18.10
     ports:
       - "${MEMORIST_FALKORDB_PORT:-6379}:6379"
     volumes:

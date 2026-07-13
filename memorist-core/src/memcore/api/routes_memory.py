@@ -4,12 +4,14 @@ import importlib
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import asdict
 from hashlib import sha256
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
 from memcore.config import Settings, get_settings
+from memcore.graph.service import GraphProjectionService
 from memcore.memory_worker.graph import GraphProjectionRunner
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
 from memcore.memory_worker.postgres import PostgresMemoryWorkerPipeline
@@ -227,8 +229,11 @@ def process_message(message_uuid: str) -> dict[str, object]:
 
 
 @router.post("/graph-projection/run-once", response_model=None)
-def run_graph_projection_once() -> dict[str, int]:
+def run_graph_projection_once() -> dict[str, Any]:
     settings = get_settings()
+    if _is_full_postgres(settings):
+        result = GraphProjectionService(settings).project_pending()
+        return asdict(result)
     with _connection() as connection:
         return GraphProjectionRunner(connection, settings).run_once()
 

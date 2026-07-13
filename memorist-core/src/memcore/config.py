@@ -10,6 +10,7 @@ GraphBackend = Literal["disabled", "falkordb", "falkordb_lite"]
 VectorBackend = Literal["disabled", "sqlite_vec", "falkordb", "qdrant_local", "lancedb"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 RetrievalModeSetting = Literal["lite", "standard", "full", "debug"]
+TurnPolicySetting = Literal["full", "no_recall", "private"]
 RuntimeProfile = Literal["lite", "full", "dev"]
 CanonicalStoreKind = Literal["sqlite", "postgres"]
 HotSchedulerBackend = Literal["disabled", "in_memory"]
@@ -57,6 +58,7 @@ class Settings(BaseSettings):
     preflight_timeout_ms: int = Field(default=500, ge=1)
     preflight_model_timeout_ms: int = Field(default=800, ge=1)
     preflight_fail_open: bool = True
+    default_turn_policy: TurnPolicySetting = "full"
     retrieval_mode: RetrievalModeSetting = "standard"
     attachment_token_budget: int = Field(default=1800, ge=1)
     attachment_max_tokens: int = Field(default=1800, ge=0)
@@ -81,6 +83,12 @@ class Settings(BaseSettings):
     import_reconstruction_retry_base_seconds: int = Field(default=10, ge=1)
     import_reconstruction_retry_max_seconds: int = Field(default=900, ge=1)
     fail_open: bool = True
+    actor_assertion_secret: str | None = None
+    actor_service_token: str | None = None
+    actor_assertion_issuer: str = "openwebui-backend"
+    actor_assertion_audience: str = "memorist-core"
+    actor_assertion_max_ttl_seconds: int = Field(default=60, ge=5, le=300)
+    allow_legacy_actor_headers_for_tests: bool = False
 
     @field_validator("falkordb_url", mode="before")
     @classmethod
@@ -123,10 +131,19 @@ class Settings(BaseSettings):
     def validate_runtime_policy(self) -> "Settings":
         if not self.local_only:
             raise ValueError("local_only=false is not supported by this local-first release")
-        if self.graph_backend == "falkordb" and not self.falkordb_url:
-            raise ValueError("falkordb_url is required when graph_backend=falkordb")
         if self.env.lower() == "production" and self.log_level == "DEBUG":
             raise ValueError("log_level=DEBUG is not allowed in production")
+        if self.env.lower() == "production" and (
+            not self.actor_assertion_secret or not self.actor_service_token
+        ):
+            raise ValueError("production requires actor_assertion_secret and actor_service_token")
+        if (
+            self.env.lower() == "production"
+            and self.actor_assertion_secret == self.actor_service_token
+        ):
+            raise ValueError("actor_assertion_secret and actor_service_token must be distinct")
+        if self.allow_legacy_actor_headers_for_tests and self.env.lower() != "test":
+            raise ValueError("legacy actor headers are permitted only in the test environment")
         if self.runtime_profile == "lite":
             if self.canonical_store != "sqlite":
                 raise ValueError("runtime_profile=lite requires canonical_store=sqlite")

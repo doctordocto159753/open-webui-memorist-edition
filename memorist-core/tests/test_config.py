@@ -47,6 +47,9 @@ MEMORIST_ENV_KEYS = (
     "MEMORIST_RETRIEVAL_MODE",
     "MEMORIST_ATTACHMENT_TOKEN_BUDGET",
     "MEMORIST_FAIL_OPEN",
+    "MEMORIST_ACTOR_ASSERTION_SECRET",
+    "MEMORIST_ACTOR_SERVICE_TOKEN",
+    "MEMORIST_ALLOW_LEGACY_ACTOR_HEADERS_FOR_TESTS",
 )
 
 
@@ -152,7 +155,7 @@ def test_local_config_file_can_override_defaults(
     assert settings.port == 9001
 
 
-def test_invalid_graph_config_fails(
+def test_full_missing_graph_url_is_explicitly_degraded_at_runtime(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -160,9 +163,14 @@ def test_invalid_graph_config_fails(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MEMORIST_GRAPH_BACKEND", "falkordb")
     monkeypatch.setenv("MEMORIST_FALKORDB_URL", "")
-
-    with pytest.raises(ValidationError, match="falkordb_url is required"):
-        Settings()
+    settings = Settings(
+        runtime_profile="full",
+        canonical_store="postgres",
+        postgres_dsn="postgresql://memorist:test@localhost/memorist",
+        hot_scheduler="in_memory",
+        allow_full_graph_degraded=True,
+    )
+    assert settings.falkordb_url is None
 
 
 def test_invalid_port_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -333,6 +341,20 @@ def test_production_cannot_use_debug_log_level(
     monkeypatch.setenv("MEMORIST_LOG_LEVEL", "DEBUG")
 
     with pytest.raises(ValidationError, match="log_level=DEBUG"):
+        Settings()
+
+
+def test_production_actor_secrets_must_be_distinct(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    clear_memorist_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MEMORIST_ENV", "production")
+    monkeypatch.setenv("MEMORIST_ACTOR_ASSERTION_SECRET", "same-secret")
+    monkeypatch.setenv("MEMORIST_ACTOR_SERVICE_TOKEN", "same-secret")
+
+    with pytest.raises(ValidationError, match="must be distinct"):
         Settings()
 
 

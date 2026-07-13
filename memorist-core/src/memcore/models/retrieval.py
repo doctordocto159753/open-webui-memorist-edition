@@ -125,6 +125,9 @@ class RetrievalRun(DomainModel):
     latency_ms: int | None = Field(default=None, ge=0)
     created_at: str = Field(default_factory=utc_now)
     schema_version: int = Field(default=1, ge=1)
+    turn_policy: str = "full"
+    graph_status: str | None = None
+    degraded_reason: str | None = None
 
 
 class RetrievalQuery(DomainModel):
@@ -188,6 +191,9 @@ class PreflightResponse(BaseModel):
     token_estimation_method: str | None = None
     attachment_mode: str | None = None
     budget_warnings: list[str] = Field(default_factory=list)
+    attachment_review: bool = False
+    graph_status: str | None = None
+    degraded_reason: str | None = None
 
 
 class ScoredMemoryItem(BaseModel):

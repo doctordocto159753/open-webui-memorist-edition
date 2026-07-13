@@ -465,6 +465,7 @@ Before committing, verify that generated ZIPs, checksums, virtual environments, 
 | Lite install | `docs/install-lite.md` |
 | Full install | `docs/install-full.md` |
 | Full Mode | `docs/full-mode.md` |
+| Memory-control contract | `docs/memory-control-contract.md` |
 | Open WebUI compatibility | `docs/openwebui-compatibility.md` |
 | Import | `docs/import.md` |
 | Heritage | `docs/heritage-roundtrip.md` |

@@ -473,6 +473,7 @@ def test_slow_import_inference_does_not_block_live_capture(
     captured = routes_openwebui.capture_message(
         MessageCaptureRequest(
             openwebui_conversation_id=f"live-{time.time_ns()}",
+            user_id="live-import-test-user",
             role="user",
             content="This live message must not wait for import inference.",
         )

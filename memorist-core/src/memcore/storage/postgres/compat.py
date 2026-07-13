@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import re
+from collections.abc import Mapping
 from types import TracebackType
 from typing import Any
 
@@ -45,7 +46,11 @@ class CompatCursor:
         if self.cursor.description is None:
             return row
         order = [col.name for col in self.cursor.description]
-        return DualRow(dict(zip(order, row, strict=False)), order)
+        if isinstance(row, Mapping):
+            data = {column: row[column] for column in order}
+        else:
+            data = dict(zip(order, row, strict=False))
+        return DualRow(data, order)
 
 
 class PostgresCompatConnection:
@@ -56,6 +61,8 @@ class PostgresCompatConnection:
 
     def execute(self, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> CompatCursor:
         translated = _translate_sql(sql)
+        if not params:
+            return CompatCursor(self.raw.execute(translated))
         return CompatCursor(
             self.raw.execute(translated, _normalize_insert_params(translated, params))
         )

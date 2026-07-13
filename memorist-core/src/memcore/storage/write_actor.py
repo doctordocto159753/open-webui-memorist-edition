@@ -246,6 +246,9 @@ class SQLiteWriteActor:
         started = time.perf_counter()
         cached = _idempotency_lookup(connection, command)
         if cached is not None:
+            replay_validator = getattr(command, "validate_idempotent_replay", None)
+            if callable(replay_validator):
+                replay_validator(connection)
             result = cached
         else:
             result, busy_retries = self._execute_with_busy_retry(connection, command)

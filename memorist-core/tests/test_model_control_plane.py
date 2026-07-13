@@ -15,6 +15,8 @@ from fastapi.testclient import TestClient
 
 from memcore.config import Settings
 from memcore.main import create_app
+from memcore.memory_control.policy import normalize_turn_policy
+from memcore.memory_control.repository import MemoryControlRepository, ResolvedTurnPolicy
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
 from memcore.model_control.providers.openai_compatible import (
     OpenAICompatibleEmbeddingProvider,
@@ -371,7 +373,7 @@ def test_remote_ack_required(client_and_db: tuple[TestClient, Path]) -> None:
 
 
 def test_preflight_provider_fail_open(client_and_db: tuple[TestClient, Path]) -> None:
-    client, _db_path = client_and_db
+    client, db_path = client_and_db
     session = _assert_ok(client.post("/memcore/sessions", json={"title": "preflight"}))
     message = _assert_ok(
         client.post(
@@ -384,6 +386,7 @@ def test_preflight_provider_fail_open(client_and_db: tuple[TestClient, Path]) ->
             },
         )
     )
+    workspace_uuid = _authorize_turn(db_path, session["session_uuid"], message["message_uuid"])
 
     response = _assert_ok(
         client.post(
@@ -392,6 +395,8 @@ def test_preflight_provider_fail_open(client_and_db: tuple[TestClient, Path]) ->
                 "session_uuid": session["session_uuid"],
                 "input_message_uuid": message["message_uuid"],
                 "retrieval_mode": "invalid-mode",
+                "user_uuid": "test-user",
+                "workspace_uuid": workspace_uuid,
             },
         )
     )
@@ -439,6 +444,7 @@ def test_preflight_model_lifecycle_records_before_attachment(
             },
         )
     )
+    workspace_uuid = _authorize_turn(db_path, session["session_uuid"], message["message_uuid"])
 
     response = _assert_ok(
         client.post(
@@ -447,6 +453,8 @@ def test_preflight_model_lifecycle_records_before_attachment(
                 "session_uuid": session["session_uuid"],
                 "input_message_uuid": message["message_uuid"],
                 "recent_conversation_text": "Remember that this project uses a role matrix.",
+                "user_uuid": "test-user",
+                "workspace_uuid": workspace_uuid,
             },
         )
     )
@@ -490,7 +498,11 @@ def test_extraction_uses_memory_model_not_chat_model(
     session = _assert_ok(
         client.post(
             "/memcore/openwebui/session/resolve",
-            json={"openwebui_conversation_id": "chat-model-control", "title": "Chat"},
+            json={
+                "openwebui_conversation_id": "chat-model-control",
+                "title": "Chat",
+                "user_id": "model-control-user",
+            },
         )
     )
     chat_profile = _create_profile(client, "main_chat_observed", "openwebui-chat-model")
@@ -1480,6 +1492,27 @@ def _assert_ok(response: Any) -> dict[str, Any]:
     payload = response.json()
     assert isinstance(payload, dict)
     return payload
+
+
+def _authorize_turn(db_path: Path, session_uuid: str, message_uuid: str) -> str:
+    with _db(db_path) as connection:
+        session = connection.execute(
+            "SELECT workspace_uuid FROM sessions WHERE session_uuid = ?", (session_uuid,)
+        ).fetchone()
+        workspace_uuid = str(session["workspace_uuid"])
+        MemoryControlRepository(connection, "lite").record_turn_contract(
+            input_message_uuid=message_uuid,
+            session_uuid=session_uuid,
+            workspace_uuid=workspace_uuid,
+            user_uuid="test-user",
+            chat_uuid=None,
+            resolved=ResolvedTurnPolicy(
+                policy=normalize_turn_policy("full"),
+                source="test",
+                attachment_review=False,
+            ),
+        )
+    return workspace_uuid
 
 
 def test_profile_health_routes_roles_and_provider_types(openai_compatible_server: str) -> None:

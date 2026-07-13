@@ -1,6 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -15,12 +16,24 @@ from shared.errors import sanitize_error  # noqa: E402
 
 
 class Tools:
-    def memorist_status(self) -> str:
+    def memorist_status(self, __user__: dict[str, Any] | None = None) -> str:
         config = load_config()
         if not config.enabled:
             return "Memorist: disabled"
+        user_id = str((__user__ or {}).get("id") or "")
+        workspace_uuid = str(
+            (__user__ or {}).get("workspace_id")
+            or (__user__ or {}).get("workspace_uuid")
+            or os.getenv("MEMORIST_OPENWEBUI_WORKSPACE_UUID")
+            or ""
+        )
+        if not user_id or not workspace_uuid:
+            return "Memorist Core: unavailable (trusted actor identity required)"
         try:
-            status = MemoristClient(config).status()
+            status = MemoristClient(config).status(
+                user_id=user_id,
+                workspace_uuid=workspace_uuid,
+            )
         except Exception as error:
             return f"Memorist Core: disconnected ({sanitize_error(error)})"
         safe = _safe_status(status)

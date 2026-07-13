@@ -22,6 +22,7 @@ class ParsedInlet:
     first_message_hash: str | None
     title: str | None
     user_id: str | None
+    workspace_id: str | None
     message_id: str | None
     turn_index: int | None
     timestamp: str | None
@@ -57,6 +58,7 @@ def parse_inlet_body(body: dict[str, Any], user: dict[str, Any] | None = None) -
             first_message_hash=None,
             title=_conversation_title(body),
             user_id=_user_id(user),
+            workspace_id=_workspace_id(user, metadata),
             message_id=None,
             turn_index=None,
             timestamp=_timestamp(body, metadata),
@@ -82,6 +84,7 @@ def parse_inlet_body(body: dict[str, Any], user: dict[str, Any] | None = None) -
         first_message_hash=_first_message_hash(messages, content_text),
         title=_conversation_title(body),
         user_id=_user_id(user),
+        workspace_id=_workspace_id(user, metadata),
         message_id=_message_id(user_message, metadata) if user_message is not None else None,
         turn_index=_turn_index(messages, user_message),
         timestamp=_timestamp(body, metadata),
@@ -127,7 +130,7 @@ def insert_memory_attachment(
             break
     messages.insert(insert_at, message)
     if attachment_uuid:
-        metadata["memorist_attachment_uuid"] = attachment_uuid
+        metadata["memorist_delivered_attachment_uuid"] = attachment_uuid
     metadata["memorist_context_untrusted"] = True
     return body
 
@@ -198,6 +201,12 @@ def _content_text(content: Any) -> str:
 
 def _conversation_id(body: dict[str, Any], metadata: dict[str, Any]) -> str | None:
     value = body.get("conversation_id") or body.get("chat_id") or metadata.get("conversation_id")
+    return str(value) if value is not None else None
+
+
+def _workspace_id(user: dict[str, Any] | None, metadata: dict[str, Any]) -> str | None:
+    # Request metadata is browser-controlled and must never become a signed actor claim.
+    value = (user or {}).get("workspace_id") or (user or {}).get("workspace_uuid")
     return str(value) if value is not None else None
 
 

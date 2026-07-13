@@ -18,8 +18,10 @@
       MEMORIST_ATTACHMENT_RESERVED_COMPLETION_TOKENS: ${MEMORIST_ATTACHMENT_RESERVED_COMPLETION_TOKENS:-1024}
       MEMORIST_ATTACHMENT_FALLBACK_CONTEXT_WINDOW: ${MEMORIST_ATTACHMENT_FALLBACK_CONTEXT_WINDOW:-8192}
       MEMORIST_FAIL_OPEN: ${MEMORIST_FAIL_OPEN:-true}
+      MEMORIST_ACTOR_ASSERTION_SECRET: ${MEMORIST_ACTOR_ASSERTION_SECRET:?required}
+      MEMORIST_ACTOR_SERVICE_TOKEN: ${MEMORIST_ACTOR_SERVICE_TOKEN:?required}
     ports:
-      - "${MEMORIST_PORT:-8777}:8777"
+      - "127.0.0.1:${MEMORIST_PORT:-8777}:8777"
     volumes:
       - memorist-data:/data
       - memorist-objects:/objects
@@ -43,11 +45,16 @@
       MEMORIST_ATTACHMENT_TOKEN_BUDGET: ${MEMORIST_ATTACHMENT_TOKEN_BUDGET:-1800}
       MEMORIST_ATTACHMENT_MAX_TOKENS: ${MEMORIST_ATTACHMENT_MAX_TOKENS:-1800}
       MEMORIST_FAIL_OPEN: ${MEMORIST_FAIL_OPEN:-true}
+      MEMORIST_ACTOR_ASSERTION_SECRET: ${MEMORIST_ACTOR_ASSERTION_SECRET:?required}
+      MEMORIST_ACTOR_SERVICE_TOKEN: ${MEMORIST_ACTOR_SERVICE_TOKEN:?required}
+      MEMORIST_OPENWEBUI_WORKSPACE_UUID: ${MEMORIST_OPENWEBUI_WORKSPACE_UUID:?required}
+      PYTHONPATH: /memorist-integration
+    command: ["python", "-m", "memorist.backend.openwebui_entrypoint"]
     ports:
       - "${OPEN_WEBUI_PORT:-3000}:8080"
     volumes:
       - openwebui-data:/app/backend/data
-      - ../../open-webui-integration/memorist:/memorist-integration:ro
+      - ../../open-webui-integration/memorist:/memorist-integration/memorist:ro
     depends_on:
       memorist-core:
         condition: service_started
@@ -60,7 +67,7 @@
 
   falkordb:
     profiles: ["full", "graph"]
-    image: falkordb/falkordb:latest
+    image: falkordb/falkordb:v4.18.10
     ports:
       - "6379:6379"
     volumes:
