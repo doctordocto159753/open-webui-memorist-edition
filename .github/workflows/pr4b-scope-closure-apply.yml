@@ -115,9 +115,19 @@ jobs:
       - name: Validate Full PostgreSQL ownership and Processing Node scope
         working-directory: memorist-core
         run: |
+          set -o pipefail
           MEMORIST_SCOPE_TEST_RUNTIME=full uv run pytest \
-            tests/test_pr4b_scope_closure.py -q --junitxml=scope-closure-full.xml
+            tests/test_pr4b_scope_closure.py -q --junitxml=scope-closure-full.xml \
+            2>&1 | tee ../scope-closure-full.log
           uv run python -c "import xml.etree.ElementTree as E; r=E.parse('scope-closure-full.xml').getroot(); assert list(r.iter('testcase')) and not list(r.iter('skipped'))"
+      - name: Upload Full PostgreSQL test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr4b-scope-closure-full
+          path: |
+            scope-closure-full.log
+            memorist-core/scope-closure-full.xml
       - name: Type and diff checks
         working-directory: memorist-core
         run: |
@@ -126,7 +136,8 @@ jobs:
           git diff --check
       - name: Commit verified closure and remove temporary automation
         run: |
-          rm -f scope-closure-ruff.log scope-closure-lite.log
+          rm -f scope-closure-ruff.log scope-closure-lite.log scope-closure-full.log
+          rm -f memorist-core/scope-closure-full.xml
           rm -f scripts/pr4b_scope_closure.py scripts/pr4b_scope_closure_post.py
           rm -f .github/workflows/pr4b-scope-closure-apply.yml
           git config user.name "github-actions[bot]"
