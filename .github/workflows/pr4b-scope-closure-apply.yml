@@ -4,10 +4,14 @@ on:
   push:
     branches:
       - codex/pr4b-full-lite-memory-control-contract
-    paths:
+    paths: &closure_paths
       - scripts/pr4b_scope_closure.py
       - scripts/pr4b_scope_closure_post.py
       - .github/workflows/pr4b-scope-closure-apply.yml
+  pull_request:
+    branches:
+      - main
+    paths: *closure_paths
 
 permissions:
   contents: write
