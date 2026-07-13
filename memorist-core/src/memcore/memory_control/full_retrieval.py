@@ -124,7 +124,6 @@ class FullPostgresPreflightService:
                 selected=selected,
                 token_budget=budget.effective_token_budget,
                 attachment_review=attachment_review,
-                graph_rows=graph_rows,
                 active_blocks=active_blocks,
             )
         elapsed = int((perf_counter() - started) * 1000)
@@ -294,13 +293,30 @@ class FullPostgresPreflightService:
         canonical: list[dict[str, Any]],
         graph_rows: list[dict[str, str]],
     ) -> list[ScoredMemoryItem]:
-        by_version = {str(row["memory_version_uuid"]): row for row in canonical}
+        by_version: dict[str, dict[str, Any]] = {}
+        for candidate in canonical:
+            version_uuid = str(candidate["memory_version_uuid"])
+            row = by_version.setdefault(
+                version_uuid,
+                {
+                    **candidate,
+                    "evidence_uuids": [],
+                    "evidence_texts": [],
+                },
+            )
+            if candidate.get("evidence_uuid"):
+                row["evidence_uuids"].append(str(candidate["evidence_uuid"]))
+            if candidate.get("evidence_text"):
+                row["evidence_texts"].append(str(candidate["evidence_text"]))
         for graph in graph_rows:
             version_uuid = graph["memory_version_uuid"]
             if version_uuid in by_version:
-                by_version[version_uuid]["graph"] = True
-                by_version[version_uuid]["graph_fact_uuid"] = graph.get("graph_fact_uuid")
-                by_version[version_uuid]["graph_edge_uuid"] = graph.get("graph_edge_uuid")
+                if self._valid_graph_source(graph):
+                    by_version[version_uuid]["graph"] = True
+                    by_version[version_uuid]["graph_fact_uuid"] = graph.get("graph_fact_uuid")
+                    by_version[version_uuid]["graph_edge_uuid"] = graph.get("graph_edge_uuid")
+                continue
+            if not self._valid_graph_source(graph):
                 continue
             validated = self.connection.execute(
                 """
@@ -331,6 +347,8 @@ class FullPostgresPreflightService:
                     "graph": True,
                     "graph_fact_uuid": graph.get("graph_fact_uuid"),
                     "graph_edge_uuid": graph.get("graph_edge_uuid"),
+                    "evidence_uuids": [],
+                    "evidence_texts": [],
                 }
         items: list[ScoredMemoryItem] = []
         for index, row in enumerate(by_version.values()):
@@ -347,18 +365,43 @@ class FullPostgresPreflightService:
                     valid_time_label="current",
                     confidence_label=_confidence_label(float(row["confidence"])),
                     source_authority_label=str(row["source_authority"]),
-                    evidence_text=row["evidence_text"],
+                    evidence_text="\n".join(dict.fromkeys(row["evidence_texts"])) or None,
                     final_score=round(score, 6),
                     debug_score_trace={
                         "postgres_canonical": True,
                         "graph": bool(row.get("graph")),
-                        "evidence_uuid": row.get("evidence_uuid"),
+                        "evidence_uuids": list(dict.fromkeys(row["evidence_uuids"])),
                         "graph_fact_uuid": row.get("graph_fact_uuid"),
                         "graph_edge_uuid": row.get("graph_edge_uuid"),
                     },
                 )
             )
         return sorted(items, key=lambda item: item.final_score, reverse=True)[:12]
+
+    def _valid_graph_source(self, graph: dict[str, str]) -> bool:
+        route_uuid = graph.get("graph_fact_uuid")
+        candidate_uuid = graph.get("graph_edge_uuid")
+        if not route_uuid or not candidate_uuid:
+            return False
+        row = self.connection.execute(
+            """
+            SELECT 1
+            FROM memory_evidence_links link
+            JOIN candidate_evidence evidence ON evidence.evidence_uuid = link.evidence_uuid
+            WHERE link.memory_uuid = ? AND link.memory_version_uuid = ?
+              AND link.candidate_uuid = ? AND evidence.candidate_uuid = ?
+              AND evidence.route_uuid = ?
+            LIMIT 1
+            """,
+            (
+                graph["memory_uuid"],
+                graph["memory_version_uuid"],
+                candidate_uuid,
+                candidate_uuid,
+                route_uuid,
+            ),
+        ).fetchone()
+        return row is not None
 
     def _build_attachment(
         self,
@@ -369,7 +412,6 @@ class FullPostgresPreflightService:
         selected: list[ScoredMemoryItem],
         token_budget: int,
         attachment_review: bool,
-        graph_rows: list[dict[str, str]],
         active_blocks: list[dict[str, Any]],
     ) -> tuple[str, str, int]:
         attachment_uuid = new_uuid()
@@ -416,14 +458,13 @@ class FullPostgresPreflightService:
         packet_json = packet.model_dump(mode="json")
         ijson = dump_ijson(packet_json)
         now = utc_now()
-        selected_versions = {item.memory_version_uuid for item in selected}
-        validated_graph_rows = [
-            row for row in graph_rows if row["memory_version_uuid"] in selected_versions
-        ]
         graph_source_ids = [
             source_uuid
-            for row in validated_graph_rows
-            for source_uuid in (row.get("graph_fact_uuid"), row.get("graph_edge_uuid"))
+            for item in selected
+            for source_uuid in (
+                (item.debug_score_trace or {}).get("graph_fact_uuid"),
+                (item.debug_score_trace or {}).get("graph_edge_uuid"),
+            )
             if source_uuid
         ]
         self.connection.execute(
@@ -533,8 +574,7 @@ class FullPostgresPreflightService:
                     now,
                 ),
             )
-            evidence_uuid = trace.get("evidence_uuid")
-            if evidence_uuid:
+            for evidence_uuid in trace.get("evidence_uuids") or []:
                 self._insert_source(
                     run_uuid,
                     attachment_uuid,

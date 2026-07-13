@@ -8,7 +8,10 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 
+from memcore.api import routes_memory_control
+from memcore.api.routes_memory_control import AttachmentActionRequest
 from memcore.config import Settings
 from memcore.imports.runtime import initialize_runtime_storage
 from memcore.memory_control.policy import normalize_turn_policy
@@ -48,7 +51,7 @@ def _connection(settings: Settings) -> Iterator[Any]:
 
 @pytest.mark.parametrize("runtime", ["lite", "full"], ids=["lite", "full_postgres"])
 def test_policy_attachment_and_restart_semantics_are_identical(
-    runtime: str, tmp_path: Path
+    runtime: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings = _settings(runtime, tmp_path)
     suffix = uuid4().hex
@@ -57,6 +60,7 @@ def test_policy_attachment_and_restart_semantics_are_identical(
     session = f"session-{suffix}"
     message = f"message-{suffix}"
     attachment = f"attachment-{suffix}"
+    cancelled_attachment = f"cancelled-attachment-{suffix}"
     user = f"user-{suffix}"
     chat = f"chat-{suffix}"
     now = utc_now()
@@ -138,6 +142,18 @@ def test_policy_attachment_and_restart_semantics_are_identical(
             """,
             (attachment, session, project, message, user, workspace, now),
         )
+        connection.execute(
+            """
+            INSERT INTO memory_context_attachments (
+                attachment_uuid, session_uuid, project_uuid, input_message_uuid,
+                attachment_mode, ijson_attachment, rendered_attachment, token_count,
+                owner_user_uuid, workspace_uuid, lifecycle_status, attachment_review,
+                generation, created_at, schema_version
+            ) VALUES (?, ?, ?, ?, 'full', '{}', 'bounded', 1, ?, ?, 'prepared',
+                      false, 1, ?, 1)
+            """,
+            (cancelled_attachment, session, project, message, user, workspace, now),
+        )
         connection.commit()
         assert (
             repository.attachment_for_actor(
@@ -182,6 +198,53 @@ def test_policy_attachment_and_restart_semantics_are_identical(
                 workspace_uuid=workspace,
                 idempotency_key=f"stale-delivery-{suffix}",
             )
+        cancelled = repository.transition_attachment(
+            cancelled_attachment,
+            "cancelled_before_send",
+            user_uuid=user,
+            workspace_uuid=workspace,
+            idempotency_key=f"cancel-{suffix}",
+        )
+        cancelled_duplicate = repository.transition_attachment(
+            cancelled_attachment,
+            "cancelled_before_send",
+            user_uuid=user,
+            workspace_uuid=workspace,
+            idempotency_key=f"cancel-{suffix}",
+        )
+        assert cancelled_duplicate["lifecycle_event_uuid"] == cancelled["lifecycle_event_uuid"]
+
+    monkeypatch.setattr(routes_memory_control, "get_settings", lambda: settings)
+    with pytest.raises(HTTPException) as source_denied:
+        routes_memory_control.fetch_attachment_sources(
+            attachment,
+            x_memorist_user_id="attacker",
+            x_memorist_workspace_id=workspace,
+        )
+    assert source_denied.value.status_code == 404
+    assert (
+        routes_memory_control.fetch_attachment_sources(
+            attachment,
+            x_memorist_user_id=user,
+            x_memorist_workspace_id=workspace,
+        )["sources"]
+        == []
+    )
+    regeneration = routes_memory_control.regenerate_without_recall(
+        attachment,
+        AttachmentActionRequest(idempotency_key=f"regeneration-{suffix}"),
+        x_memorist_user_id=user,
+        x_memorist_workspace_id=workspace,
+    )
+    assert regeneration["turn_policy"] == "no_recall"
+    with pytest.raises(HTTPException) as substituted:
+        routes_memory_control.regenerate_without_recall(
+            cancelled_attachment,
+            AttachmentActionRequest(idempotency_key=f"regeneration-{suffix}"),
+            x_memorist_user_id=user,
+            x_memorist_workspace_id=workspace,
+        )
+    assert substituted.value.status_code == 409
 
     with _connection(settings) as restarted:
         persisted = MemoryControlRepository(
@@ -189,5 +252,10 @@ def test_policy_attachment_and_restart_semantics_are_identical(
         ).attachment_for_actor(attachment, user_uuid=user, workspace_uuid=workspace)
         assert persisted is not None
         assert persisted["lifecycle_status"] == "approved"
+        cancelled_persisted = MemoryControlRepository(
+            restarted, settings.runtime_profile
+        ).attachment_for_actor(cancelled_attachment, user_uuid=user, workspace_uuid=workspace)
+        assert cancelled_persisted is not None
+        assert cancelled_persisted["lifecycle_status"] == "cancelled_before_send"
     if runtime == "full":
         assert not Path(settings.db_path).exists()

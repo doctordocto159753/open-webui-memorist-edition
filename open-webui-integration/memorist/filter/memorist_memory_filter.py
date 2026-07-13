@@ -73,7 +73,8 @@ class Filter:
                 and metadata.get("memorist_input_message_uuid")
             ):
                 metadata["memorist_user_uuid"] = actor_user_id
-                metadata["memorist_workspace_uuid"] = parsed.workspace_id
+                if parsed.workspace_id is not None:
+                    metadata["memorist_workspace_uuid"] = parsed.workspace_id
                 metadata.pop("memorist_attachment_uuid", None)
                 metadata.pop("memorist_retrieval_run_uuid", None)
                 metadata.pop("memorist_attachment_pending_review", None)

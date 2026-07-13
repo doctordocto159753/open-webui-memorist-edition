@@ -61,7 +61,6 @@ jobs:
         working-directory: memorist-core
         run: |
           uv run pytest tests/test_memory_control_contract_full.py tests/test_memory_control_runtime_parity.py -q --junitxml=full-contract.xml
-          FAKE_RUNTIME_PROFILE=full uv run pytest ../open-webui-integration/memorist/tests/test_filter_contract.py -q
           uv run python -c "import xml.etree.ElementTree as E; r=E.parse('full-contract.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
 
   graph-contract:

@@ -150,6 +150,7 @@ def test_regeneration_no_recall_reuses_input_without_session_capture_or_prefligh
             "memorist_regeneration_uuid": "regen-1",
             "memorist_input_message_uuid": "original-message-1",
             "memorist_attachment_uuid": "stale-attachment",
+            "memorist_workspace_uuid": "workspace-1",
         },
         "messages": [{"role": "user", "content": "original prompt"}],
     }
@@ -159,6 +160,7 @@ def test_regeneration_no_recall_reuses_input_without_session_capture_or_prefligh
     assert result["messages"][-1]["content"] == "original prompt"
     assert result["metadata"]["memorist_regeneration_uuid"] == "regen-1"
     assert result["metadata"]["memorist_input_message_uuid"] == "original-message-1"
+    assert result["metadata"]["memorist_workspace_uuid"] == "workspace-1"
     assert "memorist_attachment_uuid" not in result["metadata"]
     assert FakeClient.session_calls == FakeClient.capture_calls == FakeClient.preflight_calls == 0
 
