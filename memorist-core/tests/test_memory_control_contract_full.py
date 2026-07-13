@@ -732,6 +732,7 @@ def test_full_graph_retrieval_persists_postgres_provenance_and_restart(
         "graph_fact",
         "graph_edge",
         "source_evidence",
+        "active_block",
     }
     assert {row["memory_version_uuid"] for row in sources} == {ids["version"]}
     assert sum(row["source_type"] == "source_evidence" for row in sources) == 2

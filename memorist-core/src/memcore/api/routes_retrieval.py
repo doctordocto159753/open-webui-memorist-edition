@@ -438,16 +438,20 @@ def _policy_for_input(
         )
     contract = repository.get_turn_contract(request.input_message_uuid)
     if contract is not None:
-        if contract.get("user_uuid") is not None and not request.user_uuid:
+        if contract.get("user_uuid") is None:
+            raise HTTPException(status_code=403, detail="turn contract has no authorized owner")
+        if not request.user_uuid:
             raise HTTPException(status_code=401, detail="user identity required")
-        if contract.get("workspace_uuid") is not None and not request.workspace_uuid:
+        if contract.get("workspace_uuid") is None:
+            raise HTTPException(status_code=403, detail="turn contract has no workspace scope")
+        if not request.workspace_uuid:
             raise HTTPException(status_code=401, detail="workspace identity required")
         if request.user_uuid and contract.get("user_uuid") not in {None, request.user_uuid}:
             raise HTTPException(status_code=403, detail="user scope mismatch")
         if request.workspace_uuid and contract.get("workspace_uuid") != request.workspace_uuid:
             raise HTTPException(status_code=403, detail="workspace scope mismatch")
         return normalize_turn_policy(str(contract["turn_policy"])), contract
-    return normalize_turn_policy(request.turn_policy or settings.default_turn_policy), None
+    raise HTTPException(status_code=403, detail="authorized Memorist turn contract required")
 
 
 def _run_controlled_preflight(settings: Settings, request: PreflightRequest) -> PreflightResponse:

@@ -332,6 +332,44 @@ def test_request_cannot_switch_runtime_profile(
     assert response.status_code == 422
 
 
+def test_retrieval_denies_missing_or_ownerless_turn_contract(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client, db_path = _client(monkeypatch, tmp_path)
+    session = client.post(
+        "/memcore/openwebui/session/resolve",
+        json={"openwebui_conversation_id": "legacy-chat", "user_id": "owner"},
+    ).json()
+    captured = client.post(
+        "/memcore/openwebui/messages/capture",
+        json={
+            "session_uuid": session["session_uuid"],
+            "user_id": "owner",
+            "workspace_uuid": session["workspace_uuid"],
+            "role": "user",
+            "content": "legacy prompt",
+            "idempotency_key": "legacy-owner-capture",
+        },
+    ).json()
+    with _db(db_path) as connection:
+        connection.execute(
+            "DELETE FROM memorist_turn_contracts WHERE input_message_uuid = ?",
+            (captured["message_uuid"],),
+        )
+        connection.commit()
+    denied = client.post(
+        "/memcore/preflight",
+        json={
+            "session_uuid": session["session_uuid"],
+            "input_message_uuid": captured["message_uuid"],
+            "turn_policy": "full",
+            "user_uuid": "owner",
+            "workspace_uuid": session["workspace_uuid"],
+        },
+    )
+    assert denied.status_code == 403
+
+
 def test_expired_attachment_cannot_be_delivered(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
