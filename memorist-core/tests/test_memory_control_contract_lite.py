@@ -229,6 +229,7 @@ def test_attachment_authorization_lifecycle_and_regeneration_are_idempotent(
             "role": "user",
             "content": "original prompt",
             "idempotency_key": "lifecycle-user",
+            "openwebui_message_id": "review-message",
         },
     ).json()
     with _db(db_path) as connection:
@@ -297,11 +298,26 @@ def test_attachment_authorization_lifecycle_and_regeneration_are_idempotent(
             "role": "user",
             "content": "original prompt",
             "idempotency_key": "lifecycle-user",
+            "openwebui_message_id": "review-message",
         },
     )
     assert resumed_capture.status_code == 200
     assert resumed_capture.json()["duplicate"] is True
     assert resumed_capture.json()["message_uuid"] == captured["message_uuid"]
+    changed_resume = client.post(
+        "/memcore/openwebui/messages/capture",
+        json={
+            "session_uuid": session["session_uuid"],
+            "openwebui_conversation_id": "lifecycle",
+            "user_id": "owner",
+            "workspace_uuid": session["workspace_uuid"],
+            "role": "user",
+            "content": "changed after approval",
+            "idempotency_key": "lifecycle-user",
+            "openwebui_message_id": "review-message",
+        },
+    )
+    assert changed_resume.status_code == 409
     delivery = client.post(
         f"/memcore/memory-control/attachments/{attachment.attachment_uuid}/delivery",
         json={"idempotency_key": "delivery-idempotency"},

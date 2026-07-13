@@ -14,7 +14,10 @@ from memcore.config import Settings, get_settings
 from memcore.memory_control import MemoryControlRepository, memory_control_connection
 from memcore.memory_control.repository import ResolvedTurnPolicy
 from memcore.models import new_uuid, utc_now
-from memcore.openwebui.commands import CaptureOpenWebUIMessageCommand
+from memcore.openwebui.commands import (
+    CaptureIdempotencyConflict,
+    CaptureOpenWebUIMessageCommand,
+)
 from memcore.openwebui.session_resolution import (
     SessionResolutionInput,
     list_aliases,
@@ -261,6 +264,8 @@ def capture_message(request: MessageCaptureRequest) -> dict[str, Any]:
         }
         _record_turn_contract(settings, request, response, resolved_policy)
         return response
+    except CaptureIdempotencyConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -549,13 +554,33 @@ def _capture_message_full(
             )
             existing = connection.execute(
                 """
-                SELECT session_uuid, message_uuid
+                SELECT session_uuid, message_uuid, role, content_hash,
+                       openwebui_message_id, openwebui_conversation_id
                 FROM openwebui_message_captures
                 WHERE idempotency_key = %s
                 """,
                 (idempotency_key,),
             ).fetchone()
             if existing is not None:
+                fingerprint = (
+                    str(existing["session_uuid"]),
+                    str(existing["role"]),
+                    str(existing["content_hash"]),
+                    existing.get("openwebui_message_id"),
+                    existing.get("openwebui_conversation_id"),
+                )
+                expected = (
+                    session_uuid,
+                    request.role,
+                    content_hash,
+                    request.openwebui_message_id,
+                    request.openwebui_conversation_id,
+                )
+                if fingerprint != expected:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="capture idempotency key reused with a different request",
+                    )
                 result = {
                     "session_uuid": existing["session_uuid"],
                     "message_uuid": existing["message_uuid"],

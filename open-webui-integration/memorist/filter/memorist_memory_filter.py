@@ -101,8 +101,10 @@ class Filter:
                 attachment_review=policy.attachment_review,
             )
             review_capture_key = None
-            if metadata.get("memorist_review_ui_active") or metadata.get(
-                "memorist_approved_attachment_uuid"
+            if (
+                metadata.get("memorist_review_ui_active")
+                or metadata.get("memorist_approved_attachment_uuid")
+                or metadata.get("memorist_review_disposition")
             ):
                 if not parsed.message_id:
                     raise MemoristIntegrationError(

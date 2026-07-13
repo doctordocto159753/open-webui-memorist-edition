@@ -12,6 +12,10 @@ from memcore.repositories import JobRepository, MessageRepository
 from memcore.storage.commands import WriteResult
 
 
+class CaptureIdempotencyConflict(ValueError):
+    pass
+
+
 @dataclass(frozen=True)
 class CaptureOpenWebUIMessageCommand:
     session_uuid: str
@@ -28,7 +32,39 @@ class CaptureOpenWebUIMessageCommand:
     max_transaction_ms: int = 5_000
     can_batch: bool = False
 
+    def validate_idempotent_replay(self, connection: sqlite3.Connection) -> None:
+        content_hash = sha256(self.content.encode("utf-8")).hexdigest()
+        existing = connection.execute(
+            """
+            SELECT *
+            FROM openwebui_message_captures
+            WHERE idempotency_key = ?
+            """,
+            (self.idempotency_key,),
+        ).fetchone()
+        if existing is None:
+            raise CaptureIdempotencyConflict("capture idempotency record is incomplete")
+        fingerprint = (
+            str(existing["session_uuid"]),
+            str(existing["role"]),
+            str(existing["content_hash"]),
+            existing["openwebui_message_id"],
+            existing["openwebui_conversation_id"],
+        )
+        expected = (
+            self.session_uuid,
+            self.role,
+            content_hash,
+            self.openwebui_message_id,
+            self.openwebui_conversation_id,
+        )
+        if fingerprint != expected:
+            raise CaptureIdempotencyConflict(
+                "capture idempotency key reused with a different request"
+            )
+
     def execute(self, connection: sqlite3.Connection) -> WriteResult:
+        content_hash = sha256(self.content.encode("utf-8")).hexdigest()
         existing = connection.execute(
             """
             SELECT *
@@ -38,6 +74,7 @@ class CaptureOpenWebUIMessageCommand:
             (self.idempotency_key,),
         ).fetchone()
         if existing is not None:
+            self.validate_idempotent_replay(connection)
             return WriteResult(
                 command_type=self.command_type,
                 target_type="message",
@@ -57,7 +94,6 @@ class CaptureOpenWebUIMessageCommand:
             turn_index=self.turn_index,
             job_priority=100,
         )
-        content_hash = sha256(self.content.encode("utf-8")).hexdigest()
         with connection:
             connection.execute(
                 """

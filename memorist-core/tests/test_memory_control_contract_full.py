@@ -359,6 +359,7 @@ def test_full_concurrent_callbacks_are_single_delivery_and_single_capture(
         role="user",
         content="concurrent callback",
         idempotency_key=f"capture-{uuid4().hex}",
+        openwebui_message_id="review-message",
         turn_policy="full",
     )
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -404,6 +405,11 @@ def test_full_concurrent_callbacks_are_single_delivery_and_single_capture(
     resumed_capture = routes_openwebui.capture_message(capture_request)
     assert resumed_capture["duplicate"] is True
     assert resumed_capture["message_uuid"] == captures[0]["message_uuid"]
+    with pytest.raises(HTTPException) as stale_resume:
+        routes_openwebui.capture_message(
+            capture_request.model_copy(update={"content": "changed after approval"})
+        )
+    assert stale_resume.value.status_code == 409
 
     def deliver(index: int) -> dict[str, object]:
         return routes_memory_control.record_attachment_delivery(

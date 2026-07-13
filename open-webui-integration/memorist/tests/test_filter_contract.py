@@ -213,12 +213,14 @@ def test_review_removed_then_send_without_memorist_clears_stale_attribution(monk
         "metadata": {
             "memorist_pending_attachment_uuid": "attachment-1",
             "memorist_attachment_pending_review": True,
+            "memorist_review_disposition": "suppressed",
         },
         "messages": [{"role": "user", "id": "review-message", "content": "send without"}],
     }
     filter_instance = _module().Filter()
     result = filter_instance.inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
     assert "memorist_pending_attachment_uuid" not in result["metadata"]
+    assert FakeClient.last_capture_idempotency_key == "review-prepare:user-1:review-message"
     result["messages"] = [{"role": "assistant", "content": "answer without context"}]
     filter_instance.outlet(result, {"id": "user-1", "workspace_id": "workspace-1"})
     assert FakeClient.last_assistant_attachment is None
@@ -229,7 +231,10 @@ def test_review_cancelled_then_send_without_memorist_captures_assistant(monkeypa
     FakeClient.assistant_calls = 0
     body = {
         "memorist": {"turn_policy": "no_recall"},
-        "metadata": {"memorist_pending_attachment_uuid": "cancelled-attachment"},
+        "metadata": {
+            "memorist_pending_attachment_uuid": "cancelled-attachment",
+            "memorist_review_disposition": "cancelled_before_send",
+        },
         "messages": [{"role": "user", "id": "review-message", "content": "cancel preview"}],
     }
     filter_instance = _module().Filter()
@@ -238,6 +243,7 @@ def test_review_cancelled_then_send_without_memorist_captures_assistant(monkeypa
     filter_instance.outlet(result, {"id": "user-1", "workspace_id": "workspace-1"})
     assert FakeClient.assistant_calls == 1
     assert FakeClient.last_assistant_attachment is None
+    assert FakeClient.last_capture_idempotency_key == "review-prepare:user-1:review-message"
 
 
 def test_private_resolves_no_session_and_creates_no_capture_or_preflight(monkeypatch) -> None:
