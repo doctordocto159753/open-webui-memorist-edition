@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -169,13 +170,15 @@ def test_session_lineage_requires_exact_owner(runtime: tuple[TestClient, Setting
     assert ownerless_response.status_code == 404
 
 
-def _model_control(connection: object) -> ModelControlRepository:
+def _model_control(
+    connection: Any,
+) -> ModelControlRepository | PostgresModelControlRepository:
     if RUNTIME == "full":
         return PostgresModelControlRepository(connection)
     return ModelControlRepository(connection)
 
 
-def _profile(connection: object, name: str) -> str:
+def _profile(connection: Any, name: str) -> str:
     profile = _model_control(connection).create_profile(
         ModelProfileCreate(
             provider_type=ProviderType.DETERMINISTIC,
@@ -209,7 +212,9 @@ def _capture(
         headers=_headers(seeded["user"], seeded["workspace"]),
     )
     assert response.status_code == 200, response.text
-    return response.json()
+    payload = response.json()
+    assert isinstance(payload, dict)
+    return cast(dict[str, object], payload)
 
 
 def _job_payload(settings: Settings, message_uuid: str) -> dict[str, object]:
@@ -220,7 +225,9 @@ def _job_payload(settings: Settings, message_uuid: str) -> dict[str, object]:
             (f"%{message_uuid}%",),
         ).fetchone()
     assert row is not None
-    return json.loads(str(row["payload_ijson"]))
+    payload = json.loads(str(row["payload_ijson"]))
+    assert isinstance(payload, dict)
+    return cast(dict[str, object], payload)
 
 
 def test_processing_node_resolution_is_project_workspace_global_scoped(
