@@ -1,0 +1,102 @@
+name: PR4-B Scope Closure Apply
+
+on:
+  push:
+    branches:
+      - codex/pr4b-full-lite-memory-control-contract
+    paths:
+      - scripts/pr4b_scope_closure.py
+      - scripts/pr4b_scope_closure_post.py
+      - .github/workflows/pr4b-scope-closure-apply.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: memorist
+          POSTGRES_PASSWORD: memorist
+          POSTGRES_DB: memorist_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U memorist -d memorist_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MEMORIST_POSTGRES_DSN: postgresql://memorist:memorist@localhost:5432/memorist_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/pr4b-full-lite-memory-control-contract
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - name: Apply asserted scope-closure patch
+        run: |
+          python scripts/pr4b_scope_closure.py
+          python scripts/pr4b_scope_closure_post.py
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Format and lint changed Python
+        working-directory: memorist-core
+        run: |
+          uv run ruff check --fix \
+            src/memcore/api/routes_openwebui.py \
+            src/memcore/api/routes_retrieval.py \
+            src/memcore/openwebui/commands.py \
+            src/memcore/openwebui/model_scheduling.py \
+            tests/test_pr4b_scope_closure.py \
+            ../open-webui-integration/memorist/backend/router.py \
+            ../open-webui-integration/memorist/tests/test_backend_proxy.py
+          uv run ruff format \
+            src/memcore/api/routes_openwebui.py \
+            src/memcore/api/routes_retrieval.py \
+            src/memcore/openwebui/commands.py \
+            src/memcore/openwebui/model_scheduling.py \
+            tests/test_pr4b_scope_closure.py \
+            ../open-webui-integration/memorist/backend/router.py \
+            ../open-webui-integration/memorist/tests/test_backend_proxy.py
+          uv run ruff check \
+            src/memcore/api/routes_openwebui.py \
+            src/memcore/api/routes_retrieval.py \
+            src/memcore/openwebui/commands.py \
+            src/memcore/openwebui/model_scheduling.py \
+            tests/test_pr4b_scope_closure.py \
+            ../open-webui-integration/memorist/backend/router.py \
+            ../open-webui-integration/memorist/tests/test_backend_proxy.py
+      - name: Validate Lite policy, ownership, and Processing Node scope
+        working-directory: memorist-core
+        run: |
+          MEMORIST_SCOPE_TEST_RUNTIME=lite uv run pytest \
+            tests/test_pr4b_scope_closure.py \
+            ../open-webui-integration/memorist/tests/test_backend_proxy.py -q
+      - name: Validate Full PostgreSQL ownership and Processing Node scope
+        working-directory: memorist-core
+        run: |
+          MEMORIST_SCOPE_TEST_RUNTIME=full uv run pytest \
+            tests/test_pr4b_scope_closure.py -q --junitxml=scope-closure-full.xml
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('scope-closure-full.xml').getroot(); assert list(r.iter('testcase')) and not list(r.iter('skipped'))"
+      - name: Type and diff checks
+        working-directory: memorist-core
+        run: |
+          uv run mypy src
+          cd ..
+          git diff --check
+      - name: Commit verified closure and remove temporary automation
+        run: |
+          rm -f scripts/pr4b_scope_closure.py scripts/pr4b_scope_closure_post.py
+          rm -f .github/workflows/pr4b-scope-closure-apply.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: close PR4-B policy and multi-user scope gaps"
+          git push origin HEAD:codex/pr4b-full-lite-memory-control-contract
