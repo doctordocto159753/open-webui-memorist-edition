@@ -53,6 +53,8 @@ def test_openwebui_capture_endpoints_and_status(
         "/memcore/openwebui/messages/capture",
         json={
             "session_uuid": session_uuid,
+            "openwebui_conversation_id": "chat-1",
+            "openwebui_message_id": "u1",
             "role": "user",
             "content": "hello",
             "idempotency_key": "capture-1",

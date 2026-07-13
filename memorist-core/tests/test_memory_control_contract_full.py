@@ -379,7 +379,7 @@ def test_full_concurrent_callbacks_are_single_delivery_and_single_capture(
                 owner_user_uuid, workspace_uuid, lifecycle_status, attachment_review,
                 generation, created_at, schema_version
             ) VALUES (?, ?, ?, ?, 'full', '{}', 'bounded', 1, ?, ?, 'prepared',
-                      true, 1, ?, 1)
+                      false, 1, ?, 1)
             """,
             (
                 attachment_uuid,
@@ -397,19 +397,6 @@ def test_full_concurrent_callbacks_are_single_delivery_and_single_capture(
         "x_memorist_user_id": ids["user"],
         "x_memorist_workspace_id": ids["workspace"],
     }
-    routes_memory_control.approve_attachment(
-        attachment_uuid,
-        AttachmentActionRequest(idempotency_key=f"review-approve-{uuid4().hex}"),
-        **headers,
-    )
-    resumed_capture = routes_openwebui.capture_message(capture_request)
-    assert resumed_capture["duplicate"] is True
-    assert resumed_capture["message_uuid"] == captures[0]["message_uuid"]
-    with pytest.raises(HTTPException) as stale_resume:
-        routes_openwebui.capture_message(
-            capture_request.model_copy(update={"content": "changed after approval"})
-        )
-    assert stale_resume.value.status_code == 409
 
     def deliver(index: int) -> dict[str, object]:
         return routes_memory_control.record_attachment_delivery(
@@ -430,6 +417,74 @@ def test_full_concurrent_callbacks_are_single_delivery_and_single_capture(
             (attachment_uuid,),
         ).fetchone()[0]
     assert count == 1
+
+
+def test_full_review_resume_is_payload_bound(full_settings: Settings) -> None:
+    ids = _seed_turn(full_settings)
+    capture_request = MessageCaptureRequest(
+        session_uuid=ids["session"],
+        openwebui_conversation_id=ids["chat"],
+        user_id=ids["user"],
+        workspace_uuid=ids["workspace"],
+        role="user",
+        content="approved review prompt",
+        idempotency_key=f"review-prepare:{ids['user']}:review-message",
+        openwebui_message_id="review-message",
+        turn_policy="full",
+    )
+    captured = routes_openwebui.capture_message(capture_request)
+    attachment_uuid = f"attachment-{uuid4().hex}"
+    with memory_control_connection(full_settings) as connection:
+        connection.execute(
+            """
+            INSERT INTO memory_context_attachments (
+                attachment_uuid, session_uuid, project_uuid, input_message_uuid,
+                attachment_mode, ijson_attachment, rendered_attachment, token_count,
+                owner_user_uuid, workspace_uuid, lifecycle_status, attachment_review,
+                generation, created_at, schema_version
+            ) VALUES (?, ?, ?, ?, 'full', '{}', 'bounded', 1, ?, ?, 'prepared',
+                      true, 1, ?, 1)
+            """,
+            (
+                attachment_uuid,
+                ids["session"],
+                ids["project"],
+                captured["message_uuid"],
+                ids["user"],
+                ids["workspace"],
+                utc_now(),
+            ),
+        )
+        connection.commit()
+    headers = {
+        "x_memorist_user_id": ids["user"],
+        "x_memorist_workspace_id": ids["workspace"],
+    }
+    routes_memory_control.approve_attachment(
+        attachment_uuid,
+        AttachmentActionRequest(idempotency_key=f"review-approve-{uuid4().hex}"),
+        **headers,
+    )
+    resumed = routes_openwebui.capture_message(capture_request)
+    assert resumed["duplicate"] is True
+    assert resumed["message_uuid"] == captured["message_uuid"]
+    routes_memory_control.record_attachment_delivery(
+        attachment_uuid,
+        AttachmentActionRequest(idempotency_key=f"review-delivery-{uuid4().hex}"),
+        **headers,
+    )
+    with pytest.raises(HTTPException) as stale_resume:
+        routes_openwebui.capture_message(
+            capture_request.model_copy(update={"content": "changed after approval"})
+        )
+    assert stale_resume.value.status_code == 409
+    with memory_control_connection(full_settings) as connection:
+        delivery_count = connection.execute(
+            "SELECT count(*) FROM memorist_attachment_lifecycle_events "
+            "WHERE attachment_uuid = ? AND lifecycle_status = 'delivered'",
+            (attachment_uuid,),
+        ).fetchone()[0]
+    assert delivery_count == 1
 
 
 def test_full_user_capture_and_turn_contract_are_one_transaction(
