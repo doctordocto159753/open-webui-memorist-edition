@@ -22,6 +22,7 @@ from memcore.config import get_settings
 from memcore.imports.runtime import initialize_runtime_storage
 from memcore.imports.worker import ImportReconstructionWorkerService
 from memcore.observability.logging import configure_logging
+from memcore.security.actor import MemoristActorMiddleware
 from memcore.version import __version__
 
 
@@ -50,6 +51,7 @@ def create_app() -> FastAPI:
         openapi_url="/memcore/openapi.json",
         lifespan=lifespan,
     )
+    app.add_middleware(MemoristActorMiddleware)
     app.include_router(health_router)
     app.include_router(config_router)
     app.include_router(costs_router)

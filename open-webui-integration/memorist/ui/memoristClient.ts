@@ -2,10 +2,6 @@ import type { MemoristModelRole, ModelControlProfile } from "./modelControl";
 
 export type MemoristMode = "off" | "lite" | "standard" | "full";
 export type MemoristTurnPolicy = "full" | "no_recall" | "private";
-export type MemoristActorScope = {
-  userId: string;
-  workspaceId?: string | null;
-};
 export type MemoristRegenerationInstruction = {
   regeneration_uuid: string;
   original_input_message_uuid: string;
@@ -22,8 +18,6 @@ export type MemoristRegenerationRequestBody = {
   metadata: {
     memorist_regeneration_uuid: string;
     memorist_input_message_uuid: string;
-    memorist_user_uuid: string;
-    memorist_workspace_uuid?: string | null;
   };
 };
 export const MEMORY_CONTROL_LABELS = {
@@ -195,48 +189,43 @@ export class MemoristClient {
     workspace_uuid?: string | null;
     turn_policy: MemoristTurnPolicy;
     attachment_review?: boolean;
-  }, actor: MemoristActorScope): Promise<unknown> {
-    return this.put("/memory-control/policy/defaults", payload, this.actorHeaders(actor));
+  }): Promise<unknown> {
+    return this.put("/memory-control/policy/defaults", payload);
   }
-  async previewAttachment(attachmentUuid: string, actor: MemoristActorScope): Promise<unknown> {
-    return this.get(
-      `/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/preview`,
-      this.actorHeaders(actor),
-    );
+  async previewAttachment(attachmentUuid: string): Promise<unknown> {
+    return this.get(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/preview`);
   }
-  async fetchAttachmentSources(attachmentUuid: string, actor: MemoristActorScope): Promise<unknown> {
-    return this.get(
-      `/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/sources`,
-      this.actorHeaders(actor),
-    );
+  async fetchAttachmentSources(attachmentUuid: string): Promise<unknown> {
+    return this.get(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/sources`);
   }
-  async approveAttachment(attachmentUuid: string, idempotencyKey: string, actor: MemoristActorScope): Promise<unknown> {
-    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/approve`, { idempotency_key: idempotencyKey }, this.actorHeaders(actor));
+  async approveAttachment(attachmentUuid: string, idempotencyKey: string): Promise<unknown> {
+    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/approve`, { idempotency_key: idempotencyKey });
   }
-  async suppressAttachment(attachmentUuid: string, idempotencyKey: string, actor: MemoristActorScope): Promise<unknown> {
-    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/suppress`, { idempotency_key: idempotencyKey }, this.actorHeaders(actor));
+  async suppressAttachment(attachmentUuid: string, idempotencyKey: string): Promise<unknown> {
+    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/suppress`, { idempotency_key: idempotencyKey });
   }
-  async cancelAttachmentBeforeSend(attachmentUuid: string, idempotencyKey: string, actor: MemoristActorScope): Promise<unknown> {
-    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/cancel`, { idempotency_key: idempotencyKey }, this.actorHeaders(actor));
+  async cancelAttachmentBeforeSend(attachmentUuid: string, idempotencyKey: string): Promise<unknown> {
+    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/cancel`, { idempotency_key: idempotencyKey });
   }
-  async recordAttachmentDelivery(attachmentUuid: string, idempotencyKey: string, actor: MemoristActorScope, responseMessageUuid?: string): Promise<unknown> {
-    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/delivery`, { idempotency_key: idempotencyKey, response_message_uuid: responseMessageUuid }, this.actorHeaders(actor));
+  async recordAttachmentDelivery(attachmentUuid: string, idempotencyKey: string, responseMessageUuid?: string): Promise<unknown> {
+    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/delivery`, { idempotency_key: idempotencyKey, response_message_uuid: responseMessageUuid });
   }
-  async recordAttachmentRejection(attachmentUuid: string, idempotencyKey: string, actor: MemoristActorScope): Promise<unknown> {
-    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/rejection`, { idempotency_key: idempotencyKey }, this.actorHeaders(actor));
+  async recordAttachmentRejection(attachmentUuid: string, idempotencyKey: string): Promise<unknown> {
+    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/rejection`, { idempotency_key: idempotencyKey });
   }
-  async regenerateWithoutRecall(attachmentUuid: string, idempotencyKey: string, actor: MemoristActorScope): Promise<MemoristRegenerationInstruction> {
-    return this.post<MemoristRegenerationInstruction>(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/regenerate-without-recall`, { idempotency_key: idempotencyKey }, this.actorHeaders(actor));
+  async regenerateWithoutRecall(attachmentUuid: string, sourceResponseMessageUuid: string, idempotencyKey: string): Promise<MemoristRegenerationInstruction> {
+    return this.post<MemoristRegenerationInstruction>(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/regenerate-without-recall`, {
+      idempotency_key: idempotencyKey,
+      response_message_uuid: sourceResponseMessageUuid,
+    });
   }
-  buildRegenerationRequest(instruction: MemoristRegenerationInstruction, actor: MemoristActorScope): MemoristRegenerationRequestBody {
+  buildRegenerationRequest(instruction: MemoristRegenerationInstruction): MemoristRegenerationRequestBody {
     return {
       messages: [{ role: "user", content: instruction.original_user_prompt }],
       memorist: { turn_policy: "no_recall", attachment_review: false },
       metadata: {
         memorist_regeneration_uuid: instruction.regeneration_uuid,
         memorist_input_message_uuid: instruction.original_input_message_uuid,
-        memorist_user_uuid: actor.userId,
-        memorist_workspace_uuid: actor.workspaceId,
       },
     };
   }
@@ -292,12 +281,6 @@ export class MemoristClient {
     }
   }
 
-  private actorHeaders(actor: MemoristActorScope): Record<string, string> {
-    return {
-      "X-Memorist-User-Id": actor.userId,
-      ...(actor.workspaceId ? { "X-Memorist-Workspace-Id": actor.workspaceId } : {}),
-    };
-  }
 }
 
 

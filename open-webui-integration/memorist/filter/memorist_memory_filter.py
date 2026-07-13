@@ -46,9 +46,12 @@ class Filter:
         metadata = parsed.metadata
         if parsed.warnings:
             metadata["memorist_parser_warnings"] = parsed.warnings
+        if not parsed.user_id or not parsed.workspace_id:
+            metadata["memorist_skipped_reason"] = "trusted_actor_identity_unavailable"
+            return body
         try:
             client = MemoristClient(config)
-            actor_user_id = parsed.user_id or "openwebui:anonymous"
+            actor_user_id = parsed.user_id
             request_control = body.get("memorist")
             if request_control is not None and not isinstance(request_control, dict):
                 raise MemoristIntegrationError("memorist request control must be an object")
@@ -75,6 +78,8 @@ class Filter:
                 metadata["memorist_user_uuid"] = actor_user_id
                 if parsed.workspace_id is not None:
                     metadata["memorist_workspace_uuid"] = parsed.workspace_id
+                metadata.pop("memorist_pending_attachment_uuid", None)
+                metadata.pop("memorist_delivered_attachment_uuid", None)
                 metadata.pop("memorist_attachment_uuid", None)
                 metadata.pop("memorist_retrieval_run_uuid", None)
                 metadata.pop("memorist_attachment_pending_review", None)
@@ -112,6 +117,35 @@ class Filter:
             metadata["memorist_input_message_uuid"] = captured.message_uuid
             metadata["memorist_user_uuid"] = actor_user_id
             metadata["memorist_workspace_uuid"] = resolved.workspace_uuid or parsed.workspace_id
+            approved_uuid = metadata.get("memorist_approved_attachment_uuid")
+            if approved_uuid and policy.recall_enabled and policy.attachment_enabled:
+                approved = client.preview_attachment(
+                    str(approved_uuid),
+                    user_id=actor_user_id,
+                    workspace_uuid=str(resolved.workspace_uuid or parsed.workspace_id),
+                )
+                if (
+                    approved.get("input_message_uuid") != captured.message_uuid
+                    or approved.get("delivery_state") != "approved"
+                    or not approved.get("rendered_attachment")
+                ):
+                    raise MemoristIntegrationError("approved attachment generation mismatch")
+                client.record_attachment_delivery(
+                    str(approved_uuid),
+                    user_id=actor_user_id,
+                    workspace_uuid=resolved.workspace_uuid or parsed.workspace_id,
+                    idempotency_key=(
+                        f"approved-filter-delivery:{captured.message_uuid}:{approved_uuid}:"
+                        f"{approved.get('generation', 1)}"
+                    ),
+                )
+                insert_memory_attachment(
+                    body, str(approved["rendered_attachment"]), str(approved_uuid)
+                )
+                metadata["memorist_delivered_attachment_uuid"] = str(approved_uuid)
+                metadata.pop("memorist_pending_attachment_uuid", None)
+                metadata.pop("memorist_attachment_pending_review", None)
+                return body
             if config.preflight_enabled and policy.recall_enabled and policy.attachment_enabled:
                 self._attach_preflight(
                     body,
@@ -147,6 +181,11 @@ class Filter:
         assistant_text = parsed.assistant_text
         if not input_message_uuid or not assistant_text:
             return body
+        actor_user = metadata.get("memorist_user_uuid") or (__user__ or {}).get("id")
+        actor_workspace = metadata.get("memorist_workspace_uuid")
+        if not actor_user or not actor_workspace:
+            metadata["memorist_skipped_reason"] = "trusted_actor_identity_unavailable"
+            return body
         current_response_key = response_key(body, assistant_text)
         if current_response_key in self._completed_response_keys:
             return body
@@ -157,16 +196,12 @@ class Filter:
             MemoristClient(config).assistant_completed(
                 str(input_message_uuid),
                 assistant_text,
-                metadata.get("memorist_attachment_uuid"),
+                metadata.get("memorist_delivered_attachment_uuid"),
                 parsed.provider_response_id,
                 raw_payload={"openwebui_response_id": body.get("id")},
                 turn_policy=turn_policy,
-                user_id=str(
-                    metadata.get("memorist_user_uuid")
-                    or (__user__ or {}).get("id")
-                    or "openwebui:anonymous"
-                ),
-                workspace_uuid=metadata.get("memorist_workspace_uuid"),
+                user_id=str(actor_user),
+                workspace_uuid=str(actor_workspace),
                 regeneration_uuid=metadata.get("memorist_regeneration_uuid"),
             )
             self._completed_response_keys.add(current_response_key)
@@ -204,11 +239,18 @@ class Filter:
         if result.status != "attached" or not result.rendered_attachment:
             return
         metadata = _metadata(body)
-        metadata["memorist_attachment_uuid"] = result.attachment_uuid
+        metadata["memorist_pending_attachment_uuid"] = result.attachment_uuid
         metadata["memorist_user_uuid"] = user_id
         metadata["memorist_workspace_uuid"] = workspace_uuid
         if result.attachment_review:
             metadata["memorist_attachment_pending_review"] = True
+            if result.attachment_uuid:
+                client.cancel_attachment_before_send(
+                    result.attachment_uuid,
+                    user_id=user_id,
+                    workspace_uuid=workspace_uuid,
+                    idempotency_key=f"review-no-ui:{input_message_uuid}:{result.attachment_uuid}",
+                )
             return
         if result.attachment_uuid:
             client.record_attachment_delivery(
@@ -218,6 +260,8 @@ class Filter:
                 idempotency_key=f"filter-delivery:{input_message_uuid}:{result.attachment_uuid}",
             )
         insert_memory_attachment(body, result.rendered_attachment, result.attachment_uuid)
+        metadata["memorist_delivered_attachment_uuid"] = result.attachment_uuid
+        metadata.pop("memorist_pending_attachment_uuid", None)
         metadata["memorist_retrieval_run_uuid"] = result.retrieval_run_uuid
         metadata["memorist_attachment_token_count"] = result.token_count
         metadata["memorist_effective_token_budget"] = result.effective_token_budget
@@ -255,6 +299,10 @@ def _config_from_valves(valves: Any) -> MemoristIntegrationConfig:
         retrieval_mode=str(getattr(valves, "retrieval_mode", base.retrieval_mode)),
         fail_open=base.fail_open and bool(getattr(valves, "fail_open", base.fail_open)),
         debug=base.debug or bool(getattr(valves, "debug", base.debug)),
+        actor_assertion_secret=base.actor_assertion_secret,
+        actor_service_token=base.actor_service_token,
+        actor_assertion_issuer=base.actor_assertion_issuer,
+        actor_assertion_audience=base.actor_assertion_audience,
     )
 
 

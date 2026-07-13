@@ -127,3 +127,4 @@ CREATE INDEX IF NOT EXISTS idx_memorist_attachment_lifecycle
 ON memorist_attachment_lifecycle_events(attachment_uuid, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_memorist_attachment_single_lifecycle_status
 ON memorist_attachment_lifecycle_events(attachment_uuid, lifecycle_status);
+

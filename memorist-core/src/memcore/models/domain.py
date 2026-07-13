@@ -290,6 +290,8 @@ class MemoryContextAttachment(DomainModel):
     cancelled_at: str | None = None
     generation: int = Field(default=1, ge=1)
     expires_at: str | None = None
+    user_disposition: str = "none"
+    user_disposition_at: str | None = None
     schema_version: int = Field(default=1, ge=1)
 
 

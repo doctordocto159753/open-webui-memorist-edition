@@ -74,7 +74,8 @@ class FalkorDBClient:
                 f"AND any(term IN [{term_list}] WHERE "
                 "toLower(coalesce(ver.text, '')) CONTAINS term)",
                 "RETURN DISTINCT mem.uuid AS memory_uuid, ver.uuid AS memory_version_uuid, "
-                "route.uuid AS graph_fact_uuid, candidate.uuid AS graph_edge_uuid",
+                "route.uuid AS memory_signal_route_uuid, "
+                "candidate.uuid AS memory_candidate_uuid",
                 f"LIMIT {max(1, min(limit, 50))}",
             ]
         )
@@ -154,7 +155,7 @@ def _graph_rows(result: Any) -> list[dict[str, str]]:
                 "memory_uuid": memory_uuid,
                 "memory_version_uuid": version_uuid,
             }
-            for key in ("graph_fact_uuid", "graph_edge_uuid"):
+            for key in ("memory_signal_route_uuid", "memory_candidate_uuid"):
                 value = record.get(key)
                 if value and value != "None":
                     graph_record[key] = value

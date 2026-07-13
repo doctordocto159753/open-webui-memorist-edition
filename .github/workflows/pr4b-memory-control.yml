@@ -81,7 +81,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       falkordb:
-        image: falkordb/falkordb:latest
+        image: falkordb/falkordb:v4.18.10
         ports:
           - 6379:6379
         options: >-
@@ -145,6 +145,89 @@ jobs:
           MEMORIST_RUNTIME_PROFILE=lite MEMORIST_CANONICAL_STORE=sqlite uv run pytest tests/test_memory_control_contract_lite.py -k regeneration -q
           uv run pytest tests/test_memory_control_contract_full.py -k regeneration -q --junitxml=regeneration-full.xml
           uv run python -c "import xml.etree.ElementTree as E; r=E.parse('regeneration-full.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+
+  trusted-actor-lite:
+    name: Trusted Actor Authentication — Lite
+    runs-on: ubuntu-latest
+    env:
+      MEMORIST_AUTH_TEST_RUNTIME: lite
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - working-directory: memorist-core
+        run: uv sync --all-extras
+      - working-directory: memorist-core
+        run: uv run pytest tests/test_trusted_actor_authentication.py -q
+
+  trusted-actor-full:
+    name: Trusted Actor Authentication — Full
+    runs-on: ubuntu-latest
+    services: *postgres
+    env:
+      <<: *full_env
+      MEMORIST_AUTH_TEST_RUNTIME: full
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - working-directory: memorist-core
+        run: uv sync --all-extras
+      - working-directory: memorist-core
+        run: uv run pytest tests/test_trusted_actor_authentication.py -q --junitxml=actor-full.xml
+      - working-directory: memorist-core
+        run: uv run python -c "import xml.etree.ElementTree as E; r=E.parse('actor-full.xml').getroot(); assert list(r.iter('testcase')) and not list(r.iter('skipped'))"
+
+  attachment-review-filter:
+    name: Attachment Review Filter E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - working-directory: memorist-core
+        run: uv sync --all-extras
+      - working-directory: memorist-core
+        run: uv run pytest ../open-webui-integration/memorist/tests/test_filter_contract.py -k review -q
+
+  regeneration-concurrency-lite:
+    name: Regeneration Concurrency — Lite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - working-directory: memorist-core
+        run: uv sync --all-extras
+      - working-directory: memorist-core
+        run: uv run pytest tests/test_memory_control_contract_lite.py -k attachment_authorization -q
+
+  regeneration-concurrency-full:
+    name: Regeneration Concurrency — Full
+    runs-on: ubuntu-latest
+    services: *postgres
+    env: *full_env
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - working-directory: memorist-core
+        run: uv sync --all-extras
+      - working-directory: memorist-core
+        run: uv run pytest tests/test_memory_control_contract_full.py -k regeneration_preserves -q --junitxml=regen-concurrency-full.xml
+      - working-directory: memorist-core
+        run: uv run python -c "import xml.etree.ElementTree as E; r=E.parse('regen-concurrency-full.xml').getroot(); assert list(r.iter('testcase')) and not list(r.iter('skipped'))"
+
+  live-capture-parity:
+    name: Live Capture Processing Node Parity
+    runs-on: ubuntu-latest
+    services: *postgres
+    env: *full_env
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - working-directory: memorist-core
+        run: uv sync --all-extras
+      - working-directory: memorist-core
+        run: |
+          MEMORIST_RUNTIME_PROFILE=lite MEMORIST_CANONICAL_STORE=sqlite uv run pytest tests/test_memory_control_contract_lite.py -k no_recall -q
+          uv run pytest tests/test_memory_control_contract_full.py -k "openwebui_filter or no_recall" -q --junitxml=capture-parity-full.xml
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('capture-parity-full.xml').getroot(); assert list(r.iter('testcase')) and not list(r.iter('skipped'))"
 
   type-and-lint:
     name: Type and Lint

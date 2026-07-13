@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, ConfigDict
 
+from memcore.api.routes_openwebui import _pg_enqueue_capture_jobs
 from memcore.config import Settings, get_settings
 from memcore.governance.delivery import DeliveryTraceService
 from memcore.memory_control import MemoryControlRepository, memory_control_connection
@@ -14,9 +15,10 @@ from memcore.model_control.repository import ModelControlRepository
 from memcore.model_control.schemas import UsageEventCreate
 from memcore.models import ModelRole, PreflightResponse, PreflightStatus, new_uuid, utc_now
 from memcore.preflight import PreflightRequest, PreflightService
-from memcore.repositories import JobRepository, MemoryContextAttachmentRepository, MessageRepository
+from memcore.repositories import JobRepository, MessageRepository
 from memcore.repositories.retrieval import RetrievalRepository
 from memcore.retrieval.runner import RetrievalRunner
+from memcore.security import optional_memorist_actor
 from memcore.validators.ijson import dump_ijson
 
 router = APIRouter(prefix="/memcore", tags=["retrieval"])
@@ -157,7 +159,11 @@ def get_attachment(
     x_memorist_user_id: str | None = Header(default=None),
     x_memorist_workspace_id: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    if not x_memorist_user_id:
+    actor = optional_memorist_actor()
+    if actor is not None:
+        x_memorist_user_id = actor.user_uuid
+        x_memorist_workspace_id = actor.workspace_uuid
+    if not x_memorist_user_id or not x_memorist_workspace_id:
         raise HTTPException(status_code=401, detail="Memorist actor identity required")
     settings = get_settings()
     with memory_control_connection(settings) as connection:
@@ -208,7 +214,26 @@ def assistant_response_completed(request: AssistantResponseCompletedRequest) -> 
         policy, contract = _policy_for_input(connection, settings, request)
         if policy.private:
             return {"skipped": True, "turn_policy": "private"}
-        control = MemoryControlRepository(connection, settings.runtime_profile)
+        connection.begin_composed_write()
+        if request.regeneration_uuid:
+            completed = _completed_regeneration(connection, request.regeneration_uuid)
+            if completed is not None:
+                connection.rollback()
+                connection._atomic_depth = 0
+                return completed
+            reserved = connection.execute(
+                """
+                UPDATE memorist_regenerations SET status = 'completing'
+                WHERE regeneration_uuid = ? AND status = 'requested'
+                  AND regenerated_assistant_message_uuid IS NULL
+                """,
+                (request.regeneration_uuid,),
+            )
+            if reserved.rowcount != 1:
+                raise HTTPException(
+                    status_code=409, detail="regeneration completion is in progress"
+                )
+        control = MemoryControlRepository(connection, settings.runtime_profile, autocommit=False)
         attachment_row: dict[str, Any] | None = None
         actor_user = request.user_uuid or (
             str(contract.get("user_uuid")) if contract and contract.get("user_uuid") else None
@@ -243,12 +268,18 @@ def assistant_response_completed(request: AssistantResponseCompletedRequest) -> 
         input_message = messages.get_message(request.input_message_uuid)
         if input_message is None:
             raise HTTPException(status_code=404, detail="input message not found")
-        existing = retrieval_repository.get_assistant_response_link(
-            request.input_message_uuid,
-            content_hash,
-            request.provider_response_id,
+        existing = (
+            None
+            if request.regeneration_uuid
+            else retrieval_repository.get_assistant_response_link(
+                request.input_message_uuid,
+                content_hash,
+                request.provider_response_id,
+            )
         )
         if existing is not None:
+            connection.rollback()
+            connection._atomic_depth = 0
             return {
                 "assistant_message_uuid": existing["assistant_message_uuid"],
                 "response_link_uuid": existing["response_link_uuid"],
@@ -269,8 +300,18 @@ def assistant_response_completed(request: AssistantResponseCompletedRequest) -> 
             provider_response_id=request.provider_response_id,
             content_hash=content_hash,
         )
+        if request.regeneration_uuid:
+            connection.execute(
+                "UPDATE assistant_response_links SET regeneration_uuid = ? "
+                "WHERE response_link_uuid = ?",
+                (request.regeneration_uuid, link["response_link_uuid"]),
+            )
         attachment = (
-            MemoryContextAttachmentRepository(connection).get_attachment(request.attachment_uuid)
+            connection.execute(
+                "SELECT retrieval_run_uuid FROM memory_context_attachments "
+                "WHERE attachment_uuid = ?",
+                (request.attachment_uuid,),
+            ).fetchone()
             if request.attachment_uuid
             else None
         )
@@ -283,10 +324,10 @@ def assistant_response_completed(request: AssistantResponseCompletedRequest) -> 
             session_uuid=input_message.session_uuid,
             input_message_uuid=request.input_message_uuid,
             attachment_uuid=request.attachment_uuid,
-            retrieval_run_uuid=attachment.retrieval_run_uuid if attachment else None,
+            retrieval_run_uuid=attachment["retrieval_run_uuid"] if attachment else None,
         )
         if request.attachment_uuid:
-            connection.execute(
+            completed_update = connection.execute(
                 """
                 UPDATE memory_delivery_events
                 SET response_message_uuid = ?
@@ -338,12 +379,13 @@ def assistant_response_completed(request: AssistantResponseCompletedRequest) -> 
                 response_message_uuid=assistant_message.message_uuid,
             )
         if request.regeneration_uuid:
-            connection.execute(
+            completed_update = connection.execute(
                 """
                 UPDATE memorist_regenerations
                 SET regenerated_assistant_message_uuid = ?, status = 'completed',
                     completed_at = CURRENT_TIMESTAMP
                 WHERE regeneration_uuid = ? AND original_input_message_uuid = ?
+                  AND status = 'completing' AND regenerated_assistant_message_uuid IS NULL
                 """,
                 (
                     assistant_message.message_uuid,
@@ -351,7 +393,8 @@ def assistant_response_completed(request: AssistantResponseCompletedRequest) -> 
                     request.input_message_uuid,
                 ),
             )
-            connection.commit()
+            if completed_update.rowcount != 1:
+                raise HTTPException(status_code=409, detail="regeneration completion lost")
         control.audit(
             "assistant_capture",
             policy,
@@ -362,6 +405,7 @@ def assistant_response_completed(request: AssistantResponseCompletedRequest) -> 
             attachment_uuid=request.attachment_uuid,
             detail={"regeneration": request.regeneration_uuid is not None},
         )
+        connection.commit_composed_write()
         return {
             "assistant_message_uuid": assistant_message.message_uuid,
             "response_link_uuid": link["response_link_uuid"],
@@ -388,7 +432,10 @@ def _authorize_retrieval_run(
     user_uuid: str | None,
     workspace_uuid: str | None,
 ) -> None:
-    if not user_uuid:
+    actor = optional_memorist_actor()
+    if actor is not None:
+        user_uuid, workspace_uuid = actor.user_uuid, actor.workspace_uuid
+    if not user_uuid or not workspace_uuid:
         raise HTTPException(status_code=401, detail="Memorist actor identity required")
     row = connection.execute(
         """
@@ -402,9 +449,9 @@ def _authorize_retrieval_run(
     ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="retrieval run not found")
-    if row["user_uuid"] not in {None, user_uuid}:
+    if row["user_uuid"] is None or row["user_uuid"] != user_uuid:
         raise HTTPException(status_code=404, detail="retrieval run not found")
-    if row["workspace_uuid"] != workspace_uuid:
+    if row["workspace_uuid"] is None or row["workspace_uuid"] != workspace_uuid:
         raise HTTPException(status_code=404, detail="retrieval run not found")
 
 
@@ -414,6 +461,14 @@ def _policy_for_input(
     request: PreflightRequest | AssistantResponseCompletedRequest,
 ) -> tuple[MemoristTurnPolicy, dict[str, Any] | None]:
     repository = MemoryControlRepository(connection, settings.runtime_profile)
+    actor = optional_memorist_actor()
+    if actor is not None:
+        if request.user_uuid not in {None, actor.user_uuid}:
+            raise HTTPException(status_code=403, detail="user scope mismatch")
+        if request.workspace_uuid not in {None, actor.workspace_uuid}:
+            raise HTTPException(status_code=403, detail="workspace scope mismatch")
+        request.user_uuid = actor.user_uuid
+        request.workspace_uuid = actor.workspace_uuid
     regeneration_uuid = getattr(request, "regeneration_uuid", None)
     if regeneration_uuid:
         regeneration = connection.execute(
@@ -429,7 +484,7 @@ def _policy_for_input(
             raise HTTPException(status_code=401, detail="regeneration user identity required")
         if regeneration["workspace_uuid"] is not None and not request.workspace_uuid:
             raise HTTPException(status_code=401, detail="regeneration workspace identity required")
-        if request.user_uuid and regeneration["user_uuid"] not in {None, request.user_uuid}:
+        if regeneration["user_uuid"] is None or regeneration["user_uuid"] != request.user_uuid:
             raise HTTPException(status_code=403, detail="regeneration user scope mismatch")
         if request.workspace_uuid and regeneration["workspace_uuid"] != request.workspace_uuid:
             raise HTTPException(status_code=403, detail="regeneration workspace scope mismatch")
@@ -446,7 +501,7 @@ def _policy_for_input(
             raise HTTPException(status_code=403, detail="turn contract has no workspace scope")
         if not request.workspace_uuid:
             raise HTTPException(status_code=401, detail="workspace identity required")
-        if request.user_uuid and contract.get("user_uuid") not in {None, request.user_uuid}:
+        if contract.get("user_uuid") != request.user_uuid:
             raise HTTPException(status_code=403, detail="user scope mismatch")
         if request.workspace_uuid and contract.get("workspace_uuid") != request.workspace_uuid:
             raise HTTPException(status_code=403, detail="workspace scope mismatch")
@@ -605,8 +660,28 @@ def _assistant_response_completed_full(
             raise HTTPException(status_code=404, detail="input message not found")
         connection.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
-            (f"assistant-capture:{input_message['session_uuid']}",),
+            (
+                f"regeneration:{request.regeneration_uuid}"
+                if request.regeneration_uuid
+                else f"assistant-capture:{input_message['session_uuid']}",
+            ),
         )
+        if request.regeneration_uuid:
+            completed = _completed_regeneration(connection, request.regeneration_uuid)
+            if completed is not None:
+                return completed
+            reserved = connection.execute(
+                """
+                UPDATE memorist_regenerations SET status = 'completing'
+                WHERE regeneration_uuid = ? AND status = 'requested'
+                  AND regenerated_assistant_message_uuid IS NULL
+                """,
+                (request.regeneration_uuid,),
+            )
+            if reserved.rowcount != 1:
+                raise HTTPException(
+                    status_code=409, detail="regeneration completion is in progress"
+                )
         actor_user = request.user_uuid or (
             str(contract.get("user_uuid")) if contract and contract.get("user_uuid") else None
         )
@@ -634,7 +709,9 @@ def _assistant_response_completed_full(
                 raise HTTPException(status_code=404, detail="attachment not found")
             if attachment_row.get("lifecycle_status") != "delivered":
                 raise HTTPException(status_code=409, detail="attachment was not delivered")
-        if request.provider_response_id is not None:
+        if request.regeneration_uuid:
+            existing = None
+        elif request.provider_response_id is not None:
             existing = connection.execute(
                 """
                 SELECT * FROM assistant_response_links
@@ -690,8 +767,9 @@ def _assistant_response_completed_full(
             """
             INSERT INTO assistant_response_links (
                 response_link_uuid, input_message_uuid, assistant_message_uuid,
-                attachment_uuid, provider_response_id, content_hash, created_at, schema_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                attachment_uuid, provider_response_id, content_hash, regeneration_uuid,
+                created_at, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
             """,
             (
                 response_link_uuid,
@@ -700,40 +778,20 @@ def _assistant_response_completed_full(
                 request.attachment_uuid,
                 request.provider_response_id,
                 content_hash,
+                request.regeneration_uuid,
                 now,
             ),
         )
-        for job_type, priority in (("text_unitization", 100), ("memory_extraction", 60)):
-            payload = json.dumps(
-                {
-                    "message_uuid": assistant_message_uuid,
-                    "session_uuid": input_message["session_uuid"],
-                },
-                sort_keys=True,
-            )
-            connection.execute(
-                """
-                INSERT INTO jobs (
-                    job_uuid, job_type, priority, status, payload_jsonb, payload_ijson,
-                    idempotency_key, run_after, attempts, max_attempts, created_at,
-                    updated_at, schema_version
-                ) VALUES (?, ?, ?, 'pending', ?::jsonb, ?, ?, ?, 0, 3, ?, ?, 1)
-                ON CONFLICT (job_type, idempotency_key) DO NOTHING
-                """,
-                (
-                    new_uuid(),
-                    job_type,
-                    priority,
-                    payload,
-                    payload,
-                    f"openwebui:{job_type}:{assistant_message_uuid}",
-                    now,
-                    now,
-                    now,
-                ),
-            )
+        _pg_enqueue_capture_jobs(
+            connection,
+            session_uuid=str(input_message["session_uuid"]),
+            message_uuid=assistant_message_uuid,
+            now=now,
+        )
         if request.attachment_uuid and attachment_row is not None and actor_user:
-            control.transition_attachment(
+            MemoryControlRepository(
+                connection, settings.runtime_profile, autocommit=False
+            ).transition_attachment(
                 request.attachment_uuid,
                 "used_for_response",
                 user_uuid=actor_user,
@@ -742,11 +800,12 @@ def _assistant_response_completed_full(
                 response_message_uuid=assistant_message_uuid,
             )
         if request.regeneration_uuid:
-            connection.execute(
+            completed_update = connection.execute(
                 """
                 UPDATE memorist_regenerations
                 SET regenerated_assistant_message_uuid = ?, status = 'completed', completed_at = ?
                 WHERE regeneration_uuid = ? AND original_input_message_uuid = ?
+                  AND status = 'completing' AND regenerated_assistant_message_uuid IS NULL
                 """,
                 (
                     assistant_message_uuid,
@@ -755,8 +814,9 @@ def _assistant_response_completed_full(
                     request.input_message_uuid,
                 ),
             )
-        connection.commit()
-        control.audit(
+            if completed_update.rowcount != 1:
+                raise HTTPException(status_code=409, detail="regeneration completion lost")
+        MemoryControlRepository(connection, settings.runtime_profile, autocommit=False).audit(
             "assistant_capture",
             policy,
             session_uuid=str(input_message["session_uuid"]),
@@ -766,8 +826,30 @@ def _assistant_response_completed_full(
             attachment_uuid=request.attachment_uuid,
             detail={"regeneration": request.regeneration_uuid is not None},
         )
+        connection.commit()
         return {
             "assistant_message_uuid": assistant_message_uuid,
             "response_link_uuid": response_link_uuid,
             "duplicate": False,
         }
+
+
+def _completed_regeneration(connection: Any, regeneration_uuid: str) -> dict[str, Any] | None:
+    row = connection.execute(
+        """
+        SELECT link.assistant_message_uuid, link.response_link_uuid
+        FROM memorist_regenerations regeneration
+        JOIN assistant_response_links link
+          ON link.regeneration_uuid = regeneration.regeneration_uuid
+        WHERE regeneration.regeneration_uuid = ? AND regeneration.status = 'completed'
+          AND regeneration.regenerated_assistant_message_uuid = link.assistant_message_uuid
+        """,
+        (regeneration_uuid,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "assistant_message_uuid": row["assistant_message_uuid"],
+        "response_link_uuid": row["response_link_uuid"],
+        "duplicate": True,
+    }

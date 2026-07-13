@@ -498,7 +498,11 @@ def test_extraction_uses_memory_model_not_chat_model(
     session = _assert_ok(
         client.post(
             "/memcore/openwebui/session/resolve",
-            json={"openwebui_conversation_id": "chat-model-control", "title": "Chat"},
+            json={
+                "openwebui_conversation_id": "chat-model-control",
+                "title": "Chat",
+                "user_id": "model-control-user",
+            },
         )
     )
     chat_profile = _create_profile(client, "main_chat_observed", "openwebui-chat-model")

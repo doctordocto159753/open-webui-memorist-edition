@@ -10,6 +10,7 @@ from memcore.config import get_settings
 from memcore.memory_control import MemoryControlRepository, memory_control_connection
 from memcore.memory_control.policy import normalize_turn_policy, reject_runtime_override
 from memcore.models import new_uuid, utc_now
+from memcore.security import current_memorist_actor, optional_memorist_actor
 
 router = APIRouter(prefix="/memcore/memory-control", tags=["memory-control"])
 
@@ -51,14 +52,32 @@ def _actor(
     x_memorist_user_id: str | None,
     x_memorist_workspace_id: str | None,
 ) -> tuple[str, str | None]:
-    if not x_memorist_user_id:
-        raise HTTPException(status_code=401, detail="Memorist actor identity required")
-    return x_memorist_user_id, x_memorist_workspace_id
+    actor = optional_memorist_actor()
+    if actor is not None:
+        if x_memorist_user_id and x_memorist_user_id != actor.user_uuid:
+            raise HTTPException(status_code=403, detail="raw actor user mismatch")
+        if x_memorist_workspace_id and x_memorist_workspace_id != actor.workspace_uuid:
+            raise HTTPException(status_code=403, detail="raw actor workspace mismatch")
+        return actor.user_uuid, actor.workspace_uuid
+    settings = get_settings()
+    if settings.allow_legacy_actor_headers_for_tests and x_memorist_user_id:
+        return x_memorist_user_id, x_memorist_workspace_id
+    authenticated = current_memorist_actor()
+    return authenticated.user_uuid, authenticated.workspace_uuid
 
 
 @router.post("/policy/resolve", response_model=None)
 def resolve_policy(request: PolicyResolveRequest) -> dict[str, Any]:
     settings = get_settings()
+    actor = optional_memorist_actor()
+    if actor is not None:
+        if request.user_uuid not in {None, actor.user_uuid}:
+            raise HTTPException(status_code=403, detail="user scope mismatch")
+        if request.workspace_uuid not in {None, actor.workspace_uuid}:
+            raise HTTPException(status_code=403, detail="workspace scope mismatch")
+        request = request.model_copy(
+            update={"user_uuid": actor.user_uuid, "workspace_uuid": actor.workspace_uuid}
+        )
     reject_runtime_override(request.model_dump(mode="json").get("memorist"))
     with memory_control_connection(settings) as connection:
         resolved = MemoryControlRepository(connection, settings.runtime_profile).resolve_policy(
@@ -274,12 +293,32 @@ def regenerate_without_recall(
         )
         if attachment is None:
             raise HTTPException(status_code=404, detail="attachment not found")
+        delivery_state = str(attachment.get("lifecycle_status") or "prepared")
+        if delivery_state not in {"delivered", "used_for_response"}:
+            raise HTTPException(status_code=409, detail="attachment was not used in a response")
+        if attachment.get("stale_reason") or str(attachment.get("status") or "active") != "active":
+            raise HTTPException(status_code=409, detail="stale attachment cannot be regenerated")
+        if _attachment_expired(attachment.get("expires_at")):
+            raise HTTPException(status_code=409, detail="expired attachment cannot be regenerated")
         input_message_uuid = str(attachment["input_message_uuid"])
         message = connection.execute(
             "SELECT raw_text FROM messages WHERE message_uuid = ?", (input_message_uuid,)
         ).fetchone()
         if message is None:
             raise HTTPException(status_code=409, detail="original input message is unavailable")
+        if not request.response_message_uuid:
+            raise HTTPException(status_code=400, detail="source response_message_uuid is required")
+        response_link = connection.execute(
+            """
+            SELECT link.* FROM assistant_response_links link
+            JOIN messages response ON response.message_uuid = link.assistant_message_uuid
+            WHERE link.input_message_uuid = ? AND link.attachment_uuid = ?
+              AND link.assistant_message_uuid = ? AND response.role = 'assistant'
+            """,
+            (input_message_uuid, attachment_uuid, request.response_message_uuid),
+        ).fetchone()
+        if response_link is None:
+            raise HTTPException(status_code=409, detail="delivered response link is unavailable")
         existing = connection.execute(
             "SELECT * FROM memorist_regenerations WHERE idempotency_key = ?",
             (request.idempotency_key,),
@@ -290,14 +329,17 @@ def regenerate_without_recall(
                 """
                 INSERT INTO memorist_regenerations (
                     regeneration_uuid, original_input_message_uuid, original_attachment_uuid,
+                    source_response_link_uuid, source_assistant_message_uuid,
                     user_uuid, workspace_uuid, turn_policy, idempotency_key, status,
                     created_at, schema_version
-                ) VALUES (?, ?, ?, ?, ?, 'no_recall', ?, 'requested', ?, 1)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'no_recall', ?, 'requested', ?, 1)
                 """,
                 (
                     regeneration_uuid,
                     input_message_uuid,
                     attachment_uuid,
+                    response_link["response_link_uuid"],
+                    response_link["assistant_message_uuid"],
                     actor_user,
                     actor_workspace,
                     request.idempotency_key,
@@ -330,6 +372,7 @@ def regenerate_without_recall(
         return {
             "regeneration_uuid": regeneration_uuid,
             "original_input_message_uuid": input_message_uuid,
+            "source_response_message_uuid": response_link["assistant_message_uuid"],
             "original_user_prompt": message["raw_text"],
             "turn_policy": "no_recall",
             "create_attachment": False,
@@ -348,7 +391,20 @@ def _public_attachment(attachment: dict[str, Any]) -> dict[str, Any]:
         "rendered_attachment": attachment.get("rendered_attachment"),
         "token_count": attachment.get("token_count", 0),
         "lifecycle_status": attachment.get("lifecycle_status", "prepared"),
+        "delivery_state": attachment.get("lifecycle_status", "prepared"),
+        "user_disposition": attachment.get("user_disposition", "none"),
         "attachment_review": bool(attachment.get("attachment_review", False)),
         "generation": attachment.get("generation", 1),
         "created_at": attachment.get("created_at"),
     }
+
+
+def _attachment_expired(value: Any) -> bool:
+    if value is None:
+        return False
+    from datetime import UTC, datetime
+
+    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed <= datetime.now(UTC)

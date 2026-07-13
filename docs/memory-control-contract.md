@@ -1,5 +1,25 @@
 # Memorist memory-control contract
 
+## Trusted request and network boundary
+
+Sensitive Memory Control, retrieval, attachment, preflight, capture, and assistant-completion
+routes accept only a short-lived HMAC actor assertion plus the internal service credential.
+The assertion binds user UUID, workspace UUID, issuer, audience, request method/path, issue and
+expiry times, and a single-use nonce. Browser JavaScript has neither signing material nor a
+supported raw-identity-header path; it calls an authenticated Open WebUI backend endpoint.
+
+Production deployments expose the Core host port on loopback only. Open WebUI uses the Compose
+network address `http://memorist-core:8777`; localhost is not treated as an authentication
+boundary. `MEMORIST_ACTOR_ASSERTION_SECRET` and `MEMORIST_ACTOR_SERVICE_TOKEN` are mandatory in
+production and must be distinct high-entropy secrets.
+
+## Certified graph runtime
+
+PR4-B certifies `falkordb/falkordb:v4.18.10`. CI and the Full Compose profile use that exact tag.
+When the graph backend is disabled or its URL is absent, Full records respectively
+`graph_backend_disabled` or `falkordb_url_missing` without opening a socket. PostgreSQL remains
+canonical in all graph states.
+
 Memorist applies one normalized, immutable turn policy in both runtime profiles. The
 runtime profile is server-controlled and is never accepted from request metadata.
 

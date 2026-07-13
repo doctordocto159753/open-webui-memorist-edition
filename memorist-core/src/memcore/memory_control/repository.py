@@ -17,9 +17,14 @@ class ResolvedTurnPolicy:
 
 
 class MemoryControlRepository:
-    def __init__(self, connection: Any, runtime_profile: str) -> None:
+    def __init__(self, connection: Any, runtime_profile: str, *, autocommit: bool = True) -> None:
         self.connection = connection
         self.runtime_profile = runtime_profile
+        self.autocommit = autocommit
+
+    def _commit(self) -> None:
+        if self.autocommit:
+            self.connection.commit()
 
     def resolve_policy(
         self,
@@ -103,7 +108,7 @@ class MemoryControlRepository:
                 "attachment_review": attachment_review,
                 "updated_at": now,
             }
-        self.connection.commit()
+        self._commit()
         return row
 
     def record_turn_contract(
@@ -145,7 +150,7 @@ class MemoryControlRepository:
                 utc_now(),
             ),
         )
-        self.connection.commit()
+        self._commit()
 
     def get_turn_contract(self, input_message_uuid: str) -> dict[str, Any] | None:
         row = self.connection.execute(
@@ -187,7 +192,7 @@ class MemoryControlRepository:
                 "schema_version": 1,
             },
         )
-        self.connection.commit()
+        self._commit()
 
     def attachment_for_actor(
         self,
@@ -196,12 +201,16 @@ class MemoryControlRepository:
         user_uuid: str,
         workspace_uuid: str | None,
     ) -> dict[str, Any] | None:
+        if not user_uuid or not workspace_uuid:
+            return None
         row = self.connection.execute(
             """
             SELECT * FROM memory_context_attachments
             WHERE attachment_uuid = ?
               AND owner_user_uuid = ?
-              AND COALESCE(workspace_uuid, '') = COALESCE(?, '')
+              AND owner_user_uuid IS NOT NULL
+              AND workspace_uuid IS NOT NULL
+              AND workspace_uuid = ?
             """,
             (attachment_uuid, user_uuid, workspace_uuid),
         ).fetchone()
@@ -227,7 +236,7 @@ class MemoryControlRepository:
                 "user_rejected",
             },
             "approved": {"delivered", "suppressed", "cancelled_before_send", "user_rejected"},
-            "delivered": {"used_for_response", "user_rejected"},
+            "delivered": {"used_for_response"},
             "suppressed": set(),
             "cancelled_before_send": set(),
             "user_rejected": set(),
@@ -250,6 +259,7 @@ class MemoryControlRepository:
                 and str(attachment.get("lifecycle_status") or "prepared") != "approved"
             ):
                 raise ValueError("attachment approval required before delivery")
+        current = str(attachment.get("lifecycle_status") or "prepared")
         existing = self.connection.execute(
             """
             SELECT * FROM memorist_attachment_lifecycle_events
@@ -259,7 +269,48 @@ class MemoryControlRepository:
         ).fetchone()
         if existing is not None:
             return dict(existing)
-        current = str(attachment.get("lifecycle_status") or "prepared")
+        if lifecycle_status == "user_rejected":
+            if current not in {"delivered", "used_for_response"}:
+                raise ValueError("only a delivered attachment can be rejected")
+            now = utc_now()
+            self.connection.execute(
+                "UPDATE memory_context_attachments SET user_disposition = 'rejected', "
+                "user_disposition_at = ? WHERE attachment_uuid = ?",
+                (now, attachment_uuid),
+            )
+            event = {
+                "lifecycle_event_uuid": new_uuid(),
+                "attachment_uuid": attachment_uuid,
+                "lifecycle_status": lifecycle_status,
+                "idempotency_key": idempotency_key,
+                "user_uuid": user_uuid,
+                "workspace_uuid": workspace_uuid,
+                "response_message_uuid": response_message_uuid,
+                "detail_ijson": dump_ijson(detail or {}),
+                "created_at": now,
+                "schema_version": 1,
+            }
+            self._insert("memorist_attachment_lifecycle_events", event)
+            input_message_uuid = attachment.get("input_message_uuid")
+            contract = (
+                self.get_turn_contract(str(input_message_uuid))
+                if input_message_uuid is not None
+                else None
+            )
+            if contract is not None:
+                self.audit(
+                    "attachment_user_rejected",
+                    normalize_turn_policy(str(contract["turn_policy"])),
+                    session_uuid=str(attachment["session_uuid"]),
+                    input_message_uuid=str(input_message_uuid),
+                    workspace_uuid=workspace_uuid,
+                    user_uuid=user_uuid,
+                    attachment_uuid=attachment_uuid,
+                    detail={"lifecycle_event_uuid": event["lifecycle_event_uuid"]},
+                )
+            else:
+                self._commit()
+            return event
         if lifecycle_status == current:
             canonical = self.connection.execute(
                 """
@@ -319,7 +370,7 @@ class MemoryControlRepository:
             "schema_version": 1,
         }
         self._insert("memorist_attachment_lifecycle_events", event)
-        self.connection.commit()
+        self._commit()
         input_message_uuid = attachment.get("input_message_uuid")
         contract = (
             self.get_turn_contract(str(input_message_uuid))

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -22,6 +24,8 @@ def _client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[TestClient
     monkeypatch.setenv("MEMORIST_CANONICAL_STORE", "sqlite")
     monkeypatch.setenv("MEMORIST_DB_PATH", str(db_path))
     monkeypatch.setenv("MEMORIST_OBJECT_STORE_PATH", str(tmp_path / "objects"))
+    monkeypatch.setenv("MEMORIST_ENV", "test")
+    monkeypatch.setenv("MEMORIST_ALLOW_LEGACY_ACTOR_HEADERS_FOR_TESTS", "true")
     return TestClient(create_app()), db_path
 
 
@@ -289,14 +293,70 @@ def test_attachment_authorization_lifecycle_and_regeneration_are_idempotent(
         headers=headers,
     )
     assert delivery.status_code == 200
+    completion = client.post(
+        "/memcore/assistant-response/completed",
+        json={
+            "input_message_uuid": captured["message_uuid"],
+            "assistant_text": "response using delivered context",
+            "attachment_uuid": attachment.attachment_uuid,
+            "provider_response_id": "provider-lifecycle-response",
+            "user_uuid": "owner",
+            "workspace_uuid": session["workspace_uuid"],
+        },
+        headers=headers,
+    )
+    assert completion.status_code == 200
+    rejection_payload = {"idempotency_key": "post-use-rejection"}
+    rejected = client.post(
+        f"/memcore/memory-control/attachments/{attachment.attachment_uuid}/rejection",
+        json=rejection_payload,
+        headers=headers,
+    )
+    repeated_rejection = client.post(
+        f"/memcore/memory-control/attachments/{attachment.attachment_uuid}/rejection",
+        json=rejection_payload,
+        headers=headers,
+    )
+    assert rejected.status_code == repeated_rejection.status_code == 200
+    preview = client.get(
+        f"/memcore/memory-control/attachments/{attachment.attachment_uuid}/preview",
+        headers=headers,
+    ).json()
+    assert preview["delivery_state"] == "used_for_response"
+    assert preview["user_disposition"] == "rejected"
     regeneration = client.post(
         f"/memcore/memory-control/attachments/{attachment.attachment_uuid}/regenerate-without-recall",
-        json={"idempotency_key": "regeneration-idempotency"},
+        json={
+            "idempotency_key": "regeneration-idempotency",
+            "response_message_uuid": completion.json()["assistant_message_uuid"],
+        },
         headers=headers,
     )
     assert regeneration.status_code == 200
     assert regeneration.json()["original_user_prompt"] == "original prompt"
     assert regeneration.json()["create_attachment"] is False
+    regeneration_uuid = regeneration.json()["regeneration_uuid"]
+
+    def complete(index: int) -> Any:
+        return client.post(
+            "/memcore/assistant-response/completed",
+            json={
+                "input_message_uuid": captured["message_uuid"],
+                "assistant_text": f"regenerated variant {index}",
+                "provider_response_id": f"regenerated-provider-{index}",
+                "turn_policy": "no_recall",
+                "user_uuid": "owner",
+                "workspace_uuid": session["workspace_uuid"],
+                "regeneration_uuid": regeneration_uuid,
+            },
+            headers=headers,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        completions = list(pool.map(complete, range(2)))
+    assert all(response.status_code == 200 for response in completions)
+    assert len({response.json()["assistant_message_uuid"] for response in completions}) == 1
+    assert len({response.json()["response_link_uuid"] for response in completions}) == 1
     substituted = client.post(
         f"/memcore/memory-control/attachments/{substituted_attachment.attachment_uuid}"
         "/regenerate-without-recall",

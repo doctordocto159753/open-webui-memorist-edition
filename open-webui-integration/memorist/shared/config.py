@@ -29,6 +29,10 @@ class MemoristIntegrationConfig:
     retrieval_mode: str = "standard"
     fail_open: bool = True
     debug: bool = False
+    actor_assertion_secret: str | None = None
+    actor_service_token: str | None = None
+    actor_assertion_issuer: str = "openwebui-backend"
+    actor_assertion_audience: str = "memorist-core"
 
     @property
     def timeout_seconds(self) -> float:
@@ -46,4 +50,12 @@ def load_config() -> MemoristIntegrationConfig:
         retrieval_mode=os.getenv("MEMORIST_RETRIEVAL_MODE", "standard"),
         fail_open=_bool_env("MEMORIST_FAIL_OPEN", True),
         debug=_bool_env("MEMORIST_DEBUG", False),
+        actor_assertion_secret=os.getenv("MEMORIST_ACTOR_ASSERTION_SECRET"),
+        actor_service_token=os.getenv("MEMORIST_ACTOR_SERVICE_TOKEN"),
+        actor_assertion_issuer=os.getenv(
+            "MEMORIST_ACTOR_ASSERTION_ISSUER", "openwebui-backend"
+        ),
+        actor_assertion_audience=os.getenv(
+            "MEMORIST_ACTOR_ASSERTION_AUDIENCE", "memorist-core"
+        ),
     )

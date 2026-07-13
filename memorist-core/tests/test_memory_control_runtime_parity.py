@@ -23,6 +23,8 @@ from memcore.models import utc_now
 def _settings(runtime: str, tmp_path: Path) -> Settings:
     if runtime == "lite":
         return Settings(
+            env="test",
+            allow_legacy_actor_headers_for_tests=True,
             runtime_profile="lite",
             canonical_store="sqlite",
             db_path=str(tmp_path / "parity.sqlite3"),
@@ -32,6 +34,8 @@ def _settings(runtime: str, tmp_path: Path) -> Settings:
     if not dsn:
         pytest.skip("requires real PostgreSQL")
     return Settings(
+        env="test",
+        allow_legacy_actor_headers_for_tests=True,
         runtime_profile="full",
         canonical_store="postgres",
         postgres_dsn=dsn,
@@ -230,13 +234,14 @@ def test_policy_attachment_and_restart_semantics_are_identical(
         )["sources"]
         == []
     )
-    regeneration = routes_memory_control.regenerate_without_recall(
-        attachment,
-        AttachmentActionRequest(idempotency_key=f"regeneration-{suffix}"),
-        x_memorist_user_id=user,
-        x_memorist_workspace_id=workspace,
-    )
-    assert regeneration["turn_policy"] == "no_recall"
+    with pytest.raises(HTTPException) as stale_regeneration:
+        routes_memory_control.regenerate_without_recall(
+            attachment,
+            AttachmentActionRequest(idempotency_key=f"regeneration-{suffix}"),
+            x_memorist_user_id=user,
+            x_memorist_workspace_id=workspace,
+        )
+    assert stale_regeneration.value.status_code == 409
     with pytest.raises(HTTPException) as substituted:
         routes_memory_control.regenerate_without_recall(
             cancelled_attachment,

@@ -25,6 +25,7 @@ from memcore.openwebui.session_resolution import (
 from memcore.reliability.consistency import run_consistency_check
 from memcore.repositories import ProjectRepository, SessionRepository
 from memcore.repositories.domain import WorkspaceRepository
+from memcore.security import optional_memorist_actor
 from memcore.storage.commands import FunctionWriteCommand
 from memcore.storage.gateway import WriteGateway
 from memcore.storage.sqlite import connect
@@ -74,6 +75,17 @@ class MessageCaptureRequest(BaseModel):
 @router.post("/session/resolve", response_model=None)
 def resolve_session(request: SessionResolveRequest) -> dict[str, Any]:
     settings = get_settings()
+    actor = optional_memorist_actor()
+    if actor is not None:
+        if request.user_id not in {None, actor.user_uuid}:
+            raise HTTPException(status_code=403, detail="user scope mismatch")
+        request = request.model_copy(update={"user_id": actor.user_uuid})
+    if not request.user_id and not settings.allow_legacy_actor_headers_for_tests:
+        return {
+            "skipped": True,
+            "reason": "trusted_actor_identity_unavailable",
+            "session_uuid": None,
+        }
     resolved_policy = _resolve_turn_policy(
         settings,
         user_uuid=request.user_id,
@@ -136,6 +148,25 @@ def capture_message(request: MessageCaptureRequest) -> dict[str, Any]:
     if request.role not in {"user", "assistant"}:
         raise HTTPException(status_code=400, detail="role must be user or assistant")
     settings = get_settings()
+    actor = optional_memorist_actor()
+    if actor is not None:
+        if request.user_id not in {None, actor.user_uuid}:
+            raise HTTPException(status_code=403, detail="user scope mismatch")
+        if request.workspace_uuid not in {None, actor.workspace_uuid}:
+            raise HTTPException(status_code=403, detail="workspace scope mismatch")
+        request = request.model_copy(
+            update={"user_id": actor.user_uuid, "workspace_uuid": actor.workspace_uuid}
+        )
+    if (
+        not request.user_id or not request.workspace_uuid
+    ) and not settings.allow_legacy_actor_headers_for_tests:
+        return {
+            "skipped": True,
+            "reason": "trusted_actor_identity_unavailable",
+            "session_uuid": None,
+            "message_uuid": None,
+            "duplicate": False,
+        }
     resolved_policy = _resolve_turn_policy(
         settings,
         user_uuid=request.user_id,
@@ -570,10 +601,32 @@ def _pg_enqueue_capture_jobs(
     message_uuid: str,
     now: str,
 ) -> None:
+    profile = connection.execute(
+        """
+        SELECT p.model_profile_uuid, p.provider_type, p.model_name
+        FROM model_role_defaults d
+        JOIN model_profiles p ON p.model_profile_uuid = d.model_profile_uuid
+        WHERE d.role = 'memory_extraction' AND COALESCE(p.is_enabled, true) = true
+        ORDER BY CASE WHEN d.project_uuid IS NOT NULL THEN 0
+                      WHEN d.workspace_uuid IS NOT NULL THEN 1 ELSE 2 END
+        LIMIT 1
+        """
+    ).fetchone()
+    model_identity = {
+        "model_role": "memory_extraction",
+        "model_profile_uuid": profile["model_profile_uuid"] if profile else None,
+        "provider_type": profile["provider_type"] if profile else "deterministic",
+        "model_name": profile["model_name"] if profile else "deterministic_extraction",
+    }
     jobs = [("text_unitization", 100), ("memory_extraction", 60)]
     for job_type, priority in jobs:
+        job_uuid = new_uuid()
         payload = json.dumps(
-            {"message_uuid": message_uuid, "session_uuid": session_uuid},
+            {
+                "message_uuid": message_uuid,
+                "session_uuid": session_uuid,
+                **(model_identity if job_type == "memory_extraction" else {}),
+            },
             sort_keys=True,
         )
         connection.execute(
@@ -587,7 +640,7 @@ def _pg_enqueue_capture_jobs(
             ON CONFLICT (job_type, idempotency_key) DO NOTHING
             """,
             (
-                new_uuid(),
+                job_uuid,
                 job_type,
                 priority,
                 payload,
@@ -598,6 +651,29 @@ def _pg_enqueue_capture_jobs(
                 now,
             ),
         )
+        if job_type == "memory_extraction":
+            connection.execute(
+                """
+                INSERT INTO model_usage_events (
+                    usage_event_uuid, model_profile_uuid, role, event_type, stage,
+                    provider_type, model_name, session_uuid, message_uuid, job_uuid,
+                    input_tokens, output_tokens, embedding_count, status, created_at,
+                    schema_version
+                ) VALUES (?, ?, 'memory_extraction', 'queued', 'memory_extraction_queued',
+                          ?, ?, ?, ?, ?, 0, 0, 0, 'queued', ?, 1)
+                ON CONFLICT (usage_event_uuid) DO NOTHING
+                """,
+                (
+                    new_uuid(),
+                    model_identity["model_profile_uuid"],
+                    model_identity["provider_type"],
+                    model_identity["model_name"],
+                    session_uuid,
+                    message_uuid,
+                    job_uuid,
+                    now,
+                ),
+            )
 
 
 def _pg_default_workspace_uuid(connection: Any, name: str) -> str:

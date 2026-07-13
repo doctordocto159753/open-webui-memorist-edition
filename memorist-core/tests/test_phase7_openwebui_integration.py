@@ -26,7 +26,11 @@ def test_openwebui_capture_endpoints_and_status(
 
     session_response = client.post(
         "/memcore/openwebui/session/resolve",
-        json={"openwebui_conversation_id": "chat-1", "title": "Chat"},
+        json={
+            "openwebui_conversation_id": "chat-1",
+            "title": "Chat",
+            "user_id": "phase7-user",
+        },
     )
     assert session_response.status_code == 200
     session_uuid = session_response.json()["session_uuid"]

@@ -68,9 +68,12 @@ def first_message_fingerprint(
     created_at: str | None,
     source_app: str,
 ) -> str:
+    normalized_user = _normalize(user_id)
+    if not normalized_user:
+        raise ValueError("trusted Open WebUI user identity is required")
     material = "|".join(
         [
-            _normalize(user_id) or "anonymous",
+            normalized_user,
             _normalize(first_message_hash) or "",
             _date_bucket(created_at),
             _normalize(source_app) or "open_webui",

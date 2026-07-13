@@ -255,7 +255,11 @@ class FullPostgresPreflightService:
     def _graph_candidates(
         self, scope: dict[str, Any]
     ) -> tuple[list[dict[str, str]], str, str | None]:
-        client = FalkorDBClient(self.settings.falkordb_url or "")
+        if self.settings.graph_backend != "falkordb":
+            return [], "degraded", "graph_backend_disabled"
+        if not self.settings.falkordb_url:
+            return [], "degraded", "falkordb_url_missing"
+        client = FalkorDBClient(self.settings.falkordb_url)
         health = client.health()
         if not health.ok:
             return [], "degraded", health.error_sanitized or "falkordb_unavailable"
@@ -313,8 +317,12 @@ class FullPostgresPreflightService:
             if version_uuid in by_version:
                 if self._valid_graph_source(graph):
                     by_version[version_uuid]["graph"] = True
-                    by_version[version_uuid]["graph_fact_uuid"] = graph.get("graph_fact_uuid")
-                    by_version[version_uuid]["graph_edge_uuid"] = graph.get("graph_edge_uuid")
+                    by_version[version_uuid]["memory_signal_route_uuid"] = graph.get(
+                        "memory_signal_route_uuid"
+                    )
+                    by_version[version_uuid]["memory_candidate_uuid"] = graph.get(
+                        "memory_candidate_uuid"
+                    )
                 continue
             if not self._valid_graph_source(graph):
                 continue
@@ -345,8 +353,8 @@ class FullPostgresPreflightService:
                 by_version[version_uuid] = {
                     **dict(validated),
                     "graph": True,
-                    "graph_fact_uuid": graph.get("graph_fact_uuid"),
-                    "graph_edge_uuid": graph.get("graph_edge_uuid"),
+                    "memory_signal_route_uuid": graph.get("memory_signal_route_uuid"),
+                    "memory_candidate_uuid": graph.get("memory_candidate_uuid"),
                     "evidence_uuids": [],
                     "evidence_texts": [],
                 }
@@ -371,16 +379,16 @@ class FullPostgresPreflightService:
                         "postgres_canonical": True,
                         "graph": bool(row.get("graph")),
                         "evidence_uuids": list(dict.fromkeys(row["evidence_uuids"])),
-                        "graph_fact_uuid": row.get("graph_fact_uuid"),
-                        "graph_edge_uuid": row.get("graph_edge_uuid"),
+                        "memory_signal_route_uuid": row.get("memory_signal_route_uuid"),
+                        "memory_candidate_uuid": row.get("memory_candidate_uuid"),
                     },
                 )
             )
         return sorted(items, key=lambda item: item.final_score, reverse=True)[:12]
 
     def _valid_graph_source(self, graph: dict[str, str]) -> bool:
-        route_uuid = graph.get("graph_fact_uuid")
-        candidate_uuid = graph.get("graph_edge_uuid")
+        route_uuid = graph.get("memory_signal_route_uuid")
+        candidate_uuid = graph.get("memory_candidate_uuid")
         if not route_uuid or not candidate_uuid:
             return False
         row = self.connection.execute(
@@ -462,8 +470,8 @@ class FullPostgresPreflightService:
             source_uuid
             for item in selected
             for source_uuid in (
-                (item.debug_score_trace or {}).get("graph_fact_uuid"),
-                (item.debug_score_trace or {}).get("graph_edge_uuid"),
+                (item.debug_score_trace or {}).get("memory_signal_route_uuid"),
+                (item.debug_score_trace or {}).get("memory_candidate_uuid"),
             )
             if source_uuid
         ]
@@ -585,8 +593,8 @@ class FullPostgresPreflightService:
                     now,
                 )
             for source_type, key in (
-                ("graph_fact", "graph_fact_uuid"),
-                ("graph_edge", "graph_edge_uuid"),
+                ("memory_signal_route", "memory_signal_route_uuid"),
+                ("memory_candidate", "memory_candidate_uuid"),
             ):
                 source_uuid = trace.get(key)
                 if source_uuid:

@@ -83,6 +83,12 @@ class Settings(BaseSettings):
     import_reconstruction_retry_base_seconds: int = Field(default=10, ge=1)
     import_reconstruction_retry_max_seconds: int = Field(default=900, ge=1)
     fail_open: bool = True
+    actor_assertion_secret: str | None = None
+    actor_service_token: str | None = None
+    actor_assertion_issuer: str = "openwebui-backend"
+    actor_assertion_audience: str = "memorist-core"
+    actor_assertion_max_ttl_seconds: int = Field(default=60, ge=5, le=300)
+    allow_legacy_actor_headers_for_tests: bool = False
 
     @field_validator("falkordb_url", mode="before")
     @classmethod
@@ -125,10 +131,14 @@ class Settings(BaseSettings):
     def validate_runtime_policy(self) -> "Settings":
         if not self.local_only:
             raise ValueError("local_only=false is not supported by this local-first release")
-        if self.graph_backend == "falkordb" and not self.falkordb_url:
-            raise ValueError("falkordb_url is required when graph_backend=falkordb")
         if self.env.lower() == "production" and self.log_level == "DEBUG":
             raise ValueError("log_level=DEBUG is not allowed in production")
+        if self.env.lower() == "production" and (
+            not self.actor_assertion_secret or not self.actor_service_token
+        ):
+            raise ValueError("production requires actor_assertion_secret and actor_service_token")
+        if self.allow_legacy_actor_headers_for_tests and self.env.lower() != "test":
+            raise ValueError("legacy actor headers are permitted only in the test environment")
         if self.runtime_profile == "lite":
             if self.canonical_store != "sqlite":
                 raise ValueError("runtime_profile=lite requires canonical_store=sqlite")

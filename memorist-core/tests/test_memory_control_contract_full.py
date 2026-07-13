@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -36,6 +37,8 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 def full_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
     settings = Settings(
+        env="test",
+        allow_legacy_actor_headers_for_tests=True,
         runtime_profile="full",
         canonical_store="postgres",
         postgres_dsn=os.environ["MEMORIST_POSTGRES_DSN"],
@@ -567,16 +570,17 @@ def test_full_openwebui_filter_inlet_outlet_use_postgres(
         "memorist": {"turn_policy": "full"},
         "messages": [{"role": "user", "id": "user-message", "content": "filter postgres fact"}],
     }
-    inlet = filter_instance.inlet(inlet_body, {"id": "filter-user"})
+    actor = {"id": "filter-user", "workspace_id": "trusted-openwebui-workspace"}
+    inlet = filter_instance.inlet(inlet_body, actor)
     assert inlet["metadata"]["memorist_runtime_profile"] == "full"
-    assert inlet["metadata"]["memorist_attachment_uuid"]
+    assert inlet["metadata"]["memorist_delivered_attachment_uuid"]
     outlet = filter_instance.outlet(
         {
             "id": "filter-provider-response",
             "metadata": inlet["metadata"],
             "messages": [{"role": "assistant", "content": "filter assistant answer"}],
         },
-        {"id": "filter-user"},
+        actor,
     )
     assert "memorist_last_error" not in outlet["metadata"]
     with memory_control_connection(full_settings) as connection:
@@ -586,6 +590,23 @@ def test_full_openwebui_filter_inlet_outlet_use_postgres(
             ).fetchone()[0]
             == 1
         )
+        extraction_jobs = connection.execute(
+            "SELECT payload_ijson FROM jobs WHERE job_type = 'memory_extraction' "
+            "AND idempotency_key LIKE 'openwebui:memory_extraction:%'"
+        ).fetchall()
+        assert len(extraction_jobs) == 2
+        for row in extraction_jobs:
+            payload = json.loads(row["payload_ijson"])
+            assert payload["model_role"] == "memory_extraction"
+            assert "model_profile_uuid" in payload
+            assert payload["provider_type"] == "deterministic"
+            assert payload["model_name"] == "deterministic_extraction"
+        usage = connection.execute(
+            "SELECT role, stage, provider_type, model_name FROM model_usage_events "
+            "WHERE stage = 'memory_extraction_queued'"
+        ).fetchall()
+        assert len(usage) == 2
+        assert all(row["role"] == "memory_extraction" for row in usage)
     assert not Path(full_settings.db_path).exists()
 
 
@@ -682,8 +703,8 @@ def test_full_graph_retrieval_persists_postgres_provenance_and_restart(
                 {
                     "memory_uuid": ids["memory"],
                     "memory_version_uuid": ids["version"],
-                    "graph_fact_uuid": graph_source["route"],
-                    "graph_edge_uuid": graph_source["candidate"],
+                    "memory_signal_route_uuid": graph_source["route"],
+                    "memory_candidate_uuid": graph_source["candidate"],
                 }
             ],
         )
@@ -729,8 +750,8 @@ def test_full_graph_retrieval_persists_postgres_provenance_and_restart(
     assert attachment["lifecycle_status"] == "delivered"
     assert {row["source_type"] for row in sources} == {
         "memory_version",
-        "graph_fact",
-        "graph_edge",
+        "memory_signal_route",
+        "memory_candidate",
         "source_evidence",
         "active_block",
     }
@@ -762,26 +783,61 @@ def test_full_regeneration_preserves_attachment_provenance(
         AttachmentActionRequest(idempotency_key=f"delivery-{uuid4().hex}"),
         **headers,
     )
-    regeneration = routes_memory_control.regenerate_without_recall(
-        attachment_uuid,
-        AttachmentActionRequest(idempotency_key=f"regenerate-{uuid4().hex}"),
-        **headers,
-    )
-    assert regeneration["turn_policy"] == "no_recall"
-    assert regeneration["original_user_prompt"].startswith("Recall postgres graph fact")
-    completed = routes_retrieval.assistant_response_completed(
+    original_response = routes_retrieval.assistant_response_completed(
         AssistantResponseCompletedRequest(
             input_message_uuid=ids["message"],
-            assistant_text="Regenerated without Memorist recall",
-            regeneration_uuid=str(regeneration["regeneration_uuid"]),
-            turn_policy="no_recall",
+            assistant_text="Original response with Memorist context",
+            attachment_uuid=attachment_uuid,
+            provider_response_id=f"original-{uuid4().hex}",
             user_uuid=ids["user"],
             workspace_uuid=ids["workspace"],
         )
     )
+    rejection_key = f"post-use-rejection-{uuid4().hex}"
+    first_rejection = routes_memory_control.record_attachment_rejection(
+        attachment_uuid,
+        AttachmentActionRequest(idempotency_key=rejection_key),
+        **headers,
+    )
+    repeated_rejection = routes_memory_control.record_attachment_rejection(
+        attachment_uuid,
+        AttachmentActionRequest(idempotency_key=rejection_key),
+        **headers,
+    )
+    assert first_rejection["lifecycle_event_uuid"] == repeated_rejection["lifecycle_event_uuid"]
+    regeneration = routes_memory_control.regenerate_without_recall(
+        attachment_uuid,
+        AttachmentActionRequest(
+            idempotency_key=f"regenerate-{uuid4().hex}",
+            response_message_uuid=str(original_response["assistant_message_uuid"]),
+        ),
+        **headers,
+    )
+    assert regeneration["turn_policy"] == "no_recall"
+    assert regeneration["original_user_prompt"].startswith("Recall postgres graph fact")
+
+    def complete(index: int) -> dict[str, Any]:
+        return routes_retrieval.assistant_response_completed(
+            AssistantResponseCompletedRequest(
+                input_message_uuid=ids["message"],
+                assistant_text=f"Regenerated without recall variant {index}",
+                provider_response_id=f"regenerated-provider-{index}-{uuid4().hex}",
+                regeneration_uuid=str(regeneration["regeneration_uuid"]),
+                turn_policy="no_recall",
+                user_uuid=ids["user"],
+                workspace_uuid=ids["workspace"],
+            )
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        completions = list(pool.map(complete, range(2)))
+    assert len({item["assistant_message_uuid"] for item in completions}) == 1
+    assert len({item["response_link_uuid"] for item in completions}) == 1
+    completed = completions[0]
     with memory_control_connection(full_settings) as connection:
         attachment = connection.execute(
-            "SELECT lifecycle_status FROM memory_context_attachments WHERE attachment_uuid = ?",
+            "SELECT lifecycle_status, user_disposition FROM memory_context_attachments "
+            "WHERE attachment_uuid = ?",
             (attachment_uuid,),
         ).fetchone()
         regeneration_row = connection.execute(
@@ -792,7 +848,8 @@ def test_full_regeneration_preserves_attachment_provenance(
             "SELECT count(*) FROM memory_context_attachments WHERE input_message_uuid = ?",
             (ids["message"],),
         ).fetchone()[0]
-    assert attachment["lifecycle_status"] == "delivered"
+    assert attachment["lifecycle_status"] == "used_for_response"
+    assert attachment["user_disposition"] == "rejected"
     assert regeneration_row["status"] == "completed"
     assert (
         regeneration_row["regenerated_assistant_message_uuid"]
@@ -833,6 +890,32 @@ def test_full_graph_outage_is_explicit_and_never_changes_store(
     assert not Path(full_settings.db_path).exists()
 
 
+def test_full_disabled_or_missing_graph_configuration_opens_no_socket(
+    full_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = 0
+
+    def unexpected_socket(*_args: object, **_kwargs: object) -> FalkorDBHealth:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("graph socket must not be opened")
+
+    monkeypatch.setattr(FalkorDBClient, "health", unexpected_socket)
+    scope = {"workspace_uuid": "workspace", "raw_text": "query"}
+    with memory_control_connection(full_settings) as connection:
+        disabled = full_settings.model_copy(update={"graph_backend": "disabled"})
+        rows, status, reason = FullPostgresPreflightService(connection, disabled)._graph_candidates(
+            scope
+        )
+        assert (rows, status, reason) == ([], "degraded", "graph_backend_disabled")
+        missing = full_settings.model_copy(update={"falkordb_url": None})
+        rows, status, reason = FullPostgresPreflightService(connection, missing)._graph_candidates(
+            scope
+        )
+        assert (rows, status, reason) == ([], "degraded", "falkordb_url_missing")
+    assert calls == 0
+
+
 def test_full_rejects_unverified_graph_source_ids(
     full_settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -847,8 +930,8 @@ def test_full_rejects_unverified_graph_source_ids(
             {
                 "memory_uuid": ids["memory"],
                 "memory_version_uuid": ids["version"],
-                "graph_fact_uuid": "client-injected-fact",
-                "graph_edge_uuid": "client-injected-edge",
+                "memory_signal_route_uuid": "client-injected-route",
+                "memory_candidate_uuid": "client-injected-candidate",
             }
         ],
     )
