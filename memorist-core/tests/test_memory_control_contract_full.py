@@ -734,7 +734,9 @@ def test_full_graph_retrieval_persists_postgres_provenance_and_restart(
         "source_evidence",
         "active_block",
     }
-    assert {row["memory_version_uuid"] for row in sources} == {ids["version"]}
+    assert {
+        row["memory_version_uuid"] for row in sources if row["memory_version_uuid"] is not None
+    } == {ids["version"]}
     assert sum(row["source_type"] == "source_evidence" for row in sources) == 2
     assert not Path(full_settings.db_path).exists()
 

@@ -118,31 +118,32 @@ class MemoryControlRepository:
     ) -> None:
         if resolved.policy.private:
             return
-        existing = self.connection.execute(
-            "SELECT input_message_uuid FROM memorist_turn_contracts WHERE input_message_uuid = ?",
-            (input_message_uuid,),
-        ).fetchone()
-        if existing is not None:
-            return
-        self._insert(
-            "memorist_turn_contracts",
-            {
-                "turn_contract_uuid": new_uuid(),
-                "input_message_uuid": input_message_uuid,
-                "session_uuid": session_uuid,
-                "workspace_uuid": workspace_uuid,
-                "user_uuid": user_uuid,
-                "chat_uuid": chat_uuid,
-                "turn_policy": resolved.policy.mode.value,
-                "capture_enabled": resolved.policy.capture_enabled,
-                "recall_enabled": resolved.policy.recall_enabled,
-                "attachment_enabled": resolved.policy.attachment_enabled,
-                "attachment_review": resolved.attachment_review,
-                "policy_source": resolved.source,
-                "runtime_profile": self.runtime_profile,
-                "created_at": utc_now(),
-                "schema_version": 1,
-            },
+        self.connection.execute(
+            """
+            INSERT INTO memorist_turn_contracts (
+                turn_contract_uuid, input_message_uuid, session_uuid, workspace_uuid,
+                user_uuid, chat_uuid, turn_policy, capture_enabled, recall_enabled,
+                attachment_enabled, attachment_review, policy_source, runtime_profile,
+                created_at, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+            ON CONFLICT (input_message_uuid) DO NOTHING
+            """,
+            (
+                new_uuid(),
+                input_message_uuid,
+                session_uuid,
+                workspace_uuid,
+                user_uuid,
+                chat_uuid,
+                resolved.policy.mode.value,
+                resolved.policy.capture_enabled,
+                resolved.policy.recall_enabled,
+                resolved.policy.attachment_enabled,
+                resolved.attachment_review,
+                resolved.source,
+                self.runtime_profile,
+                utc_now(),
+            ),
         )
         self.connection.commit()
 
