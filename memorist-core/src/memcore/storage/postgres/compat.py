@@ -56,6 +56,8 @@ class PostgresCompatConnection:
 
     def execute(self, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> CompatCursor:
         translated = _translate_sql(sql)
+        if not params:
+            return CompatCursor(self.raw.execute(translated))
         return CompatCursor(
             self.raw.execute(translated, _normalize_insert_params(translated, params))
         )
