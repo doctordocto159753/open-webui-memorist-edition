@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import yaml
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -139,3 +140,19 @@ def test_shipped_entrypoint_mounts_router_with_verified_openwebui_user(
     response = TestClient(app).get("/api/v1/memorist/openwebui/status")
     assert response.status_code == 200, response.text
     assert response.json()["memorist_core"] == "connected"
+
+
+def test_release_compose_keeps_core_command_and_mounts_authenticated_ui_router() -> None:
+    compose_path = ROOT.parents[1] / "release" / "memorist-openwebui" / "compose.yml"
+    compose = yaml.safe_load(compose_path.read_text(encoding="utf-8-sig"))
+    core = compose["services"]["memorist-core"]
+    webui = compose["services"]["open-webui"]
+
+    assert "command" not in core
+    assert "/memcore/health" in " ".join(core["healthcheck"]["test"])
+    assert webui["command"] == ["python", "-m", "memorist.backend.openwebui_entrypoint"]
+    assert webui["environment"]["PYTHONPATH"] == "/memorist-integration"
+    assert "MEMORIST_OPENWEBUI_WORKSPACE_UUID" in webui["environment"]
+    assert any(
+        str(volume).endswith(":/memorist-integration/memorist:ro") for volume in webui["volumes"]
+    )

@@ -20,9 +20,6 @@
       MEMORIST_FAIL_OPEN: ${MEMORIST_FAIL_OPEN:-true}
       MEMORIST_ACTOR_ASSERTION_SECRET: ${MEMORIST_ACTOR_ASSERTION_SECRET:?required}
       MEMORIST_ACTOR_SERVICE_TOKEN: ${MEMORIST_ACTOR_SERVICE_TOKEN:?required}
-      MEMORIST_OPENWEBUI_WORKSPACE_UUID: ${MEMORIST_OPENWEBUI_WORKSPACE_UUID:?required}
-      PYTHONPATH: /memorist-integration
-    command: ["python", "-m", "memorist.backend.openwebui_entrypoint"]
     ports:
       - "127.0.0.1:${MEMORIST_PORT:-8777}:8777"
     volumes:
@@ -50,6 +47,9 @@
       MEMORIST_FAIL_OPEN: ${MEMORIST_FAIL_OPEN:-true}
       MEMORIST_ACTOR_ASSERTION_SECRET: ${MEMORIST_ACTOR_ASSERTION_SECRET:?required}
       MEMORIST_ACTOR_SERVICE_TOKEN: ${MEMORIST_ACTOR_SERVICE_TOKEN:?required}
+      MEMORIST_OPENWEBUI_WORKSPACE_UUID: ${MEMORIST_OPENWEBUI_WORKSPACE_UUID:?required}
+      PYTHONPATH: /memorist-integration
+    command: ["python", "-m", "memorist.backend.openwebui_entrypoint"]
     ports:
       - "${OPEN_WEBUI_PORT:-3000}:8080"
     volumes:

@@ -100,6 +100,15 @@ class Filter:
                 turn_policy=policy.mode,
                 attachment_review=policy.attachment_review,
             )
+            review_capture_key = None
+            if metadata.get("memorist_review_ui_active") or metadata.get(
+                "memorist_approved_attachment_uuid"
+            ):
+                if not parsed.message_id:
+                    raise MemoristIntegrationError(
+                        "attachment review requires the original Open WebUI message ID"
+                    )
+                review_capture_key = f"review-prepare:{actor_user_id}:{parsed.message_id}"
             captured = client.capture_message(
                 resolved.session_uuid,
                 "user",
@@ -114,6 +123,7 @@ class Filter:
                 timestamp=parsed.timestamp,
                 user_id=actor_user_id,
                 raw_payload={"openwebui_message": safe_payload(parsed.user_message)},
+                idempotency_key=review_capture_key,
                 turn_policy=policy.mode,
                 attachment_review=policy.attachment_review,
                 workspace_uuid=resolved.workspace_uuid or parsed.workspace_id,

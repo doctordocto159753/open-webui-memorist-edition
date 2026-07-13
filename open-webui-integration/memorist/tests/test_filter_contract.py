@@ -27,6 +27,7 @@ class FakeClient:
     delivery_calls = 0
     cancel_calls = 0
     last_assistant_attachment: str | None = None
+    last_capture_idempotency_key: str | None = None
     last_config: Any | None = None
 
     def __init__(self, _config: object) -> None:
@@ -51,6 +52,8 @@ class FakeClient:
 
     def capture_message(self, *_args: object, **_kwargs: object) -> CapturedMessage:
         FakeClient.capture_calls += 1
+        value = _kwargs.get("idempotency_key")
+        FakeClient.last_capture_idempotency_key = str(value) if value is not None else None
         return CapturedMessage("session-1", "message-1", False)
 
     def resolve_turn_policy(
@@ -189,11 +192,12 @@ def test_review_capable_frontend_delivers_exact_server_approved_generation(monke
     body = {
         "memorist": {"turn_policy": "full", "attachment_review": True},
         "metadata": {"memorist_approved_attachment_uuid": "attachment-1"},
-        "messages": [{"role": "user", "content": "approved send"}],
+        "messages": [{"role": "user", "id": "review-message", "content": "approved send"}],
     }
     filter_instance = _module().Filter()
     result = filter_instance.inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
     assert FakeClient.delivery_calls == 1
+    assert FakeClient.last_capture_idempotency_key == "review-prepare:user-1:review-message"
     assert result["metadata"]["memorist_delivered_attachment_uuid"] == "attachment-1"
     assert "server-rendered approved context" in result["messages"][0]["content"]
     result["messages"] = [{"role": "assistant", "content": "approved answer"}]

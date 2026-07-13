@@ -287,6 +287,21 @@ def test_attachment_authorization_lifecycle_and_regeneration_are_idempotent(
         headers=headers,
     )
     assert first.status_code == second.status_code == 200
+    resumed_capture = client.post(
+        "/memcore/openwebui/messages/capture",
+        json={
+            "session_uuid": session["session_uuid"],
+            "openwebui_conversation_id": "lifecycle",
+            "user_id": "owner",
+            "workspace_uuid": session["workspace_uuid"],
+            "role": "user",
+            "content": "original prompt",
+            "idempotency_key": "lifecycle-user",
+        },
+    )
+    assert resumed_capture.status_code == 200
+    assert resumed_capture.json()["duplicate"] is True
+    assert resumed_capture.json()["message_uuid"] == captured["message_uuid"]
     delivery = client.post(
         f"/memcore/memory-control/attachments/{attachment.attachment_uuid}/delivery",
         json={"idempotency_key": "delivery-idempotency"},

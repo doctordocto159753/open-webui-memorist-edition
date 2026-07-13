@@ -344,6 +344,20 @@ def test_production_cannot_use_debug_log_level(
         Settings()
 
 
+def test_production_actor_secrets_must_be_distinct(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    clear_memorist_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MEMORIST_ENV", "production")
+    monkeypatch.setenv("MEMORIST_ACTOR_ASSERTION_SECRET", "same-secret")
+    monkeypatch.setenv("MEMORIST_ACTOR_SERVICE_TOKEN", "same-secret")
+
+    with pytest.raises(ValidationError, match="must be distinct"):
+        Settings()
+
+
 def test_full_profile_requires_postgres_store(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

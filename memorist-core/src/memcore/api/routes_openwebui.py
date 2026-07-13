@@ -28,6 +28,7 @@ from memcore.repositories.domain import WorkspaceRepository
 from memcore.security import optional_memorist_actor
 from memcore.storage.commands import FunctionWriteCommand
 from memcore.storage.gateway import WriteGateway
+from memcore.storage.postgres.compat import PostgresCompatConnection
 from memcore.storage.sqlite import connect
 from memcore.version import SCHEMA_VERSION, __version__
 
@@ -206,9 +207,9 @@ def capture_message(request: MessageCaptureRequest) -> dict[str, Any]:
         result = _capture_message_full(
             settings,
             request,
+            resolved_policy,
             enforce_session_actor=actor is not None,
         )
-        _record_turn_contract(settings, request, result, resolved_policy)
         return result
 
     session_uuid = request.session_uuid
@@ -507,6 +508,7 @@ def _resolve_session_payload_full(
 def _capture_message_full(
     settings: Settings,
     request: MessageCaptureRequest,
+    resolved_policy: ResolvedTurnPolicy,
     *,
     enforce_session_actor: bool,
 ) -> dict[str, Any]:
@@ -554,11 +556,15 @@ def _capture_message_full(
                 (idempotency_key,),
             ).fetchone()
             if existing is not None:
-                return {
+                result = {
                     "session_uuid": existing["session_uuid"],
                     "message_uuid": existing["message_uuid"],
                     "duplicate": True,
                 }
+                _record_turn_contract_on_postgres_connection(
+                    connection, settings, request, result, resolved_policy
+                )
+                return result
             turn_index = request.turn_index
             if turn_index is None:
                 row = connection.execute(
@@ -642,7 +648,53 @@ def _capture_message_full(
                 message_uuid=message_uuid,
                 now=now,
             )
-            return {"session_uuid": session_uuid, "message_uuid": message_uuid, "duplicate": False}
+            result = {
+                "session_uuid": session_uuid,
+                "message_uuid": message_uuid,
+                "duplicate": False,
+            }
+            _record_turn_contract_on_postgres_connection(
+                connection, settings, request, result, resolved_policy
+            )
+            return result
+
+
+def _record_turn_contract_on_postgres_connection(
+    connection: Any,
+    settings: Settings,
+    request: MessageCaptureRequest,
+    result: dict[str, Any],
+    resolved: ResolvedTurnPolicy,
+) -> None:
+    if request.role != "user" or bool(result.get("skipped")):
+        return
+    session_uuid = str(result["session_uuid"])
+    session = connection.execute(
+        "SELECT workspace_uuid FROM sessions WHERE session_uuid = %s", (session_uuid,)
+    ).fetchone()
+    workspace_uuid = request.workspace_uuid or (session["workspace_uuid"] if session else None)
+    repository = MemoryControlRepository(
+        PostgresCompatConnection(connection),
+        settings.runtime_profile,
+        autocommit=False,
+    )
+    repository.record_turn_contract(
+        input_message_uuid=str(result["message_uuid"]),
+        session_uuid=session_uuid,
+        workspace_uuid=workspace_uuid,
+        user_uuid=request.user_id,
+        chat_uuid=request.openwebui_conversation_id or request.temporary_chat_id,
+        resolved=resolved,
+    )
+    repository.audit(
+        "user_capture",
+        resolved.policy,
+        session_uuid=session_uuid,
+        input_message_uuid=str(result["message_uuid"]),
+        workspace_uuid=workspace_uuid,
+        user_uuid=request.user_id,
+        detail={"duplicate": bool(result.get("duplicate"))},
+    )
 
 
 def _pg_enqueue_capture_jobs(

@@ -137,6 +137,11 @@ class Settings(BaseSettings):
             not self.actor_assertion_secret or not self.actor_service_token
         ):
             raise ValueError("production requires actor_assertion_secret and actor_service_token")
+        if (
+            self.env.lower() == "production"
+            and self.actor_assertion_secret == self.actor_service_token
+        ):
+            raise ValueError("actor_assertion_secret and actor_service_token must be distinct")
         if self.allow_legacy_actor_headers_for_tests and self.env.lower() != "test":
             raise ValueError("legacy actor headers are permitted only in the test environment")
         if self.runtime_profile == "lite":

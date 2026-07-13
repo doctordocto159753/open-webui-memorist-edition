@@ -378,13 +378,13 @@ def test_full_concurrent_callbacks_are_single_delivery_and_single_capture(
                 owner_user_uuid, workspace_uuid, lifecycle_status, attachment_review,
                 generation, created_at, schema_version
             ) VALUES (?, ?, ?, ?, 'full', '{}', 'bounded', 1, ?, ?, 'prepared',
-                      false, 1, ?, 1)
+                      true, 1, ?, 1)
             """,
             (
                 attachment_uuid,
                 ids["session"],
                 ids["project"],
-                ids["message"],
+                captures[0]["message_uuid"],
                 ids["user"],
                 ids["workspace"],
                 utc_now(),
@@ -396,6 +396,14 @@ def test_full_concurrent_callbacks_are_single_delivery_and_single_capture(
         "x_memorist_user_id": ids["user"],
         "x_memorist_workspace_id": ids["workspace"],
     }
+    routes_memory_control.approve_attachment(
+        attachment_uuid,
+        AttachmentActionRequest(idempotency_key=f"review-approve-{uuid4().hex}"),
+        **headers,
+    )
+    resumed_capture = routes_openwebui.capture_message(capture_request)
+    assert resumed_capture["duplicate"] is True
+    assert resumed_capture["message_uuid"] == captures[0]["message_uuid"]
 
     def deliver(index: int) -> dict[str, object]:
         return routes_memory_control.record_attachment_delivery(
@@ -416,6 +424,43 @@ def test_full_concurrent_callbacks_are_single_delivery_and_single_capture(
             (attachment_uuid,),
         ).fetchone()[0]
     assert count == 1
+
+
+def test_full_user_capture_and_turn_contract_are_one_transaction(
+    full_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ids = _seed_turn(full_settings)
+    idempotency_key = f"atomic-capture-{uuid4().hex}"
+    content = f"atomic-content-{uuid4().hex}"
+
+    def fail_audit(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("injected audit failure")
+
+    monkeypatch.setattr(MemoryControlRepository, "audit", fail_audit)
+    with pytest.raises(RuntimeError, match="injected audit failure"):
+        routes_openwebui.capture_message(
+            MessageCaptureRequest(
+                session_uuid=ids["session"],
+                openwebui_conversation_id=ids["chat"],
+                user_id=ids["user"],
+                workspace_uuid=ids["workspace"],
+                role="user",
+                content=content,
+                idempotency_key=idempotency_key,
+                turn_policy="full",
+            )
+        )
+
+    with memory_control_connection(full_settings) as connection:
+        capture_count = connection.execute(
+            "SELECT count(*) FROM openwebui_message_captures WHERE idempotency_key = ?",
+            (idempotency_key,),
+        ).fetchone()[0]
+        message_count = connection.execute(
+            "SELECT count(*) FROM messages WHERE raw_text = ?", (content,)
+        ).fetchone()[0]
+    assert capture_count == message_count == 0
 
 
 def test_full_openwebui_filter_inlet_outlet_use_postgres(
