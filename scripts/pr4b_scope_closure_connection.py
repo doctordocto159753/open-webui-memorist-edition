@@ -4,7 +4,9 @@ from pathlib import Path
 
 path = Path(__file__).resolve().parents[1] / "memorist-core/src/memcore/api/routes_openwebui.py"
 text = path.read_text(encoding="utf-8")
-old = '''    identity = resolve_scoped_model_identity(PostgresCompatConnection(connection), session_uuid)
+old = '''    identity = resolve_scoped_model_identity(
+        PostgresCompatConnection(connection), session_uuid
+    )
     model_identity = identity.as_payload()
 '''
 new = '''    compat_connection = (
