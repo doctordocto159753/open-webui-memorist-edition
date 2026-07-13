@@ -6,6 +6,15 @@ root = Path(__file__).resolve().parents[1]
 path = root / "memorist-core/tests/test_pr4b_scope_closure.py"
 text = path.read_text(encoding="utf-8")
 
+old = '''from memcore.model_control.repository import ModelControlRepository
+'''
+new = '''from memcore.model_control.postgres_repository import PostgresModelControlRepository
+from memcore.model_control.repository import ModelControlRepository
+'''
+if text.count(old) != 1:
+    raise RuntimeError("Model Control import block changed unexpectedly")
+text = text.replace(old, new)
+
 old = '''    suffix = uuid4().hex
     workspace = workspace or f"workspace-{suffix}"
     project = project or f"project-{suffix}"
@@ -68,6 +77,38 @@ if text.count(old) != 1:
     raise RuntimeError("project seed block changed unexpectedly")
 text = text.replace(old, new)
 
+old = '''def _profile(connection: object, name: str) -> str:
+    profile = ModelControlRepository(connection).create_profile(
+        ModelProfileCreate(
+            provider_type=ProviderType.DETERMINISTIC,
+            model_name=name,
+            role=ModelRole.MEMORY_EXTRACTION,
+            endpoint_is_local=True,
+        )
+    )
+    return profile.model_profile_uuid
+'''
+new = '''def _model_control(connection: object) -> ModelControlRepository:
+    if RUNTIME == "full":
+        return PostgresModelControlRepository(connection)
+    return ModelControlRepository(connection)
+
+
+def _profile(connection: object, name: str) -> str:
+    profile = _model_control(connection).create_profile(
+        ModelProfileCreate(
+            provider_type=ProviderType.DETERMINISTIC,
+            model_name=name,
+            role=ModelRole.MEMORY_EXTRACTION,
+            endpoint_is_local=True,
+        )
+    )
+    return profile.model_profile_uuid
+'''
+if text.count(old) != 1:
+    raise RuntimeError("profile helper changed unexpectedly")
+text = text.replace(old, new)
+
 old = '''    session_workspace_b = _seed_session(
         settings,
         user=user_b,
@@ -96,6 +137,14 @@ new = '''    session_workspace_b = _seed_session(
 '''
 if text.count(old) != 1:
     raise RuntimeError("workspace B seed block changed unexpectedly")
+text = text.replace(old, new)
+
+old = '''        model_control = ModelControlRepository(connection)
+'''
+new = '''        model_control = _model_control(connection)
+'''
+if text.count(old) != 1:
+    raise RuntimeError("scoped model-control selection changed unexpectedly")
 text = text.replace(old, new)
 
 old = '''    foreign_capture = _capture(
