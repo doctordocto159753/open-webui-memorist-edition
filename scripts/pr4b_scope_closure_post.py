@@ -6,6 +6,35 @@ root = Path(__file__).resolve().parents[1]
 path = root / "memorist-core/tests/test_pr4b_scope_closure.py"
 text = path.read_text(encoding="utf-8")
 
+old = '''    suffix = uuid4().hex
+    workspace = workspace or f"workspace-{suffix}"
+    project = project or f"project-{suffix}"
+    session = f"session-{suffix}"
+'''
+new = '''    workspace = workspace or str(uuid4())
+    project = project or str(uuid4())
+    session = str(uuid4())
+'''
+if text.count(old) != 1:
+    raise RuntimeError("UUID seed block changed unexpectedly")
+text = text.replace(old, new)
+
+old = '''    workspace_a = f"workspace-a-{uuid4().hex}"
+    project_a = f"project-a-{uuid4().hex}"
+    project_a_fallback = f"project-a-fallback-{uuid4().hex}"
+    workspace_b = f"workspace-b-{uuid4().hex}"
+    project_b = f"project-b-{uuid4().hex}"
+'''
+new = '''    workspace_a = str(uuid4())
+    project_a = str(uuid4())
+    project_a_fallback = str(uuid4())
+    workspace_b = str(uuid4())
+    project_b = str(uuid4())
+'''
+if text.count(old) != 1:
+    raise RuntimeError("scope UUID matrix block changed unexpectedly")
+text = text.replace(old, new)
+
 old = '''        connection.execute(
             "INSERT INTO workspaces (workspace_uuid, name, created_at, updated_at, schema_version) "
             "VALUES (?, ?, ?, ?, 1)",
@@ -54,8 +83,8 @@ new = '''    session_workspace_b = _seed_session(
         workspace=workspace_b,
         project=project_b,
     )
-    workspace_c = f"workspace-c-{uuid4().hex}"
-    project_c = f"project-c-{uuid4().hex}"
+    workspace_c = str(uuid4())
+    project_c = str(uuid4())
     user_c = f"user-c-{uuid4().hex}"
     session_global = _seed_session(
         settings,
