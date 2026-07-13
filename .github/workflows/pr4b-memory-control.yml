@@ -252,7 +252,13 @@ jobs:
     runs-on: ubuntu-latest
     services: *postgres
     env:
-      <<: *full_env
+      MEMORIST_RUNTIME_PROFILE: full
+      MEMORIST_CANONICAL_STORE: postgres
+      MEMORIST_POSTGRES_DSN: postgresql://memorist:memorist@localhost:5432/memorist_test
+      MEMORIST_FALKORDB_URL: redis://127.0.0.1:1
+      MEMORIST_ALLOW_FULL_GRAPH_DEGRADED: "true"
+      MEMORIST_HOT_SCHEDULER: in_memory
+      MEMORIST_OBJECT_STORE_PATH: /tmp/memorist-objects
       MEMORIST_SCOPE_TEST_RUNTIME: full
     steps:
       - uses: actions/checkout@v4
