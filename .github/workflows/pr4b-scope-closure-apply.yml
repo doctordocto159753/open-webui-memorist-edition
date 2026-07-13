@@ -101,9 +101,17 @@ jobs:
       - name: Validate Lite policy, ownership, and Processing Node scope
         working-directory: memorist-core
         run: |
+          set -o pipefail
           MEMORIST_SCOPE_TEST_RUNTIME=lite uv run pytest \
             tests/test_pr4b_scope_closure.py \
-            ../open-webui-integration/memorist/tests/test_backend_proxy.py -q
+            ../open-webui-integration/memorist/tests/test_backend_proxy.py -q \
+            2>&1 | tee ../scope-closure-lite.log
+      - name: Upload Lite test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr4b-scope-closure-lite
+          path: scope-closure-lite.log
       - name: Validate Full PostgreSQL ownership and Processing Node scope
         working-directory: memorist-core
         run: |
@@ -118,7 +126,7 @@ jobs:
           git diff --check
       - name: Commit verified closure and remove temporary automation
         run: |
-          rm -f scope-closure-ruff.log
+          rm -f scope-closure-ruff.log scope-closure-lite.log
           rm -f scripts/pr4b_scope_closure.py scripts/pr4b_scope_closure_post.py
           rm -f .github/workflows/pr4b-scope-closure-apply.yml
           git config user.name "github-actions[bot]"
