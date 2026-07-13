@@ -280,6 +280,16 @@ class MemoryContextAttachment(DomainModel):
     created_at: str = Field(default_factory=utc_now)
     status: str = "active"
     stale_reason: str | None = None
+    owner_user_uuid: str | None = None
+    workspace_uuid: str | None = None
+    lifecycle_status: str = "prepared"
+    attachment_review: bool = False
+    approved_at: str | None = None
+    delivered_at: str | None = None
+    suppressed_at: str | None = None
+    cancelled_at: str | None = None
+    generation: int = Field(default=1, ge=1)
+    expires_at: str | None = None
     schema_version: int = Field(default=1, ge=1)
 
 

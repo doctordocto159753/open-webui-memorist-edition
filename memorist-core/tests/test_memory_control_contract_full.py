@@ -1,0 +1,403 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from uuid import uuid4
+
+import pytest
+from fastapi import HTTPException
+
+from memcore.api import routes_memory_control, routes_openwebui, routes_retrieval
+from memcore.api.routes_memory_control import AttachmentActionRequest
+from memcore.api.routes_openwebui import MessageCaptureRequest, SessionResolveRequest
+from memcore.api.routes_retrieval import AssistantResponseCompletedRequest
+from memcore.config import Settings
+from memcore.graph.falkordb import FalkorDBClient, FalkorDBHealth
+from memcore.imports.runtime import initialize_runtime_storage
+from memcore.memory_control.full_retrieval import FullPostgresPreflightService
+from memcore.memory_control.policy import normalize_turn_policy
+from memcore.memory_control.repository import (
+    MemoryControlRepository,
+    ResolvedTurnPolicy,
+)
+from memcore.memory_control.runtime import memory_control_connection
+from memcore.models import utc_now
+from memcore.preflight import PreflightRequest
+
+pytestmark = pytest.mark.skipif(
+    not os.getenv("MEMORIST_POSTGRES_DSN"), reason="requires real PostgreSQL"
+)
+
+
+@pytest.fixture
+def full_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
+    settings = Settings(
+        runtime_profile="full",
+        canonical_store="postgres",
+        postgres_dsn=os.environ["MEMORIST_POSTGRES_DSN"],
+        db_path=str(tmp_path / "must-not-exist.sqlite3"),
+        object_store_path=str(tmp_path / "objects"),
+        graph_backend="falkordb",
+        falkordb_url=os.getenv("MEMORIST_FALKORDB_URL", "redis://127.0.0.1:1"),
+        allow_full_graph_degraded=True,
+        hot_scheduler="in_memory",
+    )
+    initialize_runtime_storage(settings)
+    monkeypatch.setattr(routes_openwebui, "get_settings", lambda: settings)
+    monkeypatch.setattr(routes_retrieval, "get_settings", lambda: settings)
+    monkeypatch.setattr(routes_memory_control, "get_settings", lambda: settings)
+    return settings
+
+
+def _seed_turn(
+    settings: Settings,
+    *,
+    policy: str = "full",
+    with_memory: bool = False,
+) -> dict[str, str]:
+    suffix = uuid4().hex
+    ids = {
+        "workspace": f"workspace-{suffix}",
+        "project": f"project-{suffix}",
+        "session": f"session-{suffix}",
+        "message": f"message-{suffix}",
+        "user": f"user-{suffix}",
+        "chat": f"chat-{suffix}",
+        "memory": f"memory-{suffix}",
+        "version": f"version-{suffix}",
+    }
+    now = utc_now()
+    with memory_control_connection(settings) as connection:
+        connection.execute(
+            "INSERT INTO workspaces (workspace_uuid, name, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?)",
+            (ids["workspace"], suffix, now, now),
+        )
+        connection.execute(
+            "INSERT INTO projects (project_uuid, workspace_uuid, name, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (ids["project"], ids["workspace"], suffix, now, now),
+        )
+        connection.execute(
+            """
+            INSERT INTO sessions (
+                session_uuid, workspace_uuid, project_uuid, openwebui_conversation_id,
+                status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'active', ?, ?)
+            """,
+            (ids["session"], ids["workspace"], ids["project"], ids["chat"], now, now),
+        )
+        connection.execute(
+            """
+            INSERT INTO messages (
+                message_uuid, session_uuid, turn_index, role, creator_type, raw_text,
+                processing_status, visibility, is_deleted, created_at, updated_at
+            ) VALUES (?, ?, 0, 'user', 'user', ?, 'pending', 'visible', false, ?, ?)
+            """,
+            (ids["message"], ids["session"], f"Recall postgres graph fact {suffix}", now, now),
+        )
+        resolved = ResolvedTurnPolicy(
+            policy=normalize_turn_policy(policy), source="turn", attachment_review=False
+        )
+        MemoryControlRepository(connection, "full").record_turn_contract(
+            input_message_uuid=ids["message"],
+            session_uuid=ids["session"],
+            workspace_uuid=ids["workspace"],
+            user_uuid=ids["user"],
+            chat_uuid=ids["chat"],
+            resolved=resolved,
+        )
+        if with_memory:
+            connection.execute(
+                """
+                INSERT INTO memories (
+                    memory_uuid, scope_type, scope_uuid, canonical_key,
+                    current_version_uuid, status, created_at, updated_at
+                ) VALUES (?, 'workspace', ?, ?, ?, 'active', ?, ?)
+                """,
+                (
+                    ids["memory"],
+                    ids["workspace"],
+                    f"fact:{suffix}",
+                    ids["version"],
+                    now,
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO memory_versions (
+                    memory_version_uuid, memory_uuid, version_number, operation, value,
+                    normalized_text, confidence, importance, source_snapshot_hash,
+                    status, created_at
+                ) VALUES (?, ?, 1, 'create', ?, ?, 0.95, 0.9, ?, 'current', ?)
+                """,
+                (
+                    ids["version"],
+                    ids["memory"],
+                    f"Postgres graph fact {suffix}",
+                    f"postgres graph fact {suffix}",
+                    suffix,
+                    now,
+                ),
+            )
+        connection.commit()
+    return ids
+
+
+def _preflight(ids: dict[str, str]) -> PreflightRequest:
+    return PreflightRequest(
+        session_uuid=ids["session"],
+        input_message_uuid=ids["message"],
+        token_budget=700,
+        turn_policy="full",
+        user_uuid=ids["user"],
+        workspace_uuid=ids["workspace"],
+    )
+
+
+def test_full_private_creates_no_canonical_or_graph_trace(
+    full_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    before: dict[str, int] = {}
+    tables = (
+        "sessions",
+        "messages",
+        "jobs",
+        "retrieval_runs",
+        "memory_context_attachments",
+        "memorist_policy_audit_events",
+    )
+    with memory_control_connection(full_settings) as connection:
+        for table in tables:
+            before[table] = int(connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
+
+    def graph_forbidden(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("Private turn must not query FalkorDB")
+
+    monkeypatch.setattr(
+        "memcore.graph.falkordb.FalkorDBClient.query_memory_versions", graph_forbidden
+    )
+    session = routes_openwebui.resolve_session(
+        SessionResolveRequest(
+            openwebui_conversation_id=f"private-{uuid4().hex}",
+            user_id="private-user",
+            turn_policy="private",
+        )
+    )
+    captured = routes_openwebui.capture_message(
+        MessageCaptureRequest(role="user", content="never persist this", turn_policy="private")
+    )
+    assert session["session_uuid"] is None
+    assert captured["message_uuid"] is None
+    with memory_control_connection(full_settings) as connection:
+        after = {
+            table: int(connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
+            for table in tables
+        }
+    assert after == before
+    assert not Path(full_settings.db_path).exists()
+
+
+def test_full_no_recall_captures_but_skips_retrieval(full_settings: Settings) -> None:
+    ids = _seed_turn(full_settings, policy="no_recall")
+    response = routes_retrieval.run_preflight(_preflight(ids))
+    assert response["status"] == "disabled"
+    completed = routes_retrieval.assistant_response_completed(
+        AssistantResponseCompletedRequest(
+            input_message_uuid=ids["message"],
+            assistant_text="Captured assistant response",
+            turn_policy="no_recall",
+            user_uuid=ids["user"],
+            workspace_uuid=ids["workspace"],
+        )
+    )
+    with memory_control_connection(full_settings) as connection:
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM retrieval_runs WHERE input_message_uuid = ?",
+                (ids["message"],),
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM memory_context_attachments WHERE input_message_uuid = ?",
+                (ids["message"],),
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM jobs WHERE payload_ijson LIKE ?",
+                (f"%{completed['assistant_message_uuid']}%",),
+            ).fetchone()[0]
+            == 2
+        )
+    assert not Path(full_settings.db_path).exists()
+
+
+def test_full_graph_retrieval_persists_postgres_provenance_and_restart(
+    full_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ids = _seed_turn(full_settings, with_memory=True)
+    if os.getenv("MEMORIST_REAL_FALKORDB") == "1":
+        graph = FalkorDBClient(full_settings.falkordb_url or "")
+        assert graph.health().ok
+        graph.graph_query(
+            "CREATE "
+            f"(w:Workspace {{uuid:'{ids['workspace']}'}})-[:IN_PROJECT]->"
+            "(p:Project)-[:HAS_SESSION]->(s:Session)-[:HAS_MESSAGE]->"
+            "(msg:Message)-[:HAS_UNIT]->(unit:TextUnit)-[:HAS_JAKOBSON_ANNOTATION]->"
+            "(ann:JakobsonAnnotation)-[:ROUTES_TO]->(route:MemorySignalRoute)-"
+            "[:DERIVED_FROM]->(candidate:MemoryCandidate), "
+            f"(mem:Memory {{uuid:'{ids['memory']}', status:'active'}})-[:HAS_VERSION]->"
+            f"(ver:MemoryVersion {{uuid:'{ids['version']}', status:'current', "
+            f"text:'postgres graph fact {ids['version']}'}}), "
+            "(ver)-[:EVIDENCED_BY]->(candidate) RETURN ver.uuid"
+        )
+    else:
+        monkeypatch.setattr(
+            "memcore.memory_control.full_retrieval.FalkorDBClient.health",
+            lambda *_args, **_kwargs: FalkorDBHealth(ok=True, status="ok"),
+        )
+        monkeypatch.setattr(
+            "memcore.memory_control.full_retrieval.FalkorDBClient.query_memory_versions",
+            lambda *_args, **_kwargs: [
+                {"memory_uuid": ids["memory"], "memory_version_uuid": ids["version"]}
+            ],
+        )
+    response = routes_retrieval.run_preflight(_preflight(ids))
+    assert response["status"] == "attached"
+    assert response["graph_status"] == "healthy"
+    attachment_uuid = str(response["attachment_uuid"])
+    headers = {
+        "x_memorist_user_id": ids["user"],
+        "x_memorist_workspace_id": ids["workspace"],
+    }
+    with pytest.raises(HTTPException) as denied:
+        routes_memory_control.preview_attachment(
+            attachment_uuid,
+            x_memorist_user_id="substitution-attacker",
+            x_memorist_workspace_id=ids["workspace"],
+        )
+    assert denied.value.status_code == 404
+    delivered = routes_memory_control.record_attachment_delivery(
+        attachment_uuid,
+        AttachmentActionRequest(idempotency_key=f"delivery-{uuid4().hex}"),
+        **headers,
+    )
+    duplicate = routes_memory_control.record_attachment_delivery(
+        attachment_uuid,
+        AttachmentActionRequest(idempotency_key=f"delivery-{uuid4().hex}"),
+        **headers,
+    )
+    assert duplicate["lifecycle_event_uuid"] == delivered["lifecycle_event_uuid"]
+    with memory_control_connection(full_settings) as restarted:
+        attachment = MemoryControlRepository(restarted, "full").attachment_for_actor(
+            attachment_uuid,
+            user_uuid=ids["user"],
+            workspace_uuid=ids["workspace"],
+        )
+        sources = restarted.execute(
+            "SELECT source_type, memory_version_uuid FROM memorist_retrieval_sources "
+            "WHERE attachment_uuid = ?",
+            (attachment_uuid,),
+        ).fetchall()
+    assert attachment is not None
+    assert attachment["lifecycle_status"] == "delivered"
+    assert {row["source_type"] for row in sources} == {"graph"}
+    assert sources[0]["memory_version_uuid"] == ids["version"]
+    assert not Path(full_settings.db_path).exists()
+
+
+def test_full_regeneration_preserves_attachment_provenance(
+    full_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ids = _seed_turn(full_settings, with_memory=True)
+    monkeypatch.setattr(
+        "memcore.memory_control.full_retrieval.FalkorDBClient.health",
+        lambda *_args, **_kwargs: FalkorDBHealth(
+            ok=False, status="degraded", error_sanitized="planned-test-outage"
+        ),
+    )
+    response = routes_retrieval.run_preflight(_preflight(ids))
+    attachment_uuid = str(response["attachment_uuid"])
+    headers = {
+        "x_memorist_user_id": ids["user"],
+        "x_memorist_workspace_id": ids["workspace"],
+    }
+    routes_memory_control.record_attachment_delivery(
+        attachment_uuid,
+        AttachmentActionRequest(idempotency_key=f"delivery-{uuid4().hex}"),
+        **headers,
+    )
+    regeneration = routes_memory_control.regenerate_without_recall(
+        attachment_uuid,
+        AttachmentActionRequest(idempotency_key=f"regenerate-{uuid4().hex}"),
+        **headers,
+    )
+    assert regeneration["turn_policy"] == "no_recall"
+    assert regeneration["original_user_prompt"].startswith("Recall postgres graph fact")
+    completed = routes_retrieval.assistant_response_completed(
+        AssistantResponseCompletedRequest(
+            input_message_uuid=ids["message"],
+            assistant_text="Regenerated without Memorist recall",
+            regeneration_uuid=str(regeneration["regeneration_uuid"]),
+            turn_policy="no_recall",
+            user_uuid=ids["user"],
+            workspace_uuid=ids["workspace"],
+        )
+    )
+    with memory_control_connection(full_settings) as connection:
+        attachment = connection.execute(
+            "SELECT lifecycle_status FROM memory_context_attachments WHERE attachment_uuid = ?",
+            (attachment_uuid,),
+        ).fetchone()
+        regeneration_row = connection.execute(
+            "SELECT * FROM memorist_regenerations WHERE regeneration_uuid = ?",
+            (regeneration["regeneration_uuid"],),
+        ).fetchone()
+        attachment_count = connection.execute(
+            "SELECT count(*) FROM memory_context_attachments WHERE input_message_uuid = ?",
+            (ids["message"],),
+        ).fetchone()[0]
+    assert attachment["lifecycle_status"] == "delivered"
+    assert regeneration_row["status"] == "completed"
+    assert (
+        regeneration_row["regenerated_assistant_message_uuid"]
+        == completed["assistant_message_uuid"]
+    )
+    assert attachment_count == 1
+
+
+def test_full_graph_outage_is_explicit_and_never_changes_store(
+    full_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ids = _seed_turn(full_settings, with_memory=True)
+    monkeypatch.setattr(
+        "memcore.memory_control.full_retrieval.FalkorDBClient.health",
+        lambda *_args, **_kwargs: FalkorDBHealth(
+            ok=False, status="degraded", error_sanitized="falkordb_unavailable"
+        ),
+    )
+    with memory_control_connection(full_settings) as connection:
+        response = FullPostgresPreflightService(connection, full_settings).run(
+            _preflight(ids), normalize_turn_policy("full"), attachment_review=False
+        )
+    assert response.graph_status == "degraded"
+    assert response.degraded_reason == "falkordb_unavailable"
+    with memory_control_connection(full_settings) as connection:
+        run = connection.execute(
+            "SELECT graph_status, degraded_reason FROM retrieval_runs WHERE retrieval_run_uuid = ?",
+            (response.retrieval_run_uuid,),
+        ).fetchone()
+        audit = connection.execute(
+            "SELECT degraded_reason FROM memorist_policy_audit_events "
+            "WHERE input_message_uuid = ? AND event_type = 'full_retrieval_completed'",
+            (ids["message"],),
+        ).fetchone()
+    assert run["graph_status"] == "degraded"
+    assert run["degraded_reason"] == "falkordb_unavailable"
+    assert audit["degraded_reason"] == "falkordb_unavailable"
+    assert not Path(full_settings.db_path).exists()

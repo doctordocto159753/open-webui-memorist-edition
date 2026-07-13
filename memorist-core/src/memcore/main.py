@@ -13,6 +13,7 @@ from memcore.api.routes_graph import router as graph_router
 from memcore.api.routes_health import router as health_router
 from memcore.api.routes_imports import router as imports_router
 from memcore.api.routes_memory import router as memory_router
+from memcore.api.routes_memory_control import router as memory_control_router
 from memcore.api.routes_model_control import router as model_control_router
 from memcore.api.routes_openwebui import router as openwebui_router
 from memcore.api.routes_retrieval import router as retrieval_router
@@ -54,6 +55,7 @@ def create_app() -> FastAPI:
     app.include_router(costs_router)
     app.include_router(base_router)
     app.include_router(memory_router)
+    app.include_router(memory_control_router)
     app.include_router(model_control_router)
     app.include_router(retrieval_router)
     app.include_router(governance_router)

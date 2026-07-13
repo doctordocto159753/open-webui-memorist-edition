@@ -10,6 +10,7 @@ GraphBackend = Literal["disabled", "falkordb", "falkordb_lite"]
 VectorBackend = Literal["disabled", "sqlite_vec", "falkordb", "qdrant_local", "lancedb"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 RetrievalModeSetting = Literal["lite", "standard", "full", "debug"]
+TurnPolicySetting = Literal["full", "no_recall", "private"]
 RuntimeProfile = Literal["lite", "full", "dev"]
 CanonicalStoreKind = Literal["sqlite", "postgres"]
 HotSchedulerBackend = Literal["disabled", "in_memory"]
@@ -57,6 +58,7 @@ class Settings(BaseSettings):
     preflight_timeout_ms: int = Field(default=500, ge=1)
     preflight_model_timeout_ms: int = Field(default=800, ge=1)
     preflight_fail_open: bool = True
+    default_turn_policy: TurnPolicySetting = "full"
     retrieval_mode: RetrievalModeSetting = "standard"
     attachment_token_budget: int = Field(default=1800, ge=1)
     attachment_max_tokens: int = Field(default=1800, ge=0)

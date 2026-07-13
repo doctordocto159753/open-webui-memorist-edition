@@ -1,6 +1,26 @@
 import type { MemoristModelRole, ModelControlProfile } from "./modelControl";
 
 export type MemoristMode = "off" | "lite" | "standard" | "full";
+export type MemoristTurnPolicy = "full" | "no_recall" | "private";
+export const MEMORY_CONTROL_LABELS = {
+  memoristRecall: "Memorist Recall",
+  openWebUINativeMemory: "Open WebUI Native Memory",
+} as const;
+
+export type MemoristPolicyResolution = {
+  policy: {
+    mode: MemoristTurnPolicy;
+    capture_enabled: boolean;
+    recall_enabled: boolean;
+    attachment_enabled: boolean;
+    private: boolean;
+  };
+  source: "turn" | "chat" | "user" | "system";
+  attachment_review: boolean;
+  runtime_profile: "lite" | "full" | "dev";
+  runtime_profile_server_controlled: true;
+  openwebui_native_memory_independent: true;
+};
 
 export type MemoristHealth = {
   status: ImportRunStatus;
@@ -137,6 +157,33 @@ export class MemoristClient {
   async acknowledgeModelControlPrivacy(payload: PrivacyAcknowledgementRequest): Promise<PrivacyAcknowledgementResponse> { return this.post("/model-control/privacy/acknowledge", payload); }
   async modelRoleCosts(): Promise<unknown> { return this.get("/costs/model-roles"); }
   async diagnostics(): Promise<unknown> { return this.get("/openwebui/status"); }
+  async resolveMemoristPolicy(payload: {
+    user_uuid?: string | null;
+    chat_uuid?: string | null;
+    workspace_uuid?: string | null;
+    memorist?: { turn_policy?: MemoristTurnPolicy; attachment_review?: boolean };
+  }): Promise<MemoristPolicyResolution> {
+    return this.post("/memory-control/policy/resolve", payload);
+  }
+  async setMemoristDefault(payload: {
+    scope_type: "user" | "chat";
+    scope_uuid: string;
+    workspace_uuid?: string | null;
+    turn_policy: MemoristTurnPolicy;
+    attachment_review?: boolean;
+  }): Promise<unknown> { return this.put("/memory-control/policy/defaults", payload); }
+  async previewAttachment(attachmentUuid: string): Promise<unknown> {
+    return this.get(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/preview`);
+  }
+  async approveAttachment(attachmentUuid: string, idempotencyKey: string): Promise<unknown> {
+    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/approve`, { idempotency_key: idempotencyKey });
+  }
+  async suppressAttachment(attachmentUuid: string, idempotencyKey: string): Promise<unknown> {
+    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/suppress`, { idempotency_key: idempotencyKey });
+  }
+  async regenerateWithoutRecall(attachmentUuid: string, idempotencyKey: string): Promise<unknown> {
+    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/regenerate-without-recall`, { idempotency_key: idempotencyKey });
+  }
 
   private async get<T = unknown>(path: string): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, { credentials: "same-origin" });
@@ -158,6 +205,17 @@ export class MemoristClient {
   private async patch<T = unknown>(path: string, body: unknown): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: "PATCH",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error(await this.errorDetail(response));
+    return response.json() as Promise<T>;
+  }
+
+  private async put<T = unknown>(path: string, body: unknown): Promise<T> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method: "PUT",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

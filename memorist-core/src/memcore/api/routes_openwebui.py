@@ -8,9 +8,11 @@ from hashlib import sha256
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from memcore.config import Settings, get_settings
+from memcore.memory_control import MemoryControlRepository, memory_control_connection
+from memcore.memory_control.repository import ResolvedTurnPolicy
 from memcore.models import new_uuid, utc_now
 from memcore.openwebui.commands import CaptureOpenWebUIMessageCommand
 from memcore.openwebui.session_resolution import (
@@ -32,6 +34,7 @@ router = APIRouter(prefix="/memcore/openwebui", tags=["openwebui-integration"])
 
 
 class SessionResolveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     openwebui_conversation_id: str | None = None
     temporary_chat_id: str | None = None
     client_session_nonce: str | None = None
@@ -42,9 +45,12 @@ class SessionResolveRequest(BaseModel):
     created_at: str | None = None
     workspace_name: str = "Open WebUI"
     project_name: str = "Default"
+    turn_policy: str | None = None
+    attachment_review: bool | None = None
 
 
 class MessageCaptureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     session_uuid: str | None = None
     openwebui_conversation_id: str | None = None
     temporary_chat_id: str | None = None
@@ -60,11 +66,24 @@ class MessageCaptureRequest(BaseModel):
     content: str
     idempotency_key: str | None = None
     raw_payload: dict[str, Any] | None = None
+    turn_policy: str | None = None
+    attachment_review: bool | None = None
+    workspace_uuid: str | None = None
 
 
 @router.post("/session/resolve", response_model=None)
 def resolve_session(request: SessionResolveRequest) -> dict[str, Any]:
     settings = get_settings()
+    resolved_policy = _resolve_turn_policy(
+        settings,
+        user_uuid=request.user_id,
+        chat_uuid=request.openwebui_conversation_id or request.temporary_chat_id,
+        workspace_uuid=None,
+        turn_override=request.turn_policy,
+        attachment_review_override=request.attachment_review,
+    )
+    if resolved_policy.policy.private:
+        return {"private": True, "turn_policy": "private", "session_uuid": None}
     if _is_full_postgres(settings):
         return _resolve_session_payload_full(settings, request)
     return _resolve_session_payload(request)
@@ -117,8 +136,26 @@ def capture_message(request: MessageCaptureRequest) -> dict[str, Any]:
     if request.role not in {"user", "assistant"}:
         raise HTTPException(status_code=400, detail="role must be user or assistant")
     settings = get_settings()
+    resolved_policy = _resolve_turn_policy(
+        settings,
+        user_uuid=request.user_id,
+        chat_uuid=request.openwebui_conversation_id or request.temporary_chat_id,
+        workspace_uuid=request.workspace_uuid,
+        turn_override=request.turn_policy,
+        attachment_review_override=request.attachment_review,
+    )
+    if resolved_policy.policy.private:
+        return {
+            "skipped": True,
+            "turn_policy": "private",
+            "session_uuid": None,
+            "message_uuid": None,
+            "duplicate": False,
+        }
     if _is_full_postgres(settings):
-        return _capture_message_full(settings, request)
+        result = _capture_message_full(settings, request)
+        _record_turn_contract(settings, request, result, resolved_policy)
+        return result
 
     session_uuid = request.session_uuid
     if session_uuid is None:
@@ -154,11 +191,13 @@ def capture_message(request: MessageCaptureRequest) -> dict[str, Any]:
             ),
             timeout=2.0,
         )
-        return {
+        response = {
             "session_uuid": result["session_uuid"],
             "message_uuid": result["message_uuid"],
             "duplicate": result["duplicate"],
         }
+        _record_turn_contract(settings, request, response, resolved_policy)
+        return response
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -269,6 +308,60 @@ def _connection() -> Iterator[Any]:
 
 def _is_full_postgres(settings: Settings) -> bool:
     return settings.runtime_profile == "full" and settings.canonical_store == "postgres"
+
+
+def _resolve_turn_policy(
+    settings: Settings,
+    *,
+    user_uuid: str | None,
+    chat_uuid: str | None,
+    workspace_uuid: str | None,
+    turn_override: str | None,
+    attachment_review_override: bool | None,
+) -> ResolvedTurnPolicy:
+    with memory_control_connection(settings) as connection:
+        return MemoryControlRepository(connection, settings.runtime_profile).resolve_policy(
+            system_default=settings.default_turn_policy,
+            workspace_uuid=workspace_uuid,
+            user_uuid=user_uuid,
+            chat_uuid=chat_uuid,
+            turn_override=turn_override,
+            attachment_review_override=attachment_review_override,
+        )
+
+
+def _record_turn_contract(
+    settings: Settings,
+    request: MessageCaptureRequest,
+    result: dict[str, Any],
+    resolved: ResolvedTurnPolicy,
+) -> None:
+    if request.role != "user" or bool(result.get("skipped")):
+        return
+    session_uuid = str(result["session_uuid"])
+    with memory_control_connection(settings) as connection:
+        session = connection.execute(
+            "SELECT workspace_uuid FROM sessions WHERE session_uuid = ?", (session_uuid,)
+        ).fetchone()
+        workspace_uuid = request.workspace_uuid or (session["workspace_uuid"] if session else None)
+        repository = MemoryControlRepository(connection, settings.runtime_profile)
+        repository.record_turn_contract(
+            input_message_uuid=str(result["message_uuid"]),
+            session_uuid=session_uuid,
+            workspace_uuid=workspace_uuid,
+            user_uuid=request.user_id,
+            chat_uuid=request.openwebui_conversation_id or request.temporary_chat_id,
+            resolved=resolved,
+        )
+        repository.audit(
+            "user_capture",
+            resolved.policy,
+            session_uuid=session_uuid,
+            input_message_uuid=str(result["message_uuid"]),
+            workspace_uuid=workspace_uuid,
+            user_uuid=request.user_id,
+            detail={"duplicate": bool(result.get("duplicate"))},
+        )
 
 
 @contextmanager
@@ -457,7 +550,54 @@ def _capture_message_full(settings: Settings, request: MessageCaptureRequest) ->
                 """,
                 (idempotency_key, session_uuid, message_uuid, event_uuid, now),
             )
+            _pg_enqueue_capture_jobs(
+                connection,
+                session_uuid=session_uuid,
+                message_uuid=message_uuid,
+                role=request.role,
+                now=now,
+            )
             return {"session_uuid": session_uuid, "message_uuid": message_uuid, "duplicate": False}
+
+
+def _pg_enqueue_capture_jobs(
+    connection: Any,
+    *,
+    session_uuid: str,
+    message_uuid: str,
+    role: str,
+    now: str,
+) -> None:
+    jobs = [("text_unitization", 100)]
+    if role == "assistant":
+        jobs.append(("memory_extraction", 60))
+    for job_type, priority in jobs:
+        payload = json.dumps(
+            {"message_uuid": message_uuid, "session_uuid": session_uuid},
+            sort_keys=True,
+        )
+        connection.execute(
+            """
+            INSERT INTO jobs (
+                job_uuid, job_type, priority, status, payload_jsonb, payload_ijson,
+                idempotency_key, run_after, attempts, max_attempts, created_at, updated_at,
+                schema_version
+            )
+            VALUES (%s, %s, %s, 'pending', %s::jsonb, %s, %s, %s, 0, 3, %s, %s, 1)
+            ON CONFLICT (job_type, idempotency_key) DO NOTHING
+            """,
+            (
+                new_uuid(),
+                job_type,
+                priority,
+                payload,
+                payload,
+                f"openwebui:{job_type}:{message_uuid}",
+                now,
+                now,
+                now,
+            ),
+        )
 
 
 def _pg_default_workspace_uuid(connection: Any, name: str) -> str:

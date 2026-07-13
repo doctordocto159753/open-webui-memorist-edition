@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import sys
 from pathlib import Path
@@ -13,7 +13,6 @@ from shared.config import MemoristIntegrationConfig, load_config  # noqa: E402
 from shared.errors import MemoristIntegrationError, sanitize_error  # noqa: E402
 from shared.logging import warn  # noqa: E402
 from shared.payload_parser import (  # noqa: E402
-    content_text,
     insert_memory_attachment,
     parse_inlet_body,
     parse_outlet_body,
@@ -49,14 +48,35 @@ class Filter:
             metadata["memorist_parser_warnings"] = parsed.warnings
         try:
             client = MemoristClient(config)
+            actor_user_id = parsed.user_id or "openwebui:anonymous"
+            request_control = body.get("memorist")
+            if request_control is not None and not isinstance(request_control, dict):
+                raise MemoristIntegrationError("memorist request control must be an object")
+            policy = client.resolve_turn_policy(
+                user_id=actor_user_id,
+                chat_id=parsed.conversation_id or parsed.temporary_chat_id,
+                workspace_id=parsed.workspace_id,
+                request_control=request_control,
+            )
+            metadata["memorist_turn_policy"] = policy.mode
+            metadata["memorist_policy_source"] = policy.source
+            metadata["memorist_runtime_profile"] = policy.runtime_profile
+            metadata["memorist_attachment_review"] = policy.attachment_review
+            metadata["memorist_recall_enabled"] = policy.recall_enabled
+            metadata["openwebui_native_memory_independent"] = True
+            if policy.private:
+                metadata["memorist_private"] = True
+                return body
             resolved = client.resolve_session(
                 openwebui_conversation_id=parsed.conversation_id,
                 title=parsed.title,
-                user_id=parsed.user_id,
+                user_id=actor_user_id,
                 temporary_chat_id=parsed.temporary_chat_id,
                 client_session_nonce=parsed.client_session_nonce,
                 first_message_hash=parsed.first_message_hash,
                 created_at=parsed.timestamp,
+                turn_policy=policy.mode,
+                attachment_review=policy.attachment_review,
             )
             captured = client.capture_message(
                 resolved.session_uuid,
@@ -70,12 +90,17 @@ class Filter:
                 source_message_id=parsed.message_id,
                 turn_index=parsed.turn_index,
                 timestamp=parsed.timestamp,
-                user_id=parsed.user_id,
+                user_id=actor_user_id,
                 raw_payload={"openwebui_message": safe_payload(parsed.user_message)},
+                turn_policy=policy.mode,
+                attachment_review=policy.attachment_review,
+                workspace_uuid=resolved.workspace_uuid or parsed.workspace_id,
             )
             metadata["memorist_session_uuid"] = resolved.session_uuid
             metadata["memorist_input_message_uuid"] = captured.message_uuid
-            if config.preflight_enabled:
+            metadata["memorist_user_uuid"] = actor_user_id
+            metadata["memorist_workspace_uuid"] = resolved.workspace_uuid or parsed.workspace_id
+            if config.preflight_enabled and policy.recall_enabled and policy.attachment_enabled:
                 self._attach_preflight(
                     body,
                     client,
@@ -85,6 +110,10 @@ class Filter:
                     parsed.model_provider,
                     parsed.model_context_window,
                     parsed.recent_conversation_text,
+                    policy.mode,
+                    actor_user_id,
+                    resolved.workspace_uuid or parsed.workspace_id,
+                    policy.attachment_review,
                 )
         except Exception as error:
             return _handle_failure(body, config.fail_open, error)
@@ -92,7 +121,9 @@ class Filter:
             parsed.user_message["content"] = parsed.original_content
         return body
 
-    def outlet(self, body: dict[str, Any], __user__: dict[str, Any] | None = None) -> dict[str, Any]:
+    def outlet(
+        self, body: dict[str, Any], __user__: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         config = _config_from_valves(self.valves)
         if not config.enabled:
             return body
@@ -108,12 +139,23 @@ class Filter:
         if current_response_key in self._completed_response_keys:
             return body
         try:
+            turn_policy = str(metadata.get("memorist_turn_policy") or "full")
+            if turn_policy == "private":
+                return body
             MemoristClient(config).assistant_completed(
                 str(input_message_uuid),
                 assistant_text,
                 metadata.get("memorist_attachment_uuid"),
                 parsed.provider_response_id,
                 raw_payload={"openwebui_response_id": body.get("id")},
+                turn_policy=turn_policy,
+                user_id=str(
+                    metadata.get("memorist_user_uuid")
+                    or (__user__ or {}).get("id")
+                    or "openwebui:anonymous"
+                ),
+                workspace_uuid=metadata.get("memorist_workspace_uuid"),
+                regeneration_uuid=metadata.get("memorist_regeneration_uuid"),
             )
             self._completed_response_keys.add(current_response_key)
         except Exception as error:
@@ -130,6 +172,10 @@ class Filter:
         model_provider: str | None,
         model_context_window: int | None,
         recent_conversation_text: str | None,
+        turn_policy: str,
+        user_id: str,
+        workspace_uuid: str | None,
+        attachment_review: bool,
     ) -> None:
         result = client.preflight(
             session_uuid,
@@ -138,11 +184,28 @@ class Filter:
             model_provider=model_provider,
             model_context_window=model_context_window,
             recent_conversation_text=recent_conversation_text,
+            turn_policy=turn_policy,
+            user_id=user_id,
+            workspace_uuid=workspace_uuid,
+            attachment_review=attachment_review,
         )
         if result.status != "attached" or not result.rendered_attachment:
             return
-        insert_memory_attachment(body, result.rendered_attachment, result.attachment_uuid)
         metadata = _metadata(body)
+        metadata["memorist_attachment_uuid"] = result.attachment_uuid
+        metadata["memorist_user_uuid"] = user_id
+        metadata["memorist_workspace_uuid"] = workspace_uuid
+        if result.attachment_review:
+            metadata["memorist_attachment_pending_review"] = True
+            return
+        if result.attachment_uuid:
+            client.record_attachment_delivery(
+                result.attachment_uuid,
+                user_id=user_id,
+                workspace_uuid=workspace_uuid,
+                idempotency_key=f"filter-delivery:{input_message_uuid}:{result.attachment_uuid}",
+            )
+        insert_memory_attachment(body, result.rendered_attachment, result.attachment_uuid)
         metadata["memorist_retrieval_run_uuid"] = result.retrieval_run_uuid
         metadata["memorist_attachment_token_count"] = result.token_count
         metadata["memorist_effective_token_budget"] = result.effective_token_budget

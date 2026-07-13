@@ -2,12 +2,11 @@ import sqlite3
 from contextlib import suppress
 from time import perf_counter
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from memcore.attachments.budget import compute_attachment_budget
 from memcore.attachments.builder import AttachmentBuilder
 from memcore.config import Settings
-from memcore.governance.delivery import DeliveryTraceService
 from memcore.memory_worker.prompts.registry import (
     PromptExecutionRepository,
     PromptValidationError,
@@ -26,6 +25,7 @@ from memcore.storage.write_actor import get_write_actor
 
 
 class PreflightRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     session_uuid: str
     input_message_uuid: str
     retrieval_mode: str = "standard"
@@ -36,6 +36,10 @@ class PreflightRequest(BaseModel):
     model_context_window: int | None = Field(default=None, ge=1)
     recent_conversation_text: str | None = None
     estimated_recent_conversation_tokens: int | None = Field(default=None, ge=0)
+    turn_policy: str | None = None
+    user_uuid: str | None = None
+    workspace_uuid: str | None = None
+    attachment_review: bool = False
 
 
 class PreflightService:
@@ -218,9 +222,8 @@ class PreflightService:
                 attachment_uuid=attachment_uuid,
                 retrieval_run_uuid=run.retrieval_run_uuid,
             )
-            DeliveryTraceService(self.connection).log_attachment_injected(attachment_uuid)
             self.events.record_preflight_event(
-                "attachment_injected",
+                "attachment_prepared",
                 {"token_count": token_count},
                 session_uuid=request.session_uuid,
                 input_message_uuid=request.input_message_uuid,
@@ -242,6 +245,7 @@ class PreflightService:
                     token_estimation_method=budget.token_estimation_method,
                     attachment_mode=budget.attachment_mode,
                     budget_warnings=budget.warnings,
+                    attachment_review=request.attachment_review,
                 ),
             )
         except Exception as error:

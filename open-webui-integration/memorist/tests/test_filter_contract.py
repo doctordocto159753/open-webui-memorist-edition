@@ -11,11 +11,20 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from shared.schemas import CapturedMessage, PreflightResult, ResolvedSession
+from shared.schemas import (  # noqa: E402
+    CapturedMessage,
+    PreflightResult,
+    ResolvedSession,
+    ResolvedTurnPolicy,
+)
 
 
 class FakeClient:
     assistant_calls = 0
+    capture_calls = 0
+    preflight_calls = 0
+    session_calls = 0
+    delivery_calls = 0
     last_config: Any | None = None
 
     def __init__(self, _config: object) -> None:
@@ -24,14 +33,31 @@ class FakeClient:
         self.status_text = os.getenv("FAKE_PREFLIGHT_STATUS", "attached")
 
     def resolve_session(self, *_args: object, **_kwargs: object) -> ResolvedSession:
+        FakeClient.session_calls += 1
         if self.fail:
             raise TimeoutError("timeout " + "token=" + "REDACTED_TEST_VALUE")
         return ResolvedSession("session-1", "workspace-1", "project-1")
 
     def capture_message(self, *_args: object, **_kwargs: object) -> CapturedMessage:
+        FakeClient.capture_calls += 1
         return CapturedMessage("session-1", "message-1", False)
 
+    def resolve_turn_policy(self, *_args: object, **kwargs: object) -> ResolvedTurnPolicy:
+        control = kwargs.get("request_control") or {}
+        mode = str(control.get("turn_policy") or "full")
+        return ResolvedTurnPolicy(
+            mode=mode,
+            capture_enabled=mode != "private",
+            recall_enabled=mode == "full",
+            attachment_enabled=mode == "full",
+            private=mode == "private",
+            source="turn" if control else "system",
+            attachment_review=bool(control.get("attachment_review", False)),
+            runtime_profile="lite",
+        )
+
     def preflight(self, *_args: object, **_kwargs: object) -> PreflightResult:
+        FakeClient.preflight_calls += 1
         if self.status_text != "attached":
             return PreflightResult(self.status_text)
         return PreflightResult(
@@ -45,6 +71,10 @@ class FakeClient:
     def assistant_completed(self, *_args: object, **_kwargs: object) -> dict[str, Any]:
         FakeClient.assistant_calls += 1
         return {"duplicate": FakeClient.assistant_calls > 1}
+
+    def record_attachment_delivery(self, *_args: object, **_kwargs: object) -> dict[str, Any]:
+        FakeClient.delivery_calls += 1
+        return {"status": "delivered"}
 
 
 def _module():
@@ -79,6 +109,35 @@ def test_preflight_unavailable_fails_open_and_sanitizes_error(monkeypatch) -> No
     result = _module().Filter().inlet(body, None)
     assert result["messages"][-1]["content"] == "hello"
     assert result["metadata"]["memorist_last_error"] == "[redacted]"
+
+
+def test_private_resolves_no_session_and_creates_no_capture_or_preflight(monkeypatch) -> None:
+    monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
+    FakeClient.session_calls = FakeClient.capture_calls = FakeClient.preflight_calls = 0
+    body = {
+        "memorist": {"turn_policy": "private"},
+        "messages": [{"role": "user", "content": "secret"}],
+    }
+
+    result = _module().Filter().inlet(body, {"id": "user-1"})
+
+    assert result["metadata"]["memorist_private"] is True
+    assert FakeClient.session_calls == FakeClient.capture_calls == FakeClient.preflight_calls == 0
+
+
+def test_no_recall_captures_without_preflight(monkeypatch) -> None:
+    monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
+    FakeClient.session_calls = FakeClient.capture_calls = FakeClient.preflight_calls = 0
+    body = {
+        "memorist": {"turn_policy": "no_recall"},
+        "messages": [{"role": "user", "content": "remember this"}],
+    }
+
+    _module().Filter().inlet(body, {"id": "user-1"})
+
+    assert FakeClient.session_calls == 1
+    assert FakeClient.capture_calls == 1
+    assert FakeClient.preflight_calls == 0
 
 
 def test_assistant_response_captured_and_duplicate_deduped(monkeypatch) -> None:
