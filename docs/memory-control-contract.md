@@ -1,5 +1,15 @@
 # Memorist memory-control contract
 
+## Authenticated Open WebUI boundary
+
+Browser code calls only `/api/v1/memorist/*`. Open WebUI must mount
+`open-webui-integration/memorist/backend/router.py` behind its authenticated session
+middleware and populate `request.state.memorist_actor` from the server-verified user and
+workspace membership. The router ignores browser identity headers and JSON identity fields,
+then signs a short-lived, purpose-bound Core assertion. Signing secrets exist only in the
+Open WebUI backend/Filter environment. Direct `/memcore/*` access remains authenticated and
+Core host ports are loopback-bound.
+
 ## Trusted request and network boundary
 
 Sensitive Memory Control, retrieval, attachment, preflight, capture, and assistant-completion

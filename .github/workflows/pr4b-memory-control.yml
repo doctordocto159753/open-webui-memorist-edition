@@ -183,7 +183,9 @@ jobs:
       - working-directory: memorist-core
         run: uv sync --all-extras
       - working-directory: memorist-core
-        run: uv run pytest ../open-webui-integration/memorist/tests/test_filter_contract.py -k review -q
+        run: |
+          uv run pytest ../open-webui-integration/memorist/tests/test_filter_contract.py -k review -q
+          uv run pytest ../open-webui-integration/memorist/tests/test_backend_proxy.py -q
 
   regeneration-concurrency-lite:
     name: Regeneration Concurrency — Lite

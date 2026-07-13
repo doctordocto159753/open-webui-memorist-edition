@@ -145,3 +145,41 @@ def test_actor_claim_validation_and_scope_mismatch(
         ).status_code
         == 403
     )
+
+
+def test_session_and_capture_are_bound_to_verified_workspace(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = _client(monkeypatch, tmp_path)
+    user = f"actor-{uuid4().hex}"
+    workspace = str(uuid4())
+    resolve_path = "/memcore/openwebui/session/resolve"
+    resolved = client.post(
+        resolve_path,
+        json={
+            "openwebui_conversation_id": f"chat-{uuid4().hex}",
+            "user_id": user,
+            "workspace_uuid": workspace,
+            "turn_policy": "no_recall",
+        },
+        headers=_headers(_assertion("POST", resolve_path, user=user, workspace=workspace)),
+    )
+    assert resolved.status_code == 200, resolved.text
+    session_uuid = resolved.json()["session_uuid"]
+    assert resolved.json()["workspace_uuid"] == workspace
+
+    capture_path = "/memcore/openwebui/messages/capture"
+    foreign_workspace = str(uuid4())
+    rejected = client.post(
+        capture_path,
+        json={
+            "session_uuid": session_uuid,
+            "role": "user",
+            "content": "must not cross workspace",
+            "user_id": user,
+            "workspace_uuid": foreign_workspace,
+            "turn_policy": "no_recall",
+        },
+        headers=_headers(_assertion("POST", capture_path, user=user, workspace=foreign_workspace)),
+    )
+    assert rejected.status_code == 403

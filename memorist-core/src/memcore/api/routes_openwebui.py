@@ -42,6 +42,7 @@ class SessionResolveRequest(BaseModel):
     first_message_hash: str | None = None
     title: str | None = None
     user_id: str | None = None
+    workspace_uuid: str | None = None
     source_app: str = "open_webui"
     created_at: str | None = None
     workspace_name: str = "Open WebUI"
@@ -79,8 +80,14 @@ def resolve_session(request: SessionResolveRequest) -> dict[str, Any]:
     if actor is not None:
         if request.user_id not in {None, actor.user_uuid}:
             raise HTTPException(status_code=403, detail="user scope mismatch")
-        request = request.model_copy(update={"user_id": actor.user_uuid})
-    if not request.user_id and not settings.allow_legacy_actor_headers_for_tests:
+        if request.workspace_uuid not in {None, actor.workspace_uuid}:
+            raise HTTPException(status_code=403, detail="workspace scope mismatch")
+        request = request.model_copy(
+            update={"user_id": actor.user_uuid, "workspace_uuid": actor.workspace_uuid}
+        )
+    if (
+        not request.user_id or not request.workspace_uuid
+    ) and not settings.allow_legacy_actor_headers_for_tests:
         return {
             "skipped": True,
             "reason": "trusted_actor_identity_unavailable",
@@ -90,7 +97,7 @@ def resolve_session(request: SessionResolveRequest) -> dict[str, Any]:
         settings,
         user_uuid=request.user_id,
         chat_uuid=request.openwebui_conversation_id or request.temporary_chat_id,
-        workspace_uuid=None,
+        workspace_uuid=request.workspace_uuid,
         turn_override=request.turn_policy,
         attachment_review_override=request.attachment_review,
     )
@@ -105,7 +112,11 @@ def _resolve_session_payload(request: SessionResolveRequest) -> dict[str, Any]:
     settings = get_settings()
 
     def handler(connection: Any) -> dict[str, Any]:
-        workspace_uuid = _default_workspace_uuid(connection, request.workspace_name)
+        workspace_uuid = (
+            _ensure_workspace_uuid(connection, request.workspace_uuid, request.workspace_name)
+            if request.workspace_uuid
+            else _default_workspace_uuid(connection, request.workspace_name)
+        )
         project_uuid = _default_project_uuid(connection, workspace_uuid, request.project_name)
         resolution = resolve_openwebui_session(
             connection,
@@ -197,6 +208,7 @@ def capture_message(request: MessageCaptureRequest) -> dict[str, Any]:
                 client_session_nonce=request.client_session_nonce,
                 first_message_hash=request.first_message_hash,
                 user_id=request.user_id,
+                workspace_uuid=request.workspace_uuid,
                 source_app=request.source_app,
                 created_at=request.timestamp,
             )
@@ -204,8 +216,11 @@ def capture_message(request: MessageCaptureRequest) -> dict[str, Any]:
         session_uuid = str(resolved["session_uuid"])
     else:
         with _connection() as connection:
-            if SessionRepository(connection).get_session(session_uuid) is None:
+            session = SessionRepository(connection).get_session(session_uuid)
+            if session is None:
                 raise HTTPException(status_code=404, detail="session not found")
+            if request.workspace_uuid and session.workspace_uuid != request.workspace_uuid:
+                raise HTTPException(status_code=403, detail="session workspace mismatch")
 
     idempotency_key = request.idempotency_key or _capture_key(request, session_uuid)
     try:
@@ -236,6 +251,9 @@ def capture_message(request: MessageCaptureRequest) -> dict[str, Any]:
 @router.get("/sessions/{session_uuid}/lineage", response_model=None)
 def session_lineage(session_uuid: str) -> dict[str, Any]:
     settings = get_settings()
+    actor = optional_memorist_actor()
+    if actor is None and not settings.allow_legacy_actor_headers_for_tests:
+        raise HTTPException(status_code=401, detail="authenticated Memorist actor required")
     if _is_full_postgres(settings):
         with _pg_connection(settings) as connection:
             row = connection.execute(
@@ -243,6 +261,8 @@ def session_lineage(session_uuid: str) -> dict[str, Any]:
                 (session_uuid,),
             ).fetchone()
             if row is None:
+                raise HTTPException(status_code=404, detail="session not found")
+            if actor is not None and row.get("workspace_uuid") != actor.workspace_uuid:
                 raise HTTPException(status_code=404, detail="session not found")
             return {
                 "session_uuid": session_uuid,
@@ -252,6 +272,8 @@ def session_lineage(session_uuid: str) -> dict[str, Any]:
     with _connection() as connection:
         session = SessionRepository(connection).get_session(session_uuid)
         if session is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        if actor is not None and session.workspace_uuid != actor.workspace_uuid:
             raise HTTPException(status_code=404, detail="session not found")
         return {
             "session_uuid": session_uuid,
@@ -263,24 +285,20 @@ def session_lineage(session_uuid: str) -> dict[str, Any]:
 @router.get("/status", response_model=None)
 def integration_status() -> dict[str, Any]:
     settings = get_settings()
+    actor = optional_memorist_actor()
+    if actor is None and not settings.allow_legacy_actor_headers_for_tests:
+        raise HTTPException(status_code=401, detail="authenticated Memorist actor required")
     if _is_full_postgres(settings):
         with _pg_connection(settings) as connection:
             last_attachment = connection.execute(
                 """
                 SELECT attachment_uuid, created_at, token_count
                 FROM memory_context_attachments
+                WHERE owner_user_uuid = %s AND workspace_uuid = %s
                 ORDER BY created_at DESC
                 LIMIT 1
-                """
-            ).fetchone()
-            last_error = connection.execute(
-                """
-                SELECT last_error_sanitized
-                FROM jobs
-                WHERE last_error_sanitized IS NOT NULL
-                ORDER BY updated_at DESC
-                LIMIT 1
-                """
+                """,
+                (actor.user_uuid, actor.workspace_uuid) if actor is not None else (None, None),
             ).fetchone()
             return {
                 "memorist_core": "connected",
@@ -291,9 +309,7 @@ def integration_status() -> dict[str, Any]:
                 "memory_mode": settings.retrieval_mode,
                 "preflight": "enabled" if settings.preflight_enabled else "disabled",
                 "last_attachment": _jsonable_dict(last_attachment) if last_attachment else None,
-                "last_error": _sanitize_error(str(last_error["last_error_sanitized"]))
-                if last_error
-                else None,
+                "last_error": None,
             }
     with _connection() as connection:
         consistency = run_consistency_check(connection)
@@ -301,18 +317,11 @@ def integration_status() -> dict[str, Any]:
             """
             SELECT attachment_uuid, created_at, token_count
             FROM memory_context_attachments
+            WHERE owner_user_uuid = ? AND workspace_uuid = ?
             ORDER BY created_at DESC
             LIMIT 1
-            """
-        ).fetchone()
-        last_error = connection.execute(
-            """
-            SELECT last_error
-            FROM jobs
-            WHERE last_error IS NOT NULL
-            ORDER BY updated_at DESC
-            LIMIT 1
-            """
+            """,
+            (actor.user_uuid, actor.workspace_uuid) if actor is not None else (None, None),
         ).fetchone()
         return {
             "memorist_core": "connected",
@@ -323,7 +332,7 @@ def integration_status() -> dict[str, Any]:
             "memory_mode": settings.retrieval_mode,
             "preflight": "enabled" if settings.preflight_enabled else "disabled",
             "last_attachment": dict(last_attachment) if last_attachment else None,
-            "last_error": _sanitize_error(last_error["last_error"]) if last_error else None,
+            "last_error": None,
         }
 
 
@@ -416,12 +425,18 @@ def _resolve_session_payload_full(
     user_id = _normalize(request.user_id)
     diagnostics: list[str] = []
     with _pg_connection(settings) as connection, connection.transaction():
-        workspace_uuid = _pg_default_workspace_uuid(connection, request.workspace_name)
+        workspace_uuid = (
+            _pg_ensure_workspace_uuid(connection, request.workspace_uuid, request.workspace_name)
+            if request.workspace_uuid
+            else _pg_default_workspace_uuid(connection, request.workspace_name)
+        )
         project_uuid = _pg_default_project_uuid(connection, workspace_uuid, request.project_name)
-        session = _pg_session_for_alias(connection, conversation_id, user_id)
+        session = _pg_session_for_alias(connection, conversation_id, user_id, workspace_uuid)
         matched_alias_type = "openwebui_chat_id" if session is not None else None
         if session is None:
-            session = _pg_legacy_session_by_conversation_id(connection, conversation_id)
+            session = _pg_legacy_session_by_conversation_id(
+                connection, conversation_id, workspace_uuid
+            )
             if session is not None:
                 matched_alias_type = "legacy_openwebui_conversation_id"
         if session is None:
@@ -477,6 +492,7 @@ def _capture_message_full(settings: Settings, request: MessageCaptureRequest) ->
                 client_session_nonce=request.client_session_nonce,
                 first_message_hash=request.first_message_hash,
                 user_id=request.user_id,
+                workspace_uuid=request.workspace_uuid,
                 source_app=request.source_app,
                 created_at=request.timestamp,
             ),
@@ -488,8 +504,11 @@ def _capture_message_full(settings: Settings, request: MessageCaptureRequest) ->
 
     with _pg_connection(settings) as connection:  # noqa: SIM117
         with connection.transaction():
-            if _pg_session_exists(connection, session_uuid) is None:
+            session = _pg_session_exists(connection, session_uuid)
+            if session is None:
                 raise HTTPException(status_code=404, detail="session not found")
+            if request.workspace_uuid and session.get("workspace_uuid") != request.workspace_uuid:
+                raise HTTPException(status_code=403, detail="session workspace mismatch")
             connection.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 (f"openwebui-capture:{session_uuid}",),
@@ -696,6 +715,25 @@ def _pg_default_workspace_uuid(connection: Any, name: str) -> str:
     return workspace_uuid
 
 
+def _pg_ensure_workspace_uuid(connection: Any, workspace_uuid: str, name: str) -> str:
+    row = connection.execute(
+        "SELECT workspace_uuid FROM workspaces WHERE workspace_uuid = %s",
+        (workspace_uuid,),
+    ).fetchone()
+    if row is not None:
+        return workspace_uuid
+    now = utc_now()
+    connection.execute(
+        """
+        INSERT INTO workspaces (
+            workspace_uuid, name, description, created_at, updated_at, schema_version
+        ) VALUES (%s, %s, NULL, %s, %s, 1)
+        """,
+        (workspace_uuid, name, now, now),
+    )
+    return workspace_uuid
+
+
 def _pg_default_project_uuid(connection: Any, workspace_uuid: str, name: str) -> str:
     row = connection.execute(
         """
@@ -724,7 +762,10 @@ def _pg_default_project_uuid(connection: Any, workspace_uuid: str, name: str) ->
 
 
 def _pg_session_for_alias(
-    connection: Any, conversation_id: str | None, user_id: str | None
+    connection: Any,
+    conversation_id: str | None,
+    user_id: str | None,
+    workspace_uuid: str,
 ) -> dict[str, Any] | None:
     if not conversation_id:
         return None
@@ -735,10 +776,11 @@ def _pg_session_for_alias(
         JOIN sessions AS s ON s.session_uuid = a.session_uuid
         WHERE a.openwebui_chat_id = %s
           AND COALESCE(a.openwebui_user_id, '') = COALESCE(%s, '')
+          AND s.workspace_uuid = %s
         ORDER BY a.created_at DESC
         LIMIT 1
         """,
-        (conversation_id, user_id),
+        (conversation_id, user_id, workspace_uuid),
     ).fetchone()
     return dict(row) if row is not None else None
 
@@ -746,6 +788,7 @@ def _pg_session_for_alias(
 def _pg_legacy_session_by_conversation_id(
     connection: Any,
     conversation_id: str | None,
+    workspace_uuid: str,
 ) -> dict[str, Any] | None:
     if not conversation_id:
         return None
@@ -754,10 +797,11 @@ def _pg_legacy_session_by_conversation_id(
         SELECT *
         FROM sessions
         WHERE openwebui_conversation_id = %s
+          AND workspace_uuid = %s
         ORDER BY created_at
         LIMIT 1
         """,
-        (conversation_id,),
+        (conversation_id, workspace_uuid),
     ).fetchone()
     return dict(row) if row is not None else None
 
@@ -864,6 +908,25 @@ def _default_workspace_uuid(connection: Any, name: str) -> str:
     if workspaces:
         return workspaces[0].workspace_uuid
     return repository.create_workspace(name).workspace_uuid
+
+
+def _ensure_workspace_uuid(connection: Any, workspace_uuid: str, name: str) -> str:
+    row = connection.execute(
+        "SELECT workspace_uuid FROM workspaces WHERE workspace_uuid = ?",
+        (workspace_uuid,),
+    ).fetchone()
+    if row is not None:
+        return workspace_uuid
+    now = utc_now()
+    connection.execute(
+        """
+        INSERT INTO workspaces (
+            workspace_uuid, name, description, created_at, updated_at, schema_version
+        ) VALUES (?, ?, NULL, ?, ?, 1)
+        """,
+        (workspace_uuid, name, now, now),
+    )
+    return workspace_uuid
 
 
 def _default_project_uuid(connection: Any, workspace_uuid: str, name: str) -> str:

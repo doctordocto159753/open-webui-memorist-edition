@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-import json
 import base64
 import hmac
+import json
 import secrets
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any
 from hashlib import sha256
+from typing import Any
 
 from .config import MemoristIntegrationConfig, load_config
 from .errors import MemoristCoreUnavailable, UnsafeMemoristUrl, sanitize_error
@@ -65,6 +65,7 @@ class MemoristClient:
         openwebui_conversation_id: str | None,
         title: str | None,
         user_id: str | None,
+        workspace_uuid: str,
         temporary_chat_id: str | None = None,
         client_session_nonce: str | None = None,
         first_message_hash: str | None = None,
@@ -82,6 +83,7 @@ class MemoristClient:
                 "first_message_hash": first_message_hash,
                 "title": title,
                 "user_id": user_id,
+                "workspace_uuid": workspace_uuid,
                 "created_at": created_at,
                 "turn_policy": turn_policy,
                 "attachment_review": attachment_review,
@@ -256,6 +258,26 @@ class MemoristClient:
             "POST",
             f"/memcore/memory-control/attachments/{urllib.parse.quote(attachment_uuid)}/cancel",
             {"idempotency_key": idempotency_key},
+            actor_user_id=user_id,
+            actor_workspace_id=workspace_uuid,
+        )
+
+    def actor_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        user_id: str,
+        workspace_uuid: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Call an allow-listed Core path from the authenticated Open WebUI backend."""
+        if not path.startswith("/memcore/memory-control/"):
+            raise MemoristCoreUnavailable("backend actor proxy path is not allowed")
+        return self._request(
+            method,
+            path,
+            payload,
             actor_user_id=user_id,
             actor_workspace_id=workspace_uuid,
         )

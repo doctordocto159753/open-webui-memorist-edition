@@ -39,6 +39,8 @@ PROTECTED_PATHS = (
     "/memcore/assistant-response/completed",
     "/memcore/openwebui/session/resolve",
     "/memcore/openwebui/messages/capture",
+    "/memcore/openwebui/sessions/",
+    "/memcore/openwebui/status",
 )
 
 

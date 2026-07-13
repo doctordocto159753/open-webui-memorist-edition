@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import importlib
 import json
@@ -136,15 +136,29 @@ def test_review_without_frontend_cancels_and_outlet_captures_without_attribution
         "messages": [{"role": "user", "content": "review first"}],
     }
     filter_instance = _module().Filter()
-    result = filter_instance.inlet(
-        body, {"id": "user-1", "workspace_id": "workspace-1"}
-    )
+    result = filter_instance.inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
     assert FakeClient.cancel_calls == 1
     assert "memorist_delivered_attachment_uuid" not in result["metadata"]
-    assert result["metadata"]["memorist_pending_attachment_uuid"] == "attachment-1"
+    assert "memorist_pending_attachment_uuid" not in result["metadata"]
     result["messages"] = [{"role": "assistant", "content": "answer without memory"}]
     filter_instance.outlet(result, {"id": "user-1", "workspace_id": "workspace-1"})
     assert FakeClient.assistant_calls == 1
+
+
+def test_review_capable_frontend_keeps_prepared_generation_pending(monkeypatch) -> None:
+    monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
+    FakeClient.cancel_calls = 0
+    body = {
+        "memorist": {"turn_policy": "full", "attachment_review": True},
+        "metadata": {"memorist_review_ui_active": True},
+        "messages": [{"role": "user", "id": "review-message", "content": "review me"}],
+    }
+
+    result = _module().Filter().inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
+
+    assert FakeClient.cancel_calls == 0
+    assert result["metadata"]["memorist_pending_attachment_uuid"] == "attachment-1"
+    assert result["metadata"]["memorist_attachment_pending_review"] is True
 
 
 def test_review_capable_frontend_delivers_exact_server_approved_generation(monkeypatch) -> None:
@@ -155,9 +169,7 @@ def test_review_capable_frontend_delivers_exact_server_approved_generation(monke
         "metadata": {"memorist_approved_attachment_uuid": "attachment-1"},
         "messages": [{"role": "user", "content": "approved send"}],
     }
-    result = _module().Filter().inlet(
-        body, {"id": "user-1", "workspace_id": "workspace-1"}
-    )
+    result = _module().Filter().inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
     assert FakeClient.delivery_calls == 1
     assert result["metadata"]["memorist_delivered_attachment_uuid"] == "attachment-1"
     assert "server-rendered approved context" in result["messages"][0]["content"]
@@ -208,7 +220,9 @@ def test_no_recall_captures_without_preflight(monkeypatch) -> None:
     assert FakeClient.preflight_calls == 0
 
 
-def test_regeneration_no_recall_reuses_input_without_session_capture_or_preflight(monkeypatch) -> None:
+def test_regeneration_no_recall_reuses_input_without_session_capture_or_preflight(
+    monkeypatch,
+) -> None:
     monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
     monkeypatch.setenv("FAKE_RUNTIME_PROFILE", "full")
     FakeClient.session_calls = FakeClient.capture_calls = FakeClient.preflight_calls = 0

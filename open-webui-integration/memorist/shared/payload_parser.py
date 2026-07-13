@@ -205,11 +205,8 @@ def _conversation_id(body: dict[str, Any], metadata: dict[str, Any]) -> str | No
 
 
 def _workspace_id(user: dict[str, Any] | None, metadata: dict[str, Any]) -> str | None:
-    value = (
-        (user or {}).get("workspace_id")
-        or metadata.get("memorist_workspace_uuid")
-        or metadata.get("workspace_id")
-    )
+    # Request metadata is browser-controlled and must never become a signed actor claim.
+    value = (user or {}).get("workspace_id") or (user or {}).get("workspace_uuid")
     return str(value) if value is not None else None
 
 

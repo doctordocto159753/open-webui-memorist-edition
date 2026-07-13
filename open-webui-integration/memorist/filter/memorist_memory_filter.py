@@ -57,6 +57,7 @@ class Filter:
                 raise MemoristIntegrationError("memorist request control must be an object")
             policy = client.resolve_turn_policy(
                 user_id=actor_user_id,
+                workspace_uuid=parsed.workspace_id,
                 chat_id=parsed.conversation_id or parsed.temporary_chat_id,
                 workspace_id=parsed.workspace_id,
                 request_control=request_control,
@@ -244,13 +245,16 @@ class Filter:
         metadata["memorist_workspace_uuid"] = workspace_uuid
         if result.attachment_review:
             metadata["memorist_attachment_pending_review"] = True
-            if result.attachment_uuid:
+            review_ui_active = bool(metadata.get("memorist_review_ui_active"))
+            if result.attachment_uuid and not review_ui_active:
                 client.cancel_attachment_before_send(
                     result.attachment_uuid,
                     user_id=user_id,
                     workspace_uuid=workspace_uuid,
                     idempotency_key=f"review-no-ui:{input_message_uuid}:{result.attachment_uuid}",
                 )
+                metadata.pop("memorist_pending_attachment_uuid", None)
+                metadata["memorist_attachment_pending_review"] = False
             return
         if result.attachment_uuid:
             client.record_attachment_delivery(

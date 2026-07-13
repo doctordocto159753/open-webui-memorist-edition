@@ -148,7 +148,7 @@ export type PrivacyAcknowledgementResponse = {
 };
 
 export class MemoristClient {
-  constructor(private readonly baseUrl: string = "/memcore") {}
+  constructor(private readonly baseUrl: string = "/api/v1/memorist") {}
 
   async health(): Promise<MemoristHealth> {
     return this.get<MemoristHealth>("/health");
