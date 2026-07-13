@@ -1,0 +1,26 @@
+name: PR4-B Source Bootstrap
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-bootstrap:
+    name: PR4-B Source Bootstrap
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upload exact source
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr4b-source-${{ github.event.pull_request.head.sha || github.sha }}
+          path: .
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
