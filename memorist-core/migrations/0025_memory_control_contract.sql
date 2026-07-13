@@ -114,6 +114,9 @@ ALTER TABLE retrieval_runs ADD COLUMN degraded_reason TEXT;
 CREATE INDEX IF NOT EXISTS idx_memorist_policy_defaults_resolution
 ON memorist_policy_defaults(scope_type, scope_uuid, workspace_uuid);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memorist_policy_defaults_scope_unique
+ON memorist_policy_defaults(scope_type, scope_uuid, COALESCE(workspace_uuid, ''));
+
 CREATE INDEX IF NOT EXISTS idx_memorist_turn_contract_scope
 ON memorist_turn_contracts(workspace_uuid, user_uuid, chat_uuid);
 

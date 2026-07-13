@@ -6,6 +6,26 @@ export type MemoristActorScope = {
   userId: string;
   workspaceId?: string | null;
 };
+export type MemoristRegenerationInstruction = {
+  regeneration_uuid: string;
+  original_input_message_uuid: string;
+  original_user_prompt: string;
+  turn_policy: "no_recall";
+  create_attachment: false;
+  duplicate_user_capture: false;
+  original_attachment_audit_preserved: true;
+  prompt_hash: string;
+};
+export type MemoristRegenerationRequestBody = {
+  messages: Array<{ role: "user"; content: string }>;
+  memorist: { turn_policy: "no_recall"; attachment_review: false };
+  metadata: {
+    memorist_regeneration_uuid: string;
+    memorist_input_message_uuid: string;
+    memorist_user_uuid: string;
+    memorist_workspace_uuid?: string | null;
+  };
+};
 export const MEMORY_CONTROL_LABELS = {
   memoristRecall: "Memorist Recall",
   openWebUINativeMemory: "Open WebUI Native Memory",
@@ -190,8 +210,20 @@ export class MemoristClient {
   async suppressAttachment(attachmentUuid: string, idempotencyKey: string, actor: MemoristActorScope): Promise<unknown> {
     return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/suppress`, { idempotency_key: idempotencyKey }, this.actorHeaders(actor));
   }
-  async regenerateWithoutRecall(attachmentUuid: string, idempotencyKey: string, actor: MemoristActorScope): Promise<unknown> {
-    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/regenerate-without-recall`, { idempotency_key: idempotencyKey }, this.actorHeaders(actor));
+  async regenerateWithoutRecall(attachmentUuid: string, idempotencyKey: string, actor: MemoristActorScope): Promise<MemoristRegenerationInstruction> {
+    return this.post<MemoristRegenerationInstruction>(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/regenerate-without-recall`, { idempotency_key: idempotencyKey }, this.actorHeaders(actor));
+  }
+  buildRegenerationRequest(instruction: MemoristRegenerationInstruction, actor: MemoristActorScope): MemoristRegenerationRequestBody {
+    return {
+      messages: [{ role: "user", content: instruction.original_user_prompt }],
+      memorist: { turn_policy: "no_recall", attachment_review: false },
+      metadata: {
+        memorist_regeneration_uuid: instruction.regeneration_uuid,
+        memorist_input_message_uuid: instruction.original_input_message_uuid,
+        memorist_user_uuid: actor.userId,
+        memorist_workspace_uuid: actor.workspaceId,
+      },
+    };
   }
 
   private async get<T = unknown>(path: string, headers?: Record<string, string>): Promise<T> {

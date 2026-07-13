@@ -459,6 +459,10 @@ def _capture_message_full(settings: Settings, request: MessageCaptureRequest) ->
         with connection.transaction():
             if _pg_session_exists(connection, session_uuid) is None:
                 raise HTTPException(status_code=404, detail="session not found")
+            connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"openwebui-capture:{session_uuid}",),
+            )
             existing = connection.execute(
                 """
                 SELECT session_uuid, message_uuid

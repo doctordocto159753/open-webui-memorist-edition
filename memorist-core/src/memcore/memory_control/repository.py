@@ -237,8 +237,18 @@ class MemoryControlRepository:
         )
         if attachment is None:
             raise LookupError("attachment not found")
-        if lifecycle_status == "delivered" and _is_expired(attachment.get("expires_at")):
-            raise ValueError("attachment expired before delivery")
+        if lifecycle_status == "delivered":
+            if _is_expired(attachment.get("expires_at")):
+                raise ValueError("attachment expired before delivery")
+            if str(attachment.get("status") or "active") != "active":
+                raise ValueError("inactive attachment cannot be delivered")
+            if attachment.get("stale_reason"):
+                raise ValueError("stale attachment cannot be delivered")
+            if (
+                bool(attachment.get("attachment_review"))
+                and str(attachment.get("lifecycle_status") or "prepared") != "approved"
+            ):
+                raise ValueError("attachment approval required before delivery")
         existing = self.connection.execute(
             """
             SELECT * FROM memorist_attachment_lifecycle_events
@@ -309,6 +319,23 @@ class MemoryControlRepository:
         }
         self._insert("memorist_attachment_lifecycle_events", event)
         self.connection.commit()
+        input_message_uuid = attachment.get("input_message_uuid")
+        contract = (
+            self.get_turn_contract(str(input_message_uuid))
+            if input_message_uuid is not None
+            else None
+        )
+        if contract is not None:
+            self.audit(
+                f"attachment_{lifecycle_status}",
+                normalize_turn_policy(str(contract["turn_policy"])),
+                session_uuid=str(attachment["session_uuid"]),
+                input_message_uuid=str(input_message_uuid),
+                workspace_uuid=workspace_uuid,
+                user_uuid=user_uuid,
+                attachment_uuid=attachment_uuid,
+                detail={"lifecycle_event_uuid": event["lifecycle_event_uuid"]},
+            )
         return event
 
     def _policy_row(

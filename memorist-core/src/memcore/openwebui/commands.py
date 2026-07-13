@@ -89,36 +89,34 @@ class CaptureOpenWebUIMessageCommand:
                 """,
                 (self.idempotency_key, self.session_uuid, message.message_uuid, utc_now()),
             )
-            if self.role == "assistant":
-                model_control = ModelControlRepository(connection)
-                extraction_default = model_control.resolve_default(ModelRole.MEMORY_EXTRACTION)
-                extraction_profile_uuid = (
-                    str(extraction_default["model_profile_uuid"])
-                    if extraction_default is not None
-                    and extraction_default.get("model_profile_uuid")
-                    else None
+            model_control = ModelControlRepository(connection)
+            extraction_default = model_control.resolve_default(ModelRole.MEMORY_EXTRACTION)
+            extraction_profile_uuid = (
+                str(extraction_default["model_profile_uuid"])
+                if extraction_default is not None and extraction_default.get("model_profile_uuid")
+                else None
+            )
+            job = JobRepository(connection).enqueue_job_once(
+                "memory_extraction",
+                {
+                    "message_uuid": message.message_uuid,
+                    "session_uuid": self.session_uuid,
+                    "model_role": ModelRole.MEMORY_EXTRACTION.value,
+                    "model_profile_uuid": extraction_profile_uuid,
+                },
+                priority=60,
+            )
+            model_control.record_usage_event(
+                UsageEventCreate(
+                    role=ModelRole.MEMORY_EXTRACTION,
+                    stage="memory_extraction_queued",
+                    model_profile_uuid=extraction_profile_uuid,
+                    session_uuid=self.session_uuid,
+                    message_uuid=message.message_uuid,
+                    job_uuid=job.job_uuid,
+                    status="queued",
                 )
-                job = JobRepository(connection).enqueue_job_once(
-                    "memory_extraction",
-                    {
-                        "message_uuid": message.message_uuid,
-                        "session_uuid": self.session_uuid,
-                        "model_role": ModelRole.MEMORY_EXTRACTION.value,
-                        "model_profile_uuid": extraction_profile_uuid,
-                    },
-                    priority=60,
-                )
-                model_control.record_usage_event(
-                    UsageEventCreate(
-                        role=ModelRole.MEMORY_EXTRACTION,
-                        stage="memory_extraction_queued",
-                        model_profile_uuid=extraction_profile_uuid,
-                        session_uuid=self.session_uuid,
-                        message_uuid=message.message_uuid,
-                        job_uuid=job.job_uuid,
-                        status="queued",
-                    )
-                )
+            )
         return WriteResult(
             command_type=self.command_type,
             target_type="message",

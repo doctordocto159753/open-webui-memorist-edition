@@ -61,6 +61,7 @@ jobs:
         working-directory: memorist-core
         run: |
           uv run pytest tests/test_memory_control_contract_full.py tests/test_memory_control_runtime_parity.py -q --junitxml=full-contract.xml
+          FAKE_RUNTIME_PROFILE=full uv run pytest ../open-webui-integration/memorist/tests/test_filter_contract.py -q
           uv run python -c "import xml.etree.ElementTree as E; r=E.parse('full-contract.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
 
   graph-contract:
@@ -113,6 +114,8 @@ jobs:
   attachment-security:
     name: Attachment Security
     runs-on: ubuntu-latest
+    services: *postgres
+    env: *full_env
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -121,7 +124,10 @@ jobs:
         run: uv sync --all-extras
       - name: Scope, substitution, and runtime-switch protection
         working-directory: memorist-core
-        run: uv run pytest tests/test_memory_control_contract_lite.py -k "attachment_authorization or request_cannot_switch" -q
+        run: |
+          MEMORIST_RUNTIME_PROFILE=lite MEMORIST_CANONICAL_STORE=sqlite uv run pytest tests/test_memory_control_contract_lite.py -k "attachment_authorization or request_cannot_switch" -q
+          uv run pytest tests/test_memory_control_runtime_parity.py tests/test_memory_control_contract_full.py -k "policy_attachment_and_restart or full_graph_retrieval" -q --junitxml=attachment-full.xml
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('attachment-full.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
 
   regeneration-contract:
     name: Regeneration Contract

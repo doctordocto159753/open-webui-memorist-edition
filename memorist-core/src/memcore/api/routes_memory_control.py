@@ -306,6 +306,16 @@ def regenerate_without_recall(
             )
             connection.commit()
         else:
+            if (
+                str(existing["original_attachment_uuid"]) != attachment_uuid
+                or str(existing["original_input_message_uuid"]) != input_message_uuid
+                or existing["user_uuid"] != actor_user
+                or existing["workspace_uuid"] != actor_workspace
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="idempotency key belongs to a different regeneration request",
+                )
             regeneration_uuid = str(existing["regeneration_uuid"])
         if existing is None:
             repository.audit(

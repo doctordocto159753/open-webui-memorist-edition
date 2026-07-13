@@ -67,13 +67,14 @@ class FalkorDBClient:
                 f"MATCH (w:Workspace {{uuid: {_cypher_quote(workspace_uuid)}}})",
                 "MATCH (w)-[:IN_PROJECT]->(:Project)-[:HAS_SESSION]->(:Session)-[:HAS_MESSAGE]->"
                 "(:Message)-[:HAS_UNIT]->(:TextUnit)-[:HAS_JAKOBSON_ANNOTATION]->"
-                "(:JakobsonAnnotation)-[:ROUTES_TO]->(:MemorySignalRoute)-[:DERIVED_FROM]->"
-                "(:MemoryCandidate)<-[:EVIDENCED_BY]-(ver:MemoryVersion)",
+                "(:JakobsonAnnotation)-[:ROUTES_TO]->(route:MemorySignalRoute)-[:DERIVED_FROM]->"
+                "(candidate:MemoryCandidate)<-[:EVIDENCED_BY]-(ver:MemoryVersion)",
                 "MATCH (mem:Memory)-[:HAS_VERSION]->(ver)",
                 "WHERE mem.status = 'active' AND ver.status = 'current'",
                 f"AND any(term IN [{term_list}] WHERE "
                 "toLower(coalesce(ver.text, '')) CONTAINS term)",
-                "RETURN DISTINCT mem.uuid AS memory_uuid, ver.uuid AS memory_version_uuid",
+                "RETURN DISTINCT mem.uuid AS memory_uuid, ver.uuid AS memory_version_uuid, "
+                "route.uuid AS graph_fact_uuid, candidate.uuid AS graph_edge_uuid",
                 f"LIMIT {max(1, min(limit, 50))}",
             ]
         )
@@ -149,7 +150,15 @@ def _graph_rows(result: Any) -> list[dict[str, str]]:
         memory_uuid = record.get("memory_uuid") or record.get("mem.uuid")
         version_uuid = record.get("memory_version_uuid") or record.get("ver.uuid")
         if memory_uuid and version_uuid:
-            output.append({"memory_uuid": memory_uuid, "memory_version_uuid": version_uuid})
+            graph_record = {
+                "memory_uuid": memory_uuid,
+                "memory_version_uuid": version_uuid,
+            }
+            for key in ("graph_fact_uuid", "graph_edge_uuid"):
+                value = record.get(key)
+                if value and value != "None":
+                    graph_record[key] = value
+            output.append(graph_record)
     return output
 
 

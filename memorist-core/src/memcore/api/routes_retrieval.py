@@ -101,9 +101,19 @@ def run_retrieval(request: RetrievalRequest) -> dict[str, Any]:
 
 
 @router.get("/retrieval/runs/{retrieval_run_uuid}", response_model=None)
-def get_retrieval_run(retrieval_run_uuid: str) -> dict[str, Any]:
+def get_retrieval_run(
+    retrieval_run_uuid: str,
+    x_memorist_user_id: str | None = Header(default=None),
+    x_memorist_workspace_id: str | None = Header(default=None),
+) -> dict[str, Any]:
     settings = get_settings()
     with memory_control_connection(settings) as connection:
+        _authorize_retrieval_run(
+            connection,
+            retrieval_run_uuid,
+            x_memorist_user_id,
+            x_memorist_workspace_id,
+        )
         repository = RetrievalRepository(connection)
         run = repository.get_run(retrieval_run_uuid)
         if run is None:
@@ -116,9 +126,19 @@ def get_retrieval_run(retrieval_run_uuid: str) -> dict[str, Any]:
 
 
 @router.get("/retrieval/runs/{retrieval_run_uuid}/candidates", response_model=None)
-def get_retrieval_candidates(retrieval_run_uuid: str) -> list[dict[str, Any]]:
+def get_retrieval_candidates(
+    retrieval_run_uuid: str,
+    x_memorist_user_id: str | None = Header(default=None),
+    x_memorist_workspace_id: str | None = Header(default=None),
+) -> list[dict[str, Any]]:
     settings = get_settings()
     with memory_control_connection(settings) as connection:
+        _authorize_retrieval_run(
+            connection,
+            retrieval_run_uuid,
+            x_memorist_user_id,
+            x_memorist_workspace_id,
+        )
         return [
             candidate.model_dump(mode="json")
             for candidate in RetrievalRepository(connection).list_candidates(retrieval_run_uuid)
@@ -223,7 +243,6 @@ def assistant_response_completed(request: AssistantResponseCompletedRequest) -> 
         input_message = messages.get_message(request.input_message_uuid)
         if input_message is None:
             raise HTTPException(status_code=404, detail="input message not found")
-
         existing = retrieval_repository.get_assistant_response_link(
             request.input_message_uuid,
             content_hash,
@@ -363,6 +382,32 @@ def _as_preflight(request: RetrievalRequest) -> PreflightRequest:
     )
 
 
+def _authorize_retrieval_run(
+    connection: Any,
+    retrieval_run_uuid: str,
+    user_uuid: str | None,
+    workspace_uuid: str | None,
+) -> None:
+    if not user_uuid:
+        raise HTTPException(status_code=401, detail="Memorist actor identity required")
+    row = connection.execute(
+        """
+        SELECT contract.user_uuid, contract.workspace_uuid
+        FROM retrieval_runs run
+        JOIN memorist_turn_contracts contract
+          ON contract.input_message_uuid = run.input_message_uuid
+        WHERE run.retrieval_run_uuid = ?
+        """,
+        (retrieval_run_uuid,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="retrieval run not found")
+    if row["user_uuid"] not in {None, user_uuid}:
+        raise HTTPException(status_code=404, detail="retrieval run not found")
+    if row["workspace_uuid"] != workspace_uuid:
+        raise HTTPException(status_code=404, detail="retrieval run not found")
+
+
 def _policy_for_input(
     connection: Any,
     settings: Settings,
@@ -380,6 +425,10 @@ def _policy_for_input(
             or regeneration["original_input_message_uuid"] != request.input_message_uuid
         ):
             raise HTTPException(status_code=404, detail="regeneration request not found")
+        if regeneration["user_uuid"] is not None and not request.user_uuid:
+            raise HTTPException(status_code=401, detail="regeneration user identity required")
+        if regeneration["workspace_uuid"] is not None and not request.workspace_uuid:
+            raise HTTPException(status_code=401, detail="regeneration workspace identity required")
         if request.user_uuid and regeneration["user_uuid"] not in {None, request.user_uuid}:
             raise HTTPException(status_code=403, detail="regeneration user scope mismatch")
         if request.workspace_uuid and regeneration["workspace_uuid"] != request.workspace_uuid:
@@ -389,6 +438,10 @@ def _policy_for_input(
         )
     contract = repository.get_turn_contract(request.input_message_uuid)
     if contract is not None:
+        if contract.get("user_uuid") is not None and not request.user_uuid:
+            raise HTTPException(status_code=401, detail="user identity required")
+        if contract.get("workspace_uuid") is not None and not request.workspace_uuid:
+            raise HTTPException(status_code=401, detail="workspace identity required")
         if request.user_uuid and contract.get("user_uuid") not in {None, request.user_uuid}:
             raise HTTPException(status_code=403, detail="user scope mismatch")
         if request.workspace_uuid and contract.get("workspace_uuid") != request.workspace_uuid:
@@ -404,6 +457,17 @@ def _run_controlled_preflight(settings: Settings, request: PreflightRequest) -> 
             bool(contract.get("attachment_review")) if contract else request.attachment_review
         )
         if policy.private or not policy.recall_enabled or not policy.attachment_enabled:
+            if not policy.private:
+                repository = MemoryControlRepository(connection, settings.runtime_profile)
+                repository.audit(
+                    "retrieval_suppressed",
+                    policy,
+                    session_uuid=request.session_uuid,
+                    input_message_uuid=request.input_message_uuid,
+                    workspace_uuid=request.workspace_uuid,
+                    user_uuid=request.user_uuid,
+                    detail={"reason": "turn_policy"},
+                )
             return PreflightResponse(
                 status=PreflightStatus.DISABLED,
                 latency_ms=0,
@@ -412,9 +476,12 @@ def _run_controlled_preflight(settings: Settings, request: PreflightRequest) -> 
                 attachment_review=attachment_review,
             )
         if settings.runtime_profile == "full":
-            return FullPostgresPreflightService(connection, settings).run(
-                request, policy, attachment_review=attachment_review
-            )
+            try:
+                return FullPostgresPreflightService(connection, settings).run(
+                    request, policy, attachment_review=attachment_review
+                )
+            except PermissionError as error:
+                raise HTTPException(status_code=403, detail=str(error)) from error
         response = PreflightService(connection, settings).run(
             request.model_copy(update={"attachment_review": attachment_review})
         )
@@ -532,6 +599,10 @@ def _assistant_response_completed_full(
         ).fetchone()
         if input_message is None:
             raise HTTPException(status_code=404, detail="input message not found")
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+            (f"assistant-capture:{input_message['session_uuid']}",),
+        )
         actor_user = request.user_uuid or (
             str(contract.get("user_uuid")) if contract and contract.get("user_uuid") else None
         )

@@ -53,7 +53,7 @@ class FakeClient:
             private=mode == "private",
             source="turn" if control else "system",
             attachment_review=bool(control.get("attachment_review", False)),
-            runtime_profile="lite",
+            runtime_profile=os.getenv("FAKE_RUNTIME_PROFILE", "lite"),
         )
 
     def preflight(self, *_args: object, **_kwargs: object) -> PreflightResult:
@@ -138,6 +138,29 @@ def test_no_recall_captures_without_preflight(monkeypatch) -> None:
     assert FakeClient.session_calls == 1
     assert FakeClient.capture_calls == 1
     assert FakeClient.preflight_calls == 0
+
+
+def test_regeneration_no_recall_reuses_input_without_session_capture_or_preflight(monkeypatch) -> None:
+    monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
+    monkeypatch.setenv("FAKE_RUNTIME_PROFILE", "full")
+    FakeClient.session_calls = FakeClient.capture_calls = FakeClient.preflight_calls = 0
+    body = {
+        "memorist": {"turn_policy": "no_recall", "attachment_review": False},
+        "metadata": {
+            "memorist_regeneration_uuid": "regen-1",
+            "memorist_input_message_uuid": "original-message-1",
+            "memorist_attachment_uuid": "stale-attachment",
+        },
+        "messages": [{"role": "user", "content": "original prompt"}],
+    }
+
+    result = _module().Filter().inlet(body, {"id": "user-1"})
+
+    assert result["messages"][-1]["content"] == "original prompt"
+    assert result["metadata"]["memorist_regeneration_uuid"] == "regen-1"
+    assert result["metadata"]["memorist_input_message_uuid"] == "original-message-1"
+    assert "memorist_attachment_uuid" not in result["metadata"]
+    assert FakeClient.session_calls == FakeClient.capture_calls == FakeClient.preflight_calls == 0
 
 
 def test_assistant_response_captured_and_duplicate_deduped(monkeypatch) -> None:

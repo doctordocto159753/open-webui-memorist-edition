@@ -95,6 +95,23 @@ class FullPostgresPreflightService:
         canonical = self._canonical_candidates(scope, limit=30)
         active_blocks = self._active_blocks(scope)
         graph_rows, graph_status, degraded_reason = self._graph_candidates(scope)
+        if graph_status == "degraded" and not self.settings.allow_full_graph_degraded:
+            self.connection.execute(
+                """
+                UPDATE retrieval_runs
+                SET status = 'failed', graph_status = 'degraded', degraded_reason = ?,
+                    finished_at = ?, latency_ms = ?
+                WHERE retrieval_run_uuid = ?
+                """,
+                (
+                    degraded_reason or "falkordb_unavailable",
+                    utc_now(),
+                    int((perf_counter() - started) * 1000),
+                    run_uuid,
+                ),
+            )
+            self.connection.commit()
+            raise RuntimeError(f"Full graph retrieval unavailable: {degraded_reason or 'unknown'}")
         selected = self._validate_and_merge(scope, canonical, graph_rows)
         attachment_uuid: str | None = None
         rendered: str | None = None
@@ -192,7 +209,9 @@ class FullPostgresPreflightService:
         ).fetchone()
         if row is None:
             raise LookupError("session or input message not found")
-        if request.workspace_uuid and str(row["workspace_uuid"]) != request.workspace_uuid:
+        if not request.workspace_uuid:
+            raise PermissionError("workspace identity required")
+        if str(row["workspace_uuid"]) != request.workspace_uuid:
             raise PermissionError("workspace scope mismatch")
         return dict(row)
 
@@ -215,7 +234,7 @@ class FullPostgresPreflightService:
                    m.scope_uuid, mv.normalized_text, mv.confidence, mv.importance,
                    mv.valid_from, mv.valid_until,
                    COALESCE(mc.source_authority, 'unknown') AS source_authority,
-                   ce.evidence_text
+                   ce.evidence_uuid, ce.evidence_text
             FROM memories m
             JOIN memory_versions mv ON mv.memory_version_uuid = m.current_version_uuid
             LEFT JOIN memory_candidates mc ON mc.candidate_uuid = mv.source_candidate_uuid
@@ -280,6 +299,8 @@ class FullPostgresPreflightService:
             version_uuid = graph["memory_version_uuid"]
             if version_uuid in by_version:
                 by_version[version_uuid]["graph"] = True
+                by_version[version_uuid]["graph_fact_uuid"] = graph.get("graph_fact_uuid")
+                by_version[version_uuid]["graph_edge_uuid"] = graph.get("graph_edge_uuid")
                 continue
             validated = self.connection.execute(
                 """
@@ -287,7 +308,7 @@ class FullPostgresPreflightService:
                        m.scope_type,
                        m.scope_uuid, mv.normalized_text, mv.confidence, mv.importance,
                        mv.valid_from, mv.valid_until, 'graph_projection' AS source_authority,
-                       NULL AS evidence_text
+                       NULL AS evidence_uuid, NULL AS evidence_text
                 FROM memories m JOIN memory_versions mv
                   ON mv.memory_version_uuid = m.current_version_uuid
                 WHERE m.memory_uuid = ? AND mv.memory_version_uuid = ?
@@ -305,7 +326,12 @@ class FullPostgresPreflightService:
                 ),
             ).fetchone()
             if validated is not None:
-                by_version[version_uuid] = {**dict(validated), "graph": True}
+                by_version[version_uuid] = {
+                    **dict(validated),
+                    "graph": True,
+                    "graph_fact_uuid": graph.get("graph_fact_uuid"),
+                    "graph_edge_uuid": graph.get("graph_edge_uuid"),
+                }
         items: list[ScoredMemoryItem] = []
         for index, row in enumerate(by_version.values()):
             score = max(0.1, 1.0 - index * 0.04) + (0.08 if row.get("graph") else 0)
@@ -323,7 +349,13 @@ class FullPostgresPreflightService:
                     source_authority_label=str(row["source_authority"]),
                     evidence_text=row["evidence_text"],
                     final_score=round(score, 6),
-                    debug_score_trace={"postgres_canonical": True, "graph": bool(row.get("graph"))},
+                    debug_score_trace={
+                        "postgres_canonical": True,
+                        "graph": bool(row.get("graph")),
+                        "evidence_uuid": row.get("evidence_uuid"),
+                        "graph_fact_uuid": row.get("graph_fact_uuid"),
+                        "graph_edge_uuid": row.get("graph_edge_uuid"),
+                    },
                 )
             )
         return sorted(items, key=lambda item: item.final_score, reverse=True)[:12]
@@ -362,7 +394,10 @@ class FullPostgresPreflightService:
                             "scope_type": block["scope_type"],
                             "scope_uuid": block["scope_uuid"],
                         },
-                        "value": block["value"],
+                        "memory_uuid": block["block_uuid"],
+                        "memory_version_uuid": block["block_version_uuid"],
+                        "normalized_text": block["value"],
+                        "evidence_text": None,
                     }
                     for block in active_blocks
                 ]
@@ -386,8 +421,10 @@ class FullPostgresPreflightService:
             row for row in graph_rows if row["memory_version_uuid"] in selected_versions
         ]
         graph_source_ids = [
-            _graph_source_uuid(row["memory_uuid"], row["memory_version_uuid"])
+            source_uuid
             for row in validated_graph_rows
+            for source_uuid in (row.get("graph_fact_uuid"), row.get("graph_edge_uuid"))
+            if source_uuid
         ]
         self.connection.execute(
             """
@@ -438,15 +475,32 @@ class FullPostgresPreflightService:
                 now,
             ),
         )
-        graph_versions = {row["memory_version_uuid"] for row in validated_graph_rows}
-        for item in selected:
-            source_type = (
-                "graph" if item.memory_version_uuid in graph_versions else "memory_version"
-            )
-            source_uuid = (
-                _graph_source_uuid(item.memory_uuid, item.memory_version_uuid)
-                if source_type == "graph"
-                else item.memory_version_uuid
+        for rank, item in enumerate(selected, start=1):
+            trace = item.debug_score_trace or {}
+            self.connection.execute(
+                """
+                INSERT INTO retrieval_candidates (
+                    retrieval_candidate_uuid, retrieval_run_uuid, memory_uuid,
+                    memory_version_uuid, generator_type, generator_rank, graph_score,
+                    fused_score, final_score, decision, score_trace_jsonb,
+                    score_trace_ijson, source_channel,
+                    created_at, schema_version
+                ) VALUES (?, ?, ?, ?, 'full_postgres_graph', ?, ?, ?, ?, 'selected',
+                          ?::jsonb, ?, 'canonical_postgres', ?, 1)
+                """,
+                (
+                    new_uuid(),
+                    run_uuid,
+                    item.memory_uuid,
+                    item.memory_version_uuid,
+                    rank,
+                    1.0 if trace.get("graph") else 0.0,
+                    item.final_score,
+                    item.final_score,
+                    json.dumps(trace, ensure_ascii=False, sort_keys=True),
+                    dump_ijson(trace),
+                    now,
+                ),
             )
             self.connection.execute(
                 """
@@ -461,8 +515,8 @@ class FullPostgresPreflightService:
                     new_uuid(),
                     run_uuid,
                     attachment_uuid,
-                    source_type,
-                    source_uuid,
+                    "memory_version",
+                    item.memory_version_uuid,
                     item.memory_uuid,
                     item.memory_version_uuid,
                     scope["workspace_uuid"],
@@ -479,6 +533,32 @@ class FullPostgresPreflightService:
                     now,
                 ),
             )
+            evidence_uuid = trace.get("evidence_uuid")
+            if evidence_uuid:
+                self._insert_source(
+                    run_uuid,
+                    attachment_uuid,
+                    "source_evidence",
+                    str(evidence_uuid),
+                    scope,
+                    item,
+                    now,
+                )
+            for source_type, key in (
+                ("graph_fact", "graph_fact_uuid"),
+                ("graph_edge", "graph_edge_uuid"),
+            ):
+                source_uuid = trace.get(key)
+                if source_uuid:
+                    self._insert_source(
+                        run_uuid,
+                        attachment_uuid,
+                        source_type,
+                        str(source_uuid),
+                        scope,
+                        item,
+                        now,
+                    )
         for block in active_blocks:
             self.connection.execute(
                 """
@@ -507,6 +587,39 @@ class FullPostgresPreflightService:
             )
         return attachment_uuid, rendered, token_count
 
+    def _insert_source(
+        self,
+        run_uuid: str,
+        attachment_uuid: str,
+        source_type: str,
+        source_uuid: str,
+        scope: dict[str, Any],
+        item: ScoredMemoryItem,
+        now: Any,
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO memorist_retrieval_sources (
+                retrieval_source_uuid, retrieval_run_uuid, attachment_uuid, source_type,
+                source_uuid, memory_uuid, memory_version_uuid, workspace_uuid,
+                provenance_ijson, created_at, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+            ON CONFLICT (retrieval_run_uuid, source_type, source_uuid) DO NOTHING
+            """,
+            (
+                new_uuid(),
+                run_uuid,
+                attachment_uuid,
+                source_type,
+                source_uuid,
+                item.memory_uuid,
+                item.memory_version_uuid,
+                scope["workspace_uuid"],
+                dump_ijson({"canonical_store": "postgres", "source_type": source_type}),
+                now,
+            ),
+        )
+
 
 def _query_terms(query: str) -> list[str]:
     return list(
@@ -520,7 +633,3 @@ def _query_terms(query: str) -> list[str]:
 
 def _confidence_label(value: float) -> str:
     return "high" if value >= 0.8 else "medium" if value >= 0.5 else "low"
-
-
-def _graph_source_uuid(memory_uuid: str, version_uuid: str) -> str:
-    return "graph:" + sha256(f"{memory_uuid}:{version_uuid}".encode()).hexdigest()[:32]

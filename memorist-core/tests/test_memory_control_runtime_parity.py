@@ -145,6 +145,14 @@ def test_policy_attachment_and_restart_semantics_are_identical(
             )
             is None
         )
+        with pytest.raises(ValueError, match="approval required"):
+            repository.transition_attachment(
+                attachment,
+                "delivered",
+                user_uuid=user,
+                workspace_uuid=workspace,
+                idempotency_key=f"premature-delivery-{suffix}",
+            )
         approved = repository.transition_attachment(
             attachment,
             "approved",
@@ -160,6 +168,20 @@ def test_policy_attachment_and_restart_semantics_are_identical(
             idempotency_key=f"approve-{suffix}",
         )
         assert duplicate["lifecycle_event_uuid"] == approved["lifecycle_event_uuid"]
+        connection.execute(
+            "UPDATE memory_context_attachments SET stale_reason = 'newer-generation' "
+            "WHERE attachment_uuid = ?",
+            (attachment,),
+        )
+        connection.commit()
+        with pytest.raises(ValueError, match="stale attachment"):
+            repository.transition_attachment(
+                attachment,
+                "delivered",
+                user_uuid=user,
+                workspace_uuid=workspace,
+                idempotency_key=f"stale-delivery-{suffix}",
+            )
 
     with _connection(settings) as restarted:
         persisted = MemoryControlRepository(

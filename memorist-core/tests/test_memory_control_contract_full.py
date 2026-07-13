@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from uuid import uuid4
 
@@ -199,6 +200,77 @@ def test_full_private_creates_no_canonical_or_graph_trace(
     assert not Path(full_settings.db_path).exists()
 
 
+def test_full_concurrent_callbacks_are_single_delivery_and_single_capture(
+    full_settings: Settings,
+) -> None:
+    ids = _seed_turn(full_settings)
+    capture_request = MessageCaptureRequest(
+        session_uuid=ids["session"],
+        openwebui_conversation_id=ids["chat"],
+        user_id=ids["user"],
+        workspace_uuid=ids["workspace"],
+        role="user",
+        content="concurrent callback",
+        idempotency_key=f"capture-{uuid4().hex}",
+        turn_policy="full",
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        captures = list(
+            executor.map(lambda _index: routes_openwebui.capture_message(capture_request), range(2))
+        )
+    assert sorted(result["duplicate"] for result in captures) == [False, True]
+    assert len({result["message_uuid"] for result in captures}) == 1
+
+    attachment_uuid = f"attachment-{uuid4().hex}"
+    with memory_control_connection(full_settings) as connection:
+        connection.execute(
+            """
+            INSERT INTO memory_context_attachments (
+                attachment_uuid, session_uuid, project_uuid, input_message_uuid,
+                attachment_mode, ijson_attachment, rendered_attachment, token_count,
+                owner_user_uuid, workspace_uuid, lifecycle_status, attachment_review,
+                generation, created_at, schema_version
+            ) VALUES (?, ?, ?, ?, 'full', '{}', 'bounded', 1, ?, ?, 'prepared',
+                      false, 1, ?, 1)
+            """,
+            (
+                attachment_uuid,
+                ids["session"],
+                ids["project"],
+                ids["message"],
+                ids["user"],
+                ids["workspace"],
+                utc_now(),
+            ),
+        )
+        connection.commit()
+
+    headers = {
+        "x_memorist_user_id": ids["user"],
+        "x_memorist_workspace_id": ids["workspace"],
+    }
+
+    def deliver(index: int) -> dict[str, object]:
+        return routes_memory_control.record_attachment_delivery(
+            attachment_uuid,
+            AttachmentActionRequest(idempotency_key=f"concurrent-delivery-{index}-{uuid4().hex}"),
+            **headers,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        deliveries = list(executor.map(deliver, range(2)))
+    assert len({result["lifecycle_event_uuid"] for result in deliveries}) == 1
+    with memory_control_connection(full_settings) as connection:
+        count = connection.execute(
+            """
+            SELECT count(*) FROM memorist_attachment_lifecycle_events
+            WHERE attachment_uuid = ? AND lifecycle_status = 'delivered'
+            """,
+            (attachment_uuid,),
+        ).fetchone()[0]
+    assert count == 1
+
+
 def test_full_no_recall_captures_but_skips_retrieval(full_settings: Settings) -> None:
     ids = _seed_turn(full_settings, policy="no_recall")
     response = routes_retrieval.run_preflight(_preflight(ids))
@@ -241,6 +313,29 @@ def test_full_graph_retrieval_persists_postgres_provenance_and_restart(
     full_settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ids = _seed_turn(full_settings, with_memory=True)
+    with memory_control_connection(full_settings) as connection:
+        block_uuid = f"block-{uuid4().hex}"
+        block_version_uuid = f"block-version-{uuid4().hex}"
+        now = utc_now()
+        connection.execute(
+            """
+            INSERT INTO memory_blocks (
+                block_uuid, scope_type, scope_uuid, block_type, canonical_key,
+                current_version_uuid, status, created_at, updated_at
+            ) VALUES (?, 'workspace', ?, 'working_context', ?, ?, 'active', ?, ?)
+            """,
+            (block_uuid, ids["workspace"], block_uuid, block_version_uuid, now, now),
+        )
+        connection.execute(
+            """
+            INSERT INTO memory_block_versions (
+                block_version_uuid, block_uuid, version_number, value,
+                source_snapshot_hash, created_at
+            ) VALUES (?, ?, 1, 'active block contract text', ?, ?)
+            """,
+            (block_version_uuid, block_uuid, uuid4().hex, now),
+        )
+        connection.commit()
     if os.getenv("MEMORIST_REAL_FALKORDB") == "1":
         graph = FalkorDBClient(full_settings.falkordb_url or "")
         assert graph.health().ok
@@ -249,8 +344,9 @@ def test_full_graph_retrieval_persists_postgres_provenance_and_restart(
             f"(w:Workspace {{uuid:'{ids['workspace']}'}})-[:IN_PROJECT]->"
             "(p:Project)-[:HAS_SESSION]->(s:Session)-[:HAS_MESSAGE]->"
             "(msg:Message)-[:HAS_UNIT]->(unit:TextUnit)-[:HAS_JAKOBSON_ANNOTATION]->"
-            "(ann:JakobsonAnnotation)-[:ROUTES_TO]->(route:MemorySignalRoute)-"
-            "[:DERIVED_FROM]->(candidate:MemoryCandidate), "
+            f"(ann:JakobsonAnnotation)-[:ROUTES_TO]->(route:MemorySignalRoute "
+            f"{{uuid:'graph-fact-{ids['version']}'}})-[:DERIVED_FROM]->"
+            f"(candidate:MemoryCandidate {{uuid:'graph-edge-{ids['version']}'}}), "
             f"(mem:Memory {{uuid:'{ids['memory']}', status:'active'}})-[:HAS_VERSION]->"
             f"(ver:MemoryVersion {{uuid:'{ids['version']}', status:'current', "
             f"text:'postgres graph fact {ids['version']}'}}), "
@@ -264,12 +360,18 @@ def test_full_graph_retrieval_persists_postgres_provenance_and_restart(
         monkeypatch.setattr(
             "memcore.memory_control.full_retrieval.FalkorDBClient.query_memory_versions",
             lambda *_args, **_kwargs: [
-                {"memory_uuid": ids["memory"], "memory_version_uuid": ids["version"]}
+                {
+                    "memory_uuid": ids["memory"],
+                    "memory_version_uuid": ids["version"],
+                    "graph_fact_uuid": f"graph-fact-{ids['version']}",
+                    "graph_edge_uuid": f"graph-edge-{ids['version']}",
+                }
             ],
         )
     response = routes_retrieval.run_preflight(_preflight(ids))
     assert response["status"] == "attached"
     assert response["graph_status"] == "healthy"
+    assert "active block contract text" in response["rendered_attachment"]
     attachment_uuid = str(response["attachment_uuid"])
     headers = {
         "x_memorist_user_id": ids["user"],
@@ -306,8 +408,12 @@ def test_full_graph_retrieval_persists_postgres_provenance_and_restart(
         ).fetchall()
     assert attachment is not None
     assert attachment["lifecycle_status"] == "delivered"
-    assert {row["source_type"] for row in sources} == {"graph"}
-    assert sources[0]["memory_version_uuid"] == ids["version"]
+    assert {row["source_type"] for row in sources} == {
+        "memory_version",
+        "graph_fact",
+        "graph_edge",
+    }
+    assert {row["memory_version_uuid"] for row in sources} == {ids["version"]}
     assert not Path(full_settings.db_path).exists()
 
 

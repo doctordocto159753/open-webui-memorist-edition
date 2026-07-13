@@ -196,6 +196,13 @@ def test_no_recall_captures_both_sides_without_retrieval_or_attachment(
             connection.execute(
                 "SELECT count(*) FROM jobs WHERE job_type = 'memory_extraction'"
             ).fetchone()[0]
+            == 2
+        )
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM memorist_policy_audit_events "
+                "WHERE event_type = 'retrieval_suppressed'"
+            ).fetchone()[0]
             == 1
         )
 
@@ -228,6 +235,13 @@ def test_attachment_authorization_lifecycle_and_regeneration_are_idempotent(
             ijson_attachment={"provenance": []},
             rendered_attachment="bounded context",
         )
+        substituted_attachment = MemoryContextAttachmentRepository(connection).create_attachment(
+            session_uuid=session["session_uuid"],
+            input_message_uuid=captured["message_uuid"],
+            attachment_mode="full",
+            ijson_attachment={"provenance": []},
+            rendered_attachment="different bounded context",
+        )
         connection.execute(
             """
             UPDATE memory_context_attachments
@@ -235,6 +249,14 @@ def test_attachment_authorization_lifecycle_and_regeneration_are_idempotent(
             WHERE attachment_uuid = ?
             """,
             (session["workspace_uuid"], attachment.attachment_uuid),
+        )
+        connection.execute(
+            """
+            UPDATE memory_context_attachments
+            SET owner_user_uuid = 'owner', workspace_uuid = ?, lifecycle_status = 'prepared'
+            WHERE attachment_uuid = ?
+            """,
+            (session["workspace_uuid"], substituted_attachment.attachment_uuid),
         )
         connection.commit()
     wrong = client.get(
@@ -275,6 +297,13 @@ def test_attachment_authorization_lifecycle_and_regeneration_are_idempotent(
     assert regeneration.status_code == 200
     assert regeneration.json()["original_user_prompt"] == "original prompt"
     assert regeneration.json()["create_attachment"] is False
+    substituted = client.post(
+        f"/memcore/memory-control/attachments/{substituted_attachment.attachment_uuid}"
+        "/regenerate-without-recall",
+        json={"idempotency_key": "regeneration-idempotency"},
+        headers=headers,
+    )
+    assert substituted.status_code == 409
     with _db(db_path) as connection:
         assert (
             connection.execute(
@@ -285,7 +314,7 @@ def test_attachment_authorization_lifecycle_and_regeneration_are_idempotent(
             == 1
         )
         assert (
-            connection.execute("SELECT count(*) FROM memory_context_attachments").fetchone()[0] == 1
+            connection.execute("SELECT count(*) FROM memory_context_attachments").fetchone()[0] == 2
         )
 
 
