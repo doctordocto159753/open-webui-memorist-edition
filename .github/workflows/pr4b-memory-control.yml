@@ -23,7 +23,7 @@ jobs:
       - name: Lite contract and Open WebUI filter
         working-directory: memorist-core
         run: |
-          uv run pytest tests/test_memory_control_contract_lite.py ../open-webui-integration/memorist/tests -q --junitxml=lite-contract.xml
+          uv run pytest tests/test_memory_control_contract_lite.py tests/test_memory_control_runtime_parity.py -k "not full_postgres" ../open-webui-integration/memorist/tests -q --junitxml=lite-contract.xml
           uv run python -c "import xml.etree.ElementTree as E; r=E.parse('lite-contract.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
 
   full-postgres-contract:
@@ -60,7 +60,7 @@ jobs:
       - name: Full PostgreSQL contract
         working-directory: memorist-core
         run: |
-          uv run pytest tests/test_memory_control_contract_full.py -q --junitxml=full-contract.xml
+          uv run pytest tests/test_memory_control_contract_full.py tests/test_memory_control_runtime_parity.py -q --junitxml=full-contract.xml
           uv run python -c "import xml.etree.ElementTree as E; r=E.parse('full-contract.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
 
   graph-contract:
