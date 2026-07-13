@@ -333,6 +333,16 @@ def assistant_response_completed(request: AssistantResponseCompletedRequest) -> 
                 ),
             )
             connection.commit()
+        control.audit(
+            "assistant_capture",
+            policy,
+            session_uuid=input_message.session_uuid,
+            input_message_uuid=request.input_message_uuid,
+            workspace_uuid=actor_workspace,
+            user_uuid=actor_user,
+            attachment_uuid=request.attachment_uuid,
+            detail={"regeneration": request.regeneration_uuid is not None},
+        )
         return {
             "assistant_message_uuid": assistant_message.message_uuid,
             "response_link_uuid": link["response_link_uuid"],
@@ -408,14 +418,12 @@ def _run_controlled_preflight(settings: Settings, request: PreflightRequest) -> 
         response = PreflightService(connection, settings).run(
             request.model_copy(update={"attachment_review": attachment_review})
         )
+        session = connection.execute(
+            "SELECT workspace_uuid FROM sessions WHERE session_uuid = ?",
+            (request.session_uuid,),
+        ).fetchone()
+        workspace_uuid = request.workspace_uuid or (session["workspace_uuid"] if session else None)
         if response.attachment_uuid:
-            session = connection.execute(
-                "SELECT workspace_uuid FROM sessions WHERE session_uuid = ?",
-                (request.session_uuid,),
-            ).fetchone()
-            workspace_uuid = request.workspace_uuid or (
-                session["workspace_uuid"] if session else None
-            )
             connection.execute(
                 """
                 UPDATE memory_context_attachments
@@ -492,6 +500,16 @@ def _run_controlled_preflight(settings: Settings, request: PreflightRequest) -> 
                             ),
                         )
             connection.commit()
+        MemoryControlRepository(connection, settings.runtime_profile).audit(
+            "retrieval_completed",
+            policy,
+            session_uuid=request.session_uuid,
+            input_message_uuid=request.input_message_uuid,
+            workspace_uuid=workspace_uuid,
+            user_uuid=request.user_uuid,
+            attachment_uuid=response.attachment_uuid,
+            detail={"status": response.status.value, "attachment_mode": response.attachment_mode},
+        )
         return response.model_copy(update={"attachment_review": attachment_review})
 
 

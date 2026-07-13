@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from memcore.config import get_settings
 from memcore.memory_control import MemoryControlRepository, memory_control_connection
-from memcore.memory_control.policy import reject_runtime_override
+from memcore.memory_control.policy import normalize_turn_policy, reject_runtime_override
 from memcore.models import new_uuid, utc_now
 
 router = APIRouter(prefix="/memcore/memory-control", tags=["memory-control"])
@@ -307,6 +307,16 @@ def regenerate_without_recall(
             connection.commit()
         else:
             regeneration_uuid = str(existing["regeneration_uuid"])
+        if existing is None:
+            repository.audit(
+                "regeneration_requested",
+                normalize_turn_policy("no_recall"),
+                session_uuid=str(attachment["session_uuid"]),
+                input_message_uuid=input_message_uuid,
+                workspace_uuid=actor_workspace,
+                user_uuid=actor_user,
+                attachment_uuid=attachment_uuid,
+            )
         return {
             "regeneration_uuid": regeneration_uuid,
             "original_input_message_uuid": input_message_uuid,
