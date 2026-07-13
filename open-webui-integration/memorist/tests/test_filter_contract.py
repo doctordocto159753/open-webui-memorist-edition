@@ -27,6 +27,7 @@ class FakeClient:
     delivery_calls = 0
     cancel_calls = 0
     last_assistant_attachment: str | None = None
+    last_assistant_turn_policy: str | None = None
     last_capture_idempotency_key: str | None = None
     last_config: Any | None = None
 
@@ -97,6 +98,8 @@ class FakeClient:
         FakeClient.last_assistant_attachment = (
             str(_args[2]) if len(_args) > 2 and _args[2] is not None else None
         )
+        value = kwargs.get("turn_policy")
+        FakeClient.last_assistant_turn_policy = str(value) if value is not None else None
         return {"duplicate": FakeClient.assistant_calls > 1}
 
     def record_attachment_delivery(self, *_args: object, **_kwargs: object) -> dict[str, Any]:
@@ -209,7 +212,7 @@ def test_review_removed_then_send_without_memorist_clears_stale_attribution(monk
     monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
     FakeClient.last_assistant_attachment = "stale"
     body = {
-        "memorist": {"turn_policy": "no_recall", "attachment_review": False},
+        "memorist": {"turn_policy": "full", "attachment_review": True},
         "metadata": {
             "memorist_pending_attachment_uuid": "attachment-1",
             "memorist_attachment_pending_review": True,
@@ -218,19 +221,22 @@ def test_review_removed_then_send_without_memorist_clears_stale_attribution(monk
         "messages": [{"role": "user", "id": "review-message", "content": "send without"}],
     }
     filter_instance = _module().Filter()
+    FakeClient.preflight_calls = 0
     result = filter_instance.inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
     assert "memorist_pending_attachment_uuid" not in result["metadata"]
     assert FakeClient.last_capture_idempotency_key == "review-prepare:user-1:review-message"
+    assert FakeClient.preflight_calls == 0
     result["messages"] = [{"role": "assistant", "content": "answer without context"}]
     filter_instance.outlet(result, {"id": "user-1", "workspace_id": "workspace-1"})
     assert FakeClient.last_assistant_attachment is None
+    assert FakeClient.last_assistant_turn_policy == "full"
 
 
 def test_review_cancelled_then_send_without_memorist_captures_assistant(monkeypatch) -> None:
     monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
     FakeClient.assistant_calls = 0
     body = {
-        "memorist": {"turn_policy": "no_recall"},
+        "memorist": {"turn_policy": "full", "attachment_review": True},
         "metadata": {
             "memorist_pending_attachment_uuid": "cancelled-attachment",
             "memorist_review_disposition": "cancelled_before_send",
@@ -243,6 +249,7 @@ def test_review_cancelled_then_send_without_memorist_captures_assistant(monkeypa
     filter_instance.outlet(result, {"id": "user-1", "workspace_id": "workspace-1"})
     assert FakeClient.assistant_calls == 1
     assert FakeClient.last_assistant_attachment is None
+    assert FakeClient.last_assistant_turn_policy == "full"
     assert FakeClient.last_capture_idempotency_key == "review-prepare:user-1:review-message"
 
 

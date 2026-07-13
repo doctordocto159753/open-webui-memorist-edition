@@ -217,6 +217,28 @@ def test_policy_attachment_and_restart_semantics_are_identical(
             idempotency_key=f"cancel-{suffix}",
         )
         assert cancelled_duplicate["lifecycle_event_uuid"] == cancelled["lifecycle_event_uuid"]
+        contract = repository.get_turn_contract(message)
+        assert contract is not None
+        assert contract["turn_policy"] == "full"
+        repository.audit(
+            "assistant_capture",
+            normalize_turn_policy("full"),
+            session_uuid=session,
+            input_message_uuid=message,
+            workspace_uuid=workspace,
+            user_uuid=user,
+            attachment_uuid=None,
+            detail={"review_disposition": "cancelled_before_send"},
+        )
+        assistant_audit = connection.execute(
+            "SELECT turn_policy, attachment_uuid FROM memorist_policy_audit_events "
+            "WHERE event_type = 'assistant_capture' AND input_message_uuid = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (message,),
+        ).fetchone()
+        assert assistant_audit is not None
+        assert assistant_audit["turn_policy"] == "full"
+        assert assistant_audit["attachment_uuid"] is None
 
     monkeypatch.setattr(routes_memory_control, "get_settings", lambda: settings)
     with pytest.raises(HTTPException) as source_denied:

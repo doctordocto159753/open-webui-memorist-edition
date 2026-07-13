@@ -70,7 +70,7 @@ export type MemoristApprovedReviewMetadata = {
 };
 
 export type MemoristSendWithoutReview = {
-  memorist: { turn_policy: "no_recall"; attachment_review: false };
+  memorist: { turn_policy: "full"; attachment_review: true };
   metadata: {
     memorist_review_ui_active: false;
     memorist_input_message_uuid: string;
@@ -285,7 +285,9 @@ export class MemoristClient {
       await this.cancelAttachmentBeforeSend(prepared.attachment_uuid, idempotencyKey);
     }
     return {
-      memorist: { turn_policy: "no_recall", attachment_review: false },
+      // Recall already occurred to render the preview. Suppression truthfully remains
+      // a Full-policy turn whose approved context was not delivered to the model.
+      memorist: { turn_policy: "full", attachment_review: true },
       metadata: {
         memorist_review_ui_active: false,
         memorist_input_message_uuid: prepared.input_message_uuid,

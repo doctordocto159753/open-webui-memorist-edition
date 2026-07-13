@@ -98,6 +98,12 @@ The lifecycle is persisted as `prepared`, `approved`, `delivered`, `suppressed`,
 atomic and idempotent. Delivery is rejected for expired, wrong-owner, wrong-workspace,
 wrong-input, non-delivered, or terminal-state attachments.
 
+`Send without Memorist` after a prepared preview remains a Full-policy turn with a
+`suppressed` or `cancelled_before_send` attachment. Recall already occurred to render the
+preview, so this path is not mislabeled as `no_recall`. The Filter reuses the original
+capture, performs no second retrieval, injects no context, and captures the assistant with
+`attachment_uuid=null`.
+
 Runtime-aware endpoints under `/memcore/memory-control` provide policy resolution/defaults
 and attachment preview, source fetch, approval, suppression, cancellation, delivery,
 rejection, and regeneration without recall. Attachment endpoints require the trusted

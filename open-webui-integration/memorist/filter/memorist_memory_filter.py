@@ -134,6 +134,18 @@ class Filter:
             metadata["memorist_input_message_uuid"] = captured.message_uuid
             metadata["memorist_user_uuid"] = actor_user_id
             metadata["memorist_workspace_uuid"] = resolved.workspace_uuid or parsed.workspace_id
+            if metadata.get("memorist_review_disposition") in {
+                "suppressed",
+                "cancelled_before_send",
+            }:
+                # The preview already performed recall under the immutable Full policy.
+                # Reuse its capture, but neither retrieve again nor deliver any context.
+                metadata.pop("memorist_pending_attachment_uuid", None)
+                metadata.pop("memorist_delivered_attachment_uuid", None)
+                metadata.pop("memorist_attachment_uuid", None)
+                metadata.pop("memorist_retrieval_run_uuid", None)
+                metadata["memorist_attachment_pending_review"] = False
+                return body
             approved_uuid = metadata.get("memorist_approved_attachment_uuid")
             if approved_uuid and policy.recall_enabled and policy.attachment_enabled:
                 approved = client.preview_attachment(
