@@ -94,6 +94,20 @@ def set_policy_default(
         raise HTTPException(status_code=403, detail="system default is server-controlled")
     settings = get_settings()
     with memory_control_connection(settings) as connection:
+        if request.scope_type == "chat":
+            owned_chat = connection.execute(
+                """
+                SELECT 1
+                FROM openwebui_session_aliases alias
+                JOIN sessions session ON session.session_uuid = alias.session_uuid
+                WHERE alias.openwebui_chat_id = ? AND alias.openwebui_user_id = ?
+                  AND COALESCE(session.workspace_uuid, '') = COALESCE(?, '')
+                LIMIT 1
+                """,
+                (request.scope_uuid, actor_user, actor_workspace),
+            ).fetchone()
+            if owned_chat is None:
+                raise HTTPException(status_code=403, detail="chat scope is not owned by actor")
         try:
             return MemoryControlRepository(connection, settings.runtime_profile).set_default(
                 scope_type=request.scope_type,

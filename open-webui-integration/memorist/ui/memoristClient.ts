@@ -2,6 +2,10 @@ import type { MemoristModelRole, ModelControlProfile } from "./modelControl";
 
 export type MemoristMode = "off" | "lite" | "standard" | "full";
 export type MemoristTurnPolicy = "full" | "no_recall" | "private";
+export type MemoristActorScope = {
+  userId: string;
+  workspaceId?: string | null;
+};
 export const MEMORY_CONTROL_LABELS = {
   memoristRecall: "Memorist Recall",
   openWebUINativeMemory: "Open WebUI Native Memory",
@@ -171,31 +175,36 @@ export class MemoristClient {
     workspace_uuid?: string | null;
     turn_policy: MemoristTurnPolicy;
     attachment_review?: boolean;
-  }): Promise<unknown> { return this.put("/memory-control/policy/defaults", payload); }
-  async previewAttachment(attachmentUuid: string): Promise<unknown> {
-    return this.get(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/preview`);
+  }, actor: MemoristActorScope): Promise<unknown> {
+    return this.put("/memory-control/policy/defaults", payload, this.actorHeaders(actor));
   }
-  async approveAttachment(attachmentUuid: string, idempotencyKey: string): Promise<unknown> {
-    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/approve`, { idempotency_key: idempotencyKey });
+  async previewAttachment(attachmentUuid: string, actor: MemoristActorScope): Promise<unknown> {
+    return this.get(
+      `/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/preview`,
+      this.actorHeaders(actor),
+    );
   }
-  async suppressAttachment(attachmentUuid: string, idempotencyKey: string): Promise<unknown> {
-    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/suppress`, { idempotency_key: idempotencyKey });
+  async approveAttachment(attachmentUuid: string, idempotencyKey: string, actor: MemoristActorScope): Promise<unknown> {
+    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/approve`, { idempotency_key: idempotencyKey }, this.actorHeaders(actor));
   }
-  async regenerateWithoutRecall(attachmentUuid: string, idempotencyKey: string): Promise<unknown> {
-    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/regenerate-without-recall`, { idempotency_key: idempotencyKey });
+  async suppressAttachment(attachmentUuid: string, idempotencyKey: string, actor: MemoristActorScope): Promise<unknown> {
+    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/suppress`, { idempotency_key: idempotencyKey }, this.actorHeaders(actor));
+  }
+  async regenerateWithoutRecall(attachmentUuid: string, idempotencyKey: string, actor: MemoristActorScope): Promise<unknown> {
+    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/regenerate-without-recall`, { idempotency_key: idempotencyKey }, this.actorHeaders(actor));
   }
 
-  private async get<T = unknown>(path: string): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${path}`, { credentials: "same-origin" });
+  private async get<T = unknown>(path: string, headers?: Record<string, string>): Promise<T> {
+    const response = await fetch(`${this.baseUrl}${path}`, { credentials: "same-origin", headers });
     if (!response.ok) throw new Error(await this.errorDetail(response));
     return response.json() as Promise<T>;
   }
 
-  private async post<T = unknown>(path: string, body: unknown): Promise<T> {
+  private async post<T = unknown>(path: string, body: unknown, headers?: Record<string, string>): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: "POST",
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...headers },
       body: JSON.stringify(body),
     });
     if (!response.ok) throw new Error(await this.errorDetail(response));
@@ -213,11 +222,11 @@ export class MemoristClient {
     return response.json() as Promise<T>;
   }
 
-  private async put<T = unknown>(path: string, body: unknown): Promise<T> {
+  private async put<T = unknown>(path: string, body: unknown, headers?: Record<string, string>): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: "PUT",
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...headers },
       body: JSON.stringify(body),
     });
     if (!response.ok) throw new Error(await this.errorDetail(response));
@@ -234,6 +243,13 @@ export class MemoristClient {
     } catch {
       return `Memorist request failed: ${response.status}`;
     }
+  }
+
+  private actorHeaders(actor: MemoristActorScope): Record<string, string> {
+    return {
+      "X-Memorist-User-Id": actor.userId,
+      ...(actor.workspaceId ? { "X-Memorist-Workspace-Id": actor.workspaceId } : {}),
+    };
   }
 }
 

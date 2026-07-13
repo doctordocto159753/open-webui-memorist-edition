@@ -107,7 +107,7 @@ jobs:
       - name: Real graph and explicit degradation
         working-directory: memorist-core
         run: |
-          uv run pytest tests/test_memory_control_contract_full.py -k graph -q --junitxml=graph-contract.xml
+          uv run pytest tests/test_memory_control_contract_full.py -k "full_graph_retrieval or full_graph_outage" -q --junitxml=graph-contract.xml
           uv run python -c "import xml.etree.ElementTree as E; r=E.parse('graph-contract.xml').getroot(); cases=list(r.iter('testcase')); assert len(cases) == 2 and not list(r.iter('skipped'))"
 
   attachment-security:

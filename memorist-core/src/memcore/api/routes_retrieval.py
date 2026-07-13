@@ -541,20 +541,23 @@ def _assistant_response_completed_full(
                 raise HTTPException(status_code=404, detail="attachment not found")
             if attachment_row.get("lifecycle_status") != "delivered":
                 raise HTTPException(status_code=409, detail="attachment was not delivered")
-        existing = connection.execute(
-            """
-            SELECT * FROM assistant_response_links
-            WHERE input_message_uuid = ?
-              AND ((provider_response_id IS NOT NULL AND provider_response_id = ?)
-                OR (? IS NULL AND content_hash = ?))
-            """,
-            (
-                request.input_message_uuid,
-                request.provider_response_id,
-                request.provider_response_id,
-                content_hash,
-            ),
-        ).fetchone()
+        if request.provider_response_id is not None:
+            existing = connection.execute(
+                """
+                SELECT * FROM assistant_response_links
+                WHERE input_message_uuid = ? AND provider_response_id = ?
+                """,
+                (request.input_message_uuid, request.provider_response_id),
+            ).fetchone()
+        else:
+            existing = connection.execute(
+                """
+                SELECT * FROM assistant_response_links
+                WHERE input_message_uuid = ? AND provider_response_id IS NULL
+                  AND content_hash = ?
+                """,
+                (request.input_message_uuid, content_hash),
+            ).fetchone()
         if existing is not None:
             return {
                 "assistant_message_uuid": existing["assistant_message_uuid"],

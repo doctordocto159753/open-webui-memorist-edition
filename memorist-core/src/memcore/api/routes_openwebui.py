@@ -554,7 +554,6 @@ def _capture_message_full(settings: Settings, request: MessageCaptureRequest) ->
                 connection,
                 session_uuid=session_uuid,
                 message_uuid=message_uuid,
-                role=request.role,
                 now=now,
             )
             return {"session_uuid": session_uuid, "message_uuid": message_uuid, "duplicate": False}
@@ -565,12 +564,9 @@ def _pg_enqueue_capture_jobs(
     *,
     session_uuid: str,
     message_uuid: str,
-    role: str,
     now: str,
 ) -> None:
-    jobs = [("text_unitization", 100)]
-    if role == "assistant":
-        jobs.append(("memory_extraction", 60))
+    jobs = [("text_unitization", 100), ("memory_extraction", 60)]
     for job_type, priority in jobs:
         payload = json.dumps(
             {"message_uuid": message_uuid, "session_uuid": session_uuid},
