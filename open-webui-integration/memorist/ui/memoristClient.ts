@@ -204,11 +204,26 @@ export class MemoristClient {
       this.actorHeaders(actor),
     );
   }
+  async fetchAttachmentSources(attachmentUuid: string, actor: MemoristActorScope): Promise<unknown> {
+    return this.get(
+      `/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/sources`,
+      this.actorHeaders(actor),
+    );
+  }
   async approveAttachment(attachmentUuid: string, idempotencyKey: string, actor: MemoristActorScope): Promise<unknown> {
     return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/approve`, { idempotency_key: idempotencyKey }, this.actorHeaders(actor));
   }
   async suppressAttachment(attachmentUuid: string, idempotencyKey: string, actor: MemoristActorScope): Promise<unknown> {
     return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/suppress`, { idempotency_key: idempotencyKey }, this.actorHeaders(actor));
+  }
+  async cancelAttachmentBeforeSend(attachmentUuid: string, idempotencyKey: string, actor: MemoristActorScope): Promise<unknown> {
+    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/cancel`, { idempotency_key: idempotencyKey }, this.actorHeaders(actor));
+  }
+  async recordAttachmentDelivery(attachmentUuid: string, idempotencyKey: string, actor: MemoristActorScope, responseMessageUuid?: string): Promise<unknown> {
+    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/delivery`, { idempotency_key: idempotencyKey, response_message_uuid: responseMessageUuid }, this.actorHeaders(actor));
+  }
+  async recordAttachmentRejection(attachmentUuid: string, idempotencyKey: string, actor: MemoristActorScope): Promise<unknown> {
+    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/rejection`, { idempotency_key: idempotencyKey }, this.actorHeaders(actor));
   }
   async regenerateWithoutRecall(attachmentUuid: string, idempotencyKey: string, actor: MemoristActorScope): Promise<MemoristRegenerationInstruction> {
     return this.post<MemoristRegenerationInstruction>(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/regenerate-without-recall`, { idempotency_key: idempotencyKey }, this.actorHeaders(actor));
