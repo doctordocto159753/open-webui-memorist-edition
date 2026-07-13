@@ -583,6 +583,7 @@ def test_full_openwebui_filter_inlet_outlet_use_postgres(
         actor,
     )
     assert "memorist_last_error" not in outlet["metadata"]
+    filter_session_uuid = inlet["metadata"]["memorist_session_uuid"]
     with memory_control_connection(full_settings) as connection:
         assert (
             connection.execute(
@@ -592,7 +593,8 @@ def test_full_openwebui_filter_inlet_outlet_use_postgres(
         )
         extraction_jobs = connection.execute(
             "SELECT payload_ijson FROM jobs WHERE job_type = 'memory_extraction' "
-            "AND idempotency_key LIKE 'openwebui:memory_extraction:%'"
+            "AND payload_ijson LIKE ?",
+            (f"%{filter_session_uuid}%",),
         ).fetchall()
         assert len(extraction_jobs) == 2
         for row in extraction_jobs:
@@ -603,7 +605,8 @@ def test_full_openwebui_filter_inlet_outlet_use_postgres(
             assert payload["model_name"] == "deterministic_extraction"
         usage = connection.execute(
             "SELECT role, stage, provider_type, model_name FROM model_usage_events "
-            "WHERE stage = 'memory_extraction_queued'"
+            "WHERE stage = 'memory_extraction_queued' AND session_uuid = ?",
+            (filter_session_uuid,),
         ).fetchall()
         assert len(usage) == 2
         assert all(row["role"] == "memory_extraction" for row in usage)
