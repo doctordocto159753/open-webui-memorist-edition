@@ -203,7 +203,11 @@ def capture_message(request: MessageCaptureRequest) -> dict[str, Any]:
             "duplicate": False,
         }
     if _is_full_postgres(settings):
-        result = _capture_message_full(settings, request)
+        result = _capture_message_full(
+            settings,
+            request,
+            enforce_session_actor=actor is not None,
+        )
         _record_turn_contract(settings, request, result, resolved_policy)
         return result
 
@@ -229,7 +233,7 @@ def capture_message(request: MessageCaptureRequest) -> dict[str, Any]:
                 raise HTTPException(status_code=404, detail="session not found")
             if request.workspace_uuid and session.workspace_uuid != request.workspace_uuid:
                 raise HTTPException(status_code=403, detail="session workspace mismatch")
-            if request.user_id and request.workspace_uuid:
+            if actor is not None and request.user_id and request.workspace_uuid:
                 _assert_session_actor(
                     connection, session_uuid, request.user_id, request.workspace_uuid
                 )
@@ -500,7 +504,12 @@ def _resolve_session_payload_full(
         }
 
 
-def _capture_message_full(settings: Settings, request: MessageCaptureRequest) -> dict[str, Any]:
+def _capture_message_full(
+    settings: Settings,
+    request: MessageCaptureRequest,
+    *,
+    enforce_session_actor: bool,
+) -> dict[str, Any]:
     session_uuid = request.session_uuid
     if session_uuid is None:
         resolved = _resolve_session_payload_full(
@@ -528,7 +537,7 @@ def _capture_message_full(settings: Settings, request: MessageCaptureRequest) ->
                 raise HTTPException(status_code=404, detail="session not found")
             if request.workspace_uuid and session.get("workspace_uuid") != request.workspace_uuid:
                 raise HTTPException(status_code=403, detail="session workspace mismatch")
-            if request.user_id and request.workspace_uuid:
+            if enforce_session_actor and request.user_id and request.workspace_uuid:
                 _pg_assert_session_actor(
                     connection, session_uuid, request.user_id, request.workspace_uuid
                 )
