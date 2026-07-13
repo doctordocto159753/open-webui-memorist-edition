@@ -1,0 +1,36 @@
+name: PR4-B Strict Test Mypy Diagnostic
+
+on:
+  push:
+    branches:
+      - codex/pr4b-full-lite-memory-control-contract
+    paths: &diagnostic_paths
+      - .github/workflows/pr4b-mypy-tests-diagnostic.yml
+  pull_request:
+    branches:
+      - main
+    paths: *diagnostic_paths
+
+jobs:
+  mypy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Capture strict mypy output
+        working-directory: memorist-core
+        run: |
+          set +e
+          uv run mypy src tests > ../pr4b-mypy-tests.log 2>&1
+          status=$?
+          cat ../pr4b-mypy-tests.log
+          echo "$status" > ../pr4b-mypy-tests.status
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr4b-mypy-tests-diagnostic
+          path: |
+            pr4b-mypy-tests.log
+            pr4b-mypy-tests.status
