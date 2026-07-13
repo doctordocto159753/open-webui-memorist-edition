@@ -14,6 +14,7 @@ from memcore.memory_control.policy import MemoristTurnPolicy, normalize_turn_pol
 from memcore.model_control.repository import ModelControlRepository
 from memcore.model_control.schemas import UsageEventCreate
 from memcore.models import ModelRole, PreflightResponse, PreflightStatus, new_uuid, utc_now
+from memcore.openwebui.model_scheduling import resolve_scoped_model_identity
 from memcore.preflight import PreflightRequest, PreflightService
 from memcore.repositories import JobRepository, MessageRepository
 from memcore.repositories.retrieval import RetrievalRepository
@@ -336,19 +337,13 @@ def assistant_response_completed(request: AssistantResponseCompletedRequest) -> 
                 (assistant_message.message_uuid, request.attachment_uuid),
             )
         model_control = ModelControlRepository(connection)
-        extraction_default = model_control.resolve_default(ModelRole.MEMORY_EXTRACTION)
-        extraction_profile_uuid = (
-            str(extraction_default["model_profile_uuid"])
-            if extraction_default is not None and extraction_default.get("model_profile_uuid")
-            else None
-        )
+        identity = resolve_scoped_model_identity(connection, input_message.session_uuid)
         job = JobRepository(connection).enqueue_job_once(
             "memory_extraction",
             {
                 "message_uuid": assistant_message.message_uuid,
                 "session_uuid": input_message.session_uuid,
-                "model_role": ModelRole.MEMORY_EXTRACTION.value,
-                "model_profile_uuid": extraction_profile_uuid,
+                **identity.as_payload(),
             },
             priority=60,
         )
@@ -356,7 +351,11 @@ def assistant_response_completed(request: AssistantResponseCompletedRequest) -> 
             UsageEventCreate(
                 role=ModelRole.MEMORY_EXTRACTION,
                 stage="memory_extraction_queued",
-                model_profile_uuid=extraction_profile_uuid,
+                model_profile_uuid=identity.model_profile_uuid,
+                provider_type=identity.provider_type,
+                model_name=identity.model_name,
+                workspace_uuid=identity.workspace_uuid,
+                project_uuid=identity.project_uuid,
                 session_uuid=input_message.session_uuid,
                 message_uuid=assistant_message.message_uuid,
                 attachment_uuid=request.attachment_uuid,

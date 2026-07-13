@@ -51,6 +51,7 @@ export type MemoristAttachmentReviewPrepare = {
   model_provider?: string | null;
   model_context_window?: number | null;
   recent_conversation_text?: string | null;
+  turn_policy?: MemoristTurnPolicy;
 };
 
 export type MemoristPreparedAttachment = {

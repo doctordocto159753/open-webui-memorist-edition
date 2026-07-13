@@ -78,12 +78,18 @@ async def prepare_attachment_review(request: Request, actor: AuthenticatedActor)
             detail="content, message_id, and a conversation identifier are required",
         )
     client = MemoristClient()
+    requested_turn_policy = _optional_text(payload.get("turn_policy"))
+    request_control: dict[str, Any] = {"attachment_review": True}
+    if requested_turn_policy is not None:
+        request_control["turn_policy"] = requested_turn_policy
     policy = client.resolve_turn_policy(
         user_id=actor.user_uuid,
         chat_id=conversation_id or temporary_chat_id,
         workspace_id=actor.workspace_uuid,
-        request_control={"turn_policy": "full", "attachment_review": True},
+        request_control=request_control,
     )
+    if bool(getattr(policy, "private", False)):
+        return {"status": "private", "turn_policy": policy.mode}
     if not policy.recall_enabled or not policy.attachment_enabled:
         return {"status": "disabled", "turn_policy": policy.mode}
     session = client.resolve_session(

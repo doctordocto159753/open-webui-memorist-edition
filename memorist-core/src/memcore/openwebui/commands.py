@@ -8,6 +8,7 @@ from typing import Any
 from memcore.model_control.repository import ModelControlRepository
 from memcore.model_control.schemas import UsageEventCreate
 from memcore.models import CreatorType, MessageRole, ModelRole, new_uuid, utc_now
+from memcore.openwebui.model_scheduling import resolve_scoped_model_identity
 from memcore.repositories import JobRepository, MessageRepository
 from memcore.storage.commands import WriteResult
 
@@ -126,19 +127,13 @@ class CaptureOpenWebUIMessageCommand:
                 (self.idempotency_key, self.session_uuid, message.message_uuid, utc_now()),
             )
             model_control = ModelControlRepository(connection)
-            extraction_default = model_control.resolve_default(ModelRole.MEMORY_EXTRACTION)
-            extraction_profile_uuid = (
-                str(extraction_default["model_profile_uuid"])
-                if extraction_default is not None and extraction_default.get("model_profile_uuid")
-                else None
-            )
+            identity = resolve_scoped_model_identity(connection, self.session_uuid)
             job = JobRepository(connection).enqueue_job_once(
                 "memory_extraction",
                 {
                     "message_uuid": message.message_uuid,
                     "session_uuid": self.session_uuid,
-                    "model_role": ModelRole.MEMORY_EXTRACTION.value,
-                    "model_profile_uuid": extraction_profile_uuid,
+                    **identity.as_payload(),
                 },
                 priority=60,
             )
@@ -146,7 +141,11 @@ class CaptureOpenWebUIMessageCommand:
                 UsageEventCreate(
                     role=ModelRole.MEMORY_EXTRACTION,
                     stage="memory_extraction_queued",
-                    model_profile_uuid=extraction_profile_uuid,
+                    model_profile_uuid=identity.model_profile_uuid,
+                    provider_type=identity.provider_type,
+                    model_name=identity.model_name,
+                    workspace_uuid=identity.workspace_uuid,
+                    project_uuid=identity.project_uuid,
                     session_uuid=self.session_uuid,
                     message_uuid=message.message_uuid,
                     job_uuid=job.job_uuid,

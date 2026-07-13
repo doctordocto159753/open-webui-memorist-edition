@@ -18,6 +18,7 @@ if str(PARENT) not in sys.path:
 
 class FakeCoreClient:
     calls: list[dict[str, Any]] = []
+    policy_mode = "full"
 
     def actor_request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         self.calls.append({"method": method, "path": path, **kwargs})
@@ -29,7 +30,13 @@ class FakeCoreClient:
 
     def resolve_turn_policy(self, **kwargs: Any) -> SimpleNamespace:
         self.calls.append({"operation": "policy", **kwargs})
-        return SimpleNamespace(mode="full", recall_enabled=True, attachment_enabled=True)
+        mode = self.policy_mode
+        return SimpleNamespace(
+            mode=mode,
+            private=mode == "private",
+            recall_enabled=mode == "full",
+            attachment_enabled=mode == "full",
+        )
 
     def resolve_session(self, *_args: Any, **kwargs: Any) -> SimpleNamespace:
         self.calls.append({"operation": "session", **kwargs})
@@ -109,6 +116,51 @@ def test_review_prepare_uses_trusted_actor_and_preserves_message_identity() -> N
     assert capture["user_id"] == "trusted-user"
     assert capture["workspace_uuid"] == "trusted-workspace"
     assert capture["openwebui_message_id"] == "browser-message-1"
+
+
+def test_review_prepare_respects_effective_private_and_no_recall_policy() -> None:
+    for mode, expected in (("private", "private"), ("no_recall", "disabled")):
+        FakeCoreClient.calls = []
+        FakeCoreClient.policy_mode = mode
+        response = _app(authenticated=True).post(
+            "/api/v1/memorist/memory-control/review/prepare",
+            json={
+                "conversation_id": f"chat-{mode}",
+                "message_id": f"message-{mode}",
+                "content": "must not force Full",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json() == {"status": expected, "turn_policy": mode}
+        policy_call = next(
+            call for call in FakeCoreClient.calls if call.get("operation") == "policy"
+        )
+        assert policy_call["request_control"] == {"attachment_review": True}
+        assert not any(
+            call.get("operation") in {"session", "capture", "preflight"}
+            for call in FakeCoreClient.calls
+        )
+    FakeCoreClient.policy_mode = "full"
+
+
+def test_review_prepare_forwards_only_explicit_turn_policy() -> None:
+    FakeCoreClient.calls = []
+    FakeCoreClient.policy_mode = "full"
+    response = _app(authenticated=True).post(
+        "/api/v1/memorist/memory-control/review/prepare",
+        json={
+            "conversation_id": "chat-explicit-full",
+            "message_id": "message-explicit-full",
+            "content": "explicit Full",
+            "turn_policy": "full",
+        },
+    )
+    assert response.status_code == 200
+    policy_call = next(call for call in FakeCoreClient.calls if call.get("operation") == "policy")
+    assert policy_call["request_control"] == {
+        "attachment_review": True,
+        "turn_policy": "full",
+    }
 
 
 def test_shipped_entrypoint_mounts_router_with_verified_openwebui_user(

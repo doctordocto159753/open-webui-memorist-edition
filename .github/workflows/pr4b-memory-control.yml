@@ -230,6 +230,40 @@ jobs:
           uv run pytest tests/test_memory_control_contract_full.py -k "openwebui_filter or no_recall" -q --junitxml=capture-parity-full.xml
           uv run python -c "import xml.etree.ElementTree as E; r=E.parse('capture-parity-full.xml').getroot(); assert list(r.iter('testcase')) and not list(r.iter('skipped'))"
 
+  scope-closure-lite:
+    name: Scope Isolation and Policy Safety — Lite
+    runs-on: ubuntu-latest
+    env:
+      MEMORIST_SCOPE_TEST_RUNTIME: lite
+      MEMORIST_RUNTIME_PROFILE: lite
+      MEMORIST_CANONICAL_STORE: sqlite
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - working-directory: memorist-core
+        run: uv sync --all-extras
+      - working-directory: memorist-core
+        run: |
+          uv run pytest tests/test_pr4b_scope_closure.py ../open-webui-integration/memorist/tests/test_backend_proxy.py -q --junitxml=scope-closure-lite.xml
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('scope-closure-lite.xml').getroot(); assert list(r.iter('testcase')) and not list(r.iter('skipped'))"
+
+  scope-closure-full:
+    name: Scope Isolation and Policy Safety — Full PostgreSQL
+    runs-on: ubuntu-latest
+    services: *postgres
+    env:
+      <<: *full_env
+      MEMORIST_SCOPE_TEST_RUNTIME: full
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - working-directory: memorist-core
+        run: uv sync --all-extras
+      - working-directory: memorist-core
+        run: |
+          uv run pytest tests/test_pr4b_scope_closure.py -q --junitxml=scope-closure-full.xml
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('scope-closure-full.xml').getroot(); assert list(r.iter('testcase')) and not list(r.iter('skipped'))"
+
   type-and-lint:
     name: Type and Lint
     runs-on: ubuntu-latest

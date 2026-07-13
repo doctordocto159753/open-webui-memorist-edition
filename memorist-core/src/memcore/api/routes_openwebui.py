@@ -18,6 +18,7 @@ from memcore.openwebui.commands import (
     CaptureIdempotencyConflict,
     CaptureOpenWebUIMessageCommand,
 )
+from memcore.openwebui.model_scheduling import resolve_scoped_model_identity
 from memcore.openwebui.session_resolution import (
     SessionResolutionInput,
     list_aliases,
@@ -284,8 +285,12 @@ def session_lineage(session_uuid: str) -> dict[str, Any]:
             ).fetchone()
             if row is None:
                 raise HTTPException(status_code=404, detail="session not found")
-            if actor is not None and row.get("workspace_uuid") != actor.workspace_uuid:
-                raise HTTPException(status_code=404, detail="session not found")
+            if actor is not None:
+                _pg_assert_session_actor(
+                    connection, session_uuid, actor.user_uuid, actor.workspace_uuid
+                )
+                if row.get("workspace_uuid") != actor.workspace_uuid:
+                    raise HTTPException(status_code=404, detail="session not found")
             return {
                 "session_uuid": session_uuid,
                 "openwebui_conversation_id": row.get("openwebui_conversation_id"),
@@ -295,8 +300,10 @@ def session_lineage(session_uuid: str) -> dict[str, Any]:
         session = SessionRepository(connection).get_session(session_uuid)
         if session is None:
             raise HTTPException(status_code=404, detail="session not found")
-        if actor is not None and session.workspace_uuid != actor.workspace_uuid:
-            raise HTTPException(status_code=404, detail="session not found")
+        if actor is not None:
+            _assert_session_actor(connection, session_uuid, actor.user_uuid, actor.workspace_uuid)
+            if session.workspace_uuid != actor.workspace_uuid:
+                raise HTTPException(status_code=404, detail="session not found")
         return {
             "session_uuid": session_uuid,
             "openwebui_conversation_id": session.openwebui_conversation_id,
@@ -457,7 +464,7 @@ def _resolve_session_payload_full(
         matched_alias_type = "openwebui_chat_id" if session is not None else None
         if session is None:
             session = _pg_legacy_session_by_conversation_id(
-                connection, conversation_id, workspace_uuid
+                connection, conversation_id, user_id, workspace_uuid
             )
             if session is not None:
                 matched_alias_type = "legacy_openwebui_conversation_id"
@@ -729,23 +736,13 @@ def _pg_enqueue_capture_jobs(
     message_uuid: str,
     now: str,
 ) -> None:
-    profile = connection.execute(
-        """
-        SELECT p.model_profile_uuid, p.provider_type, p.model_name
-        FROM model_role_defaults d
-        JOIN model_profiles p ON p.model_profile_uuid = d.model_profile_uuid
-        WHERE d.role = 'memory_extraction' AND COALESCE(p.is_enabled, true) = true
-        ORDER BY CASE WHEN d.project_uuid IS NOT NULL THEN 0
-                      WHEN d.workspace_uuid IS NOT NULL THEN 1 ELSE 2 END
-        LIMIT 1
-        """
-    ).fetchone()
-    model_identity = {
-        "model_role": "memory_extraction",
-        "model_profile_uuid": profile["model_profile_uuid"] if profile else None,
-        "provider_type": profile["provider_type"] if profile else "deterministic",
-        "model_name": profile["model_name"] if profile else "deterministic_extraction",
-    }
+    compat_connection = (
+        connection
+        if isinstance(connection, PostgresCompatConnection)
+        else PostgresCompatConnection(connection)
+    )
+    identity = resolve_scoped_model_identity(compat_connection, session_uuid)
+    model_identity = identity.as_payload()
     jobs = [("text_unitization", 100), ("memory_extraction", 60)]
     for job_type, priority in jobs:
         job_uuid = new_uuid()
@@ -784,11 +781,11 @@ def _pg_enqueue_capture_jobs(
                 """
                 INSERT INTO model_usage_events (
                     usage_event_uuid, model_profile_uuid, role, event_type, stage,
-                    provider_type, model_name, session_uuid, message_uuid, job_uuid,
-                    input_tokens, output_tokens, embedding_count, status, created_at,
-                    schema_version
+                    provider_type, model_name, workspace_uuid, project_uuid,
+                    session_uuid, message_uuid, job_uuid, input_tokens, output_tokens,
+                    embedding_count, status, created_at, schema_version
                 ) VALUES (%s, %s, 'memory_extraction', 'queued', 'memory_extraction_queued',
-                          %s, %s, %s, %s, %s, 0, 0, 0, 'queued', %s, 1)
+                          %s, %s, %s, %s, %s, %s, %s, 0, 0, 0, 'queued', %s, 1)
                 ON CONFLICT (usage_event_uuid) DO NOTHING
                 """,
                 (
@@ -796,6 +793,8 @@ def _pg_enqueue_capture_jobs(
                     model_identity["model_profile_uuid"],
                     model_identity["provider_type"],
                     model_identity["model_name"],
+                    model_identity["workspace_uuid"],
+                    model_identity["project_uuid"],
                     session_uuid,
                     message_uuid,
                     job_uuid,
@@ -897,20 +896,25 @@ def _pg_session_for_alias(
 def _pg_legacy_session_by_conversation_id(
     connection: Any,
     conversation_id: str | None,
+    user_id: str | None,
     workspace_uuid: str,
 ) -> dict[str, Any] | None:
-    if not conversation_id:
+    if not conversation_id or not user_id:
         return None
     row = connection.execute(
         """
-        SELECT *
-        FROM sessions
-        WHERE openwebui_conversation_id = %s
-          AND workspace_uuid = %s
-        ORDER BY created_at
+        SELECT session.*
+        FROM sessions AS session
+        JOIN memorist_session_actors AS owner
+          ON owner.session_uuid = session.session_uuid
+        WHERE session.openwebui_conversation_id = %s
+          AND session.workspace_uuid = %s
+          AND owner.user_uuid = %s
+          AND owner.workspace_uuid = %s
+        ORDER BY session.created_at
         LIMIT 1
         """,
-        (conversation_id, workspace_uuid),
+        (conversation_id, workspace_uuid, user_id, workspace_uuid),
     ).fetchone()
     return dict(row) if row is not None else None
 
