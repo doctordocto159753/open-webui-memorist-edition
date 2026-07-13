@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-path = Path(__file__).resolve().parents[1] / "memorist-core/tests/test_pr4b_scope_closure.py"
+root = Path(__file__).resolve().parents[1]
+path = root / "memorist-core/tests/test_pr4b_scope_closure.py"
 text = path.read_text(encoding="utf-8")
 
 old = '''        connection.execute(
@@ -19,6 +20,23 @@ new = '''        connection.execute(
 '''
 if text.count(old) != 1:
     raise RuntimeError("workspace seed block changed unexpectedly")
+text = text.replace(old, new)
+
+old = '''        connection.execute(
+            "INSERT INTO projects (project_uuid, workspace_uuid, name, created_at, updated_at, schema_version) "
+            "VALUES (?, ?, ?, ?, ?, 1)",
+            (project, workspace, project, now, now),
+        )
+'''
+new = '''        connection.execute(
+            "INSERT INTO projects "
+            "(project_uuid, workspace_uuid, name, created_at, updated_at, schema_version) "
+            "VALUES (?, ?, ?, ?, ?, 1)",
+            (project, workspace, project, now, now),
+        )
+'''
+if text.count(old) != 1:
+    raise RuntimeError("project seed block changed unexpectedly")
 text = text.replace(old, new)
 
 old = '''    session_workspace_b = _seed_session(
@@ -124,6 +142,18 @@ new = '''    assert job_count == 1
 if text.count(old) != 1:
     raise RuntimeError("duplicate assertions changed unexpectedly")
 text = text.replace(old, new)
-
 path.write_text(text, encoding="utf-8")
+
+backend_path = root / "open-webui-integration/memorist/tests/test_backend_proxy.py"
+backend = backend_path.read_text(encoding="utf-8")
+old = '''        policy_call = next(call for call in FakeCoreClient.calls if call.get("operation") == "policy")
+'''
+new = '''        policy_call = next(
+            call for call in FakeCoreClient.calls if call.get("operation") == "policy"
+        )
+'''
+if backend.count(old) != 1:
+    raise RuntimeError("backend policy-call assertion changed unexpectedly")
+backend_path.write_text(backend.replace(old, new), encoding="utf-8")
+
 print("PR4-B scope closure post-patch applied")
