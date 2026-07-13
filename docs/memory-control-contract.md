@@ -10,6 +10,20 @@ then signs a short-lived, purpose-bound Core assertion. Signing secrets exist on
 Open WebUI backend/Filter environment. Direct `/memcore/*` access remains authenticated and
 Core host ports are loopback-bound.
 
+The shipped Full and release Compose profiles perform this mount through
+`memorist.backend.openwebui_entrypoint`. It reuses Open WebUI v0.9.6's native
+`get_verified_user` dependency and maps verified users into the server-configured
+`MEMORIST_OPENWEBUI_WORKSPACE_UUID`; the browser cannot select that workspace. The same
+entrypoint exposes the scoped status proxy and the review-prepare endpoint.
+
+For review-capable clients, `/memory-control/review/prepare` captures the original message
+idempotently and prepares the attachment before model dispatch. The client previews and
+approves that UUID, then resubmits the same Open WebUI message ID with
+`memorist_review_ui_active=true` and the exact `memorist_approved_attachment_uuid`. The
+Filter observes a duplicate capture of the original input, verifies the approved generation,
+records delivery, and injects only the server-rendered attachment. Without interception the
+Filter cancels before send and captures the assistant without attachment attribution.
+
 ## Trusted request and network boundary
 
 Sensitive Memory Control, retrieval, attachment, preflight, capture, and assistant-completion

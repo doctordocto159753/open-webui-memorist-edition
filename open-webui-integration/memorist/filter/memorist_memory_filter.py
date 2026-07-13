@@ -57,7 +57,6 @@ class Filter:
                 raise MemoristIntegrationError("memorist request control must be an object")
             policy = client.resolve_turn_policy(
                 user_id=actor_user_id,
-                workspace_uuid=parsed.workspace_id,
                 chat_id=parsed.conversation_id or parsed.temporary_chat_id,
                 workspace_id=parsed.workspace_id,
                 request_control=request_control,
@@ -71,6 +70,15 @@ class Filter:
             if policy.private:
                 metadata["memorist_private"] = True
                 return body
+            if policy.mode == "no_recall":
+                # A stale preview/delivery marker must never cross a Send-without-Memorist
+                # or regeneration boundary. The original capture may remain idempotently
+                # linked, but the model request and assistant completion carry no attachment.
+                metadata.pop("memorist_pending_attachment_uuid", None)
+                metadata.pop("memorist_delivered_attachment_uuid", None)
+                metadata.pop("memorist_attachment_uuid", None)
+                metadata.pop("memorist_retrieval_run_uuid", None)
+                metadata.pop("memorist_attachment_pending_review", None)
             if (
                 policy.mode == "no_recall"
                 and metadata.get("memorist_regeneration_uuid")
@@ -79,16 +87,12 @@ class Filter:
                 metadata["memorist_user_uuid"] = actor_user_id
                 if parsed.workspace_id is not None:
                     metadata["memorist_workspace_uuid"] = parsed.workspace_id
-                metadata.pop("memorist_pending_attachment_uuid", None)
-                metadata.pop("memorist_delivered_attachment_uuid", None)
-                metadata.pop("memorist_attachment_uuid", None)
-                metadata.pop("memorist_retrieval_run_uuid", None)
-                metadata.pop("memorist_attachment_pending_review", None)
                 return body
             resolved = client.resolve_session(
                 openwebui_conversation_id=parsed.conversation_id,
                 title=parsed.title,
                 user_id=actor_user_id,
+                workspace_uuid=parsed.workspace_id,
                 temporary_chat_id=parsed.temporary_chat_id,
                 client_session_nonce=parsed.client_session_nonce,
                 first_message_hash=parsed.first_message_hash,

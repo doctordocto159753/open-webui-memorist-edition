@@ -27,8 +27,14 @@ class MemoristClient:
     def health(self) -> dict[str, Any]:
         return self._request("GET", "/memcore/health", retry=True)
 
-    def status(self) -> dict[str, Any]:
-        return self._request("GET", "/memcore/openwebui/status", retry=True)
+    def status(self, *, user_id: str, workspace_uuid: str) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            "/memcore/openwebui/status",
+            retry=True,
+            actor_user_id=user_id,
+            actor_workspace_id=workspace_uuid,
+        )
 
     def resolve_turn_policy(
         self,
@@ -272,7 +278,7 @@ class MemoristClient:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Call an allow-listed Core path from the authenticated Open WebUI backend."""
-        if not path.startswith("/memcore/memory-control/"):
+        if not (path.startswith("/memcore/memory-control/") or path == "/memcore/openwebui/status"):
             raise MemoristCoreUnavailable("backend actor proxy path is not allowed")
         return self._request(
             method,

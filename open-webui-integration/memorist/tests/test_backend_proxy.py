@@ -22,6 +22,26 @@ class FakeCoreClient:
         self.calls.append({"method": method, "path": path, **kwargs})
         return {"ok": True, "actor": kwargs["user_id"]}
 
+    def status(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append({"operation": "status", **kwargs})
+        return {"memorist_core": "connected"}
+
+    def resolve_turn_policy(self, **kwargs: Any) -> SimpleNamespace:
+        self.calls.append({"operation": "policy", **kwargs})
+        return SimpleNamespace(mode="full", recall_enabled=True, attachment_enabled=True)
+
+    def resolve_session(self, *_args: Any, **kwargs: Any) -> SimpleNamespace:
+        self.calls.append({"operation": "session", **kwargs})
+        return SimpleNamespace(session_uuid="session-1")
+
+    def capture_message(self, *_args: Any, **kwargs: Any) -> SimpleNamespace:
+        self.calls.append({"operation": "capture", **kwargs})
+        return SimpleNamespace(message_uuid="message-1")
+
+    def preflight(self, *_args: Any, **kwargs: Any) -> SimpleNamespace:
+        self.calls.append({"operation": "preflight", **kwargs})
+        return SimpleNamespace(status="attached", attachment_uuid="attachment-1")
+
 
 def _app(*, authenticated: bool) -> TestClient:
     module = importlib.import_module("memorist.backend.router")
@@ -67,3 +87,55 @@ def test_proxy_overrides_browser_identity_and_signs_as_server_actor() -> None:
     assert call["workspace_uuid"] == "trusted-workspace"
     assert call["payload"]["user_uuid"] == "trusted-user"
     assert call["payload"]["workspace_uuid"] == "trusted-workspace"
+
+
+def test_review_prepare_uses_trusted_actor_and_preserves_message_identity() -> None:
+    FakeCoreClient.calls = []
+    response = _app(authenticated=True).post(
+        "/api/v1/memorist/memory-control/review/prepare",
+        json={
+            "conversation_id": "chat-1",
+            "message_id": "browser-message-1",
+            "content": "remember this",
+            "user_uuid": "victim",
+            "workspace_uuid": "victim-workspace",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["attachment_uuid"] == "attachment-1"
+    assert response.json()["input_message_uuid"] == "message-1"
+    capture = next(call for call in FakeCoreClient.calls if call.get("operation") == "capture")
+    assert capture["user_id"] == "trusted-user"
+    assert capture["workspace_uuid"] == "trusted-workspace"
+    assert capture["openwebui_message_id"] == "browser-message-1"
+
+
+def test_shipped_entrypoint_mounts_router_with_verified_openwebui_user(
+    monkeypatch: Any,
+) -> None:
+    import types
+
+    app = FastAPI()
+
+    def get_verified_user() -> SimpleNamespace:
+        return SimpleNamespace(id="verified-openwebui-user")
+
+    open_webui = types.ModuleType("open_webui")
+    main = types.ModuleType("open_webui.main")
+    auth = types.ModuleType("open_webui.utils.auth")
+    utils = types.ModuleType("open_webui.utils")
+    main.app = app
+    auth.get_verified_user = get_verified_user
+    monkeypatch.setitem(sys.modules, "open_webui", open_webui)
+    monkeypatch.setitem(sys.modules, "open_webui.main", main)
+    monkeypatch.setitem(sys.modules, "open_webui.utils", utils)
+    monkeypatch.setitem(sys.modules, "open_webui.utils.auth", auth)
+    monkeypatch.setenv("MEMORIST_OPENWEBUI_WORKSPACE_UUID", "00000000-0000-0000-0000-000000000001")
+    entrypoint = importlib.import_module("memorist.backend.openwebui_entrypoint")
+    mounted = entrypoint.create_app()
+
+    assert mounted is app
+    assert entrypoint.require_openwebui_actor in app.dependency_overrides
+    response = TestClient(app).get("/api/v1/memorist/openwebui/status")
+    assert response.status_code == 200, response.text
+    assert response.json()["memorist_core"] == "connected"

@@ -57,6 +57,85 @@ async def resolve_policy(request: Request, actor: AuthenticatedActor) -> dict[st
     return _call(actor, "POST", "/memory-control/policy/resolve", payload)
 
 
+@router.get("/openwebui/status")
+def openwebui_status(actor: AuthenticatedActor) -> dict[str, Any]:
+    return MemoristClient().status(
+        user_id=actor.user_uuid,
+        workspace_uuid=actor.workspace_uuid,
+    )
+
+
+@router.post("/memory-control/review/prepare")
+async def prepare_attachment_review(request: Request, actor: AuthenticatedActor) -> dict[str, Any]:
+    payload = await _object_body(request)
+    content = str(payload.get("content") or "").strip()
+    message_id = str(payload.get("message_id") or "").strip()
+    conversation_id = _optional_text(payload.get("conversation_id"))
+    temporary_chat_id = _optional_text(payload.get("temporary_chat_id"))
+    if not content or not message_id or not (conversation_id or temporary_chat_id):
+        raise HTTPException(
+            status_code=422,
+            detail="content, message_id, and a conversation identifier are required",
+        )
+    client = MemoristClient()
+    policy = client.resolve_turn_policy(
+        user_id=actor.user_uuid,
+        chat_id=conversation_id or temporary_chat_id,
+        workspace_id=actor.workspace_uuid,
+        request_control={"turn_policy": "full", "attachment_review": True},
+    )
+    if not policy.recall_enabled or not policy.attachment_enabled:
+        return {"status": "disabled", "turn_policy": policy.mode}
+    session = client.resolve_session(
+        conversation_id,
+        _optional_text(payload.get("title")),
+        actor.user_uuid,
+        actor.workspace_uuid,
+        temporary_chat_id=temporary_chat_id,
+        client_session_nonce=_optional_text(payload.get("client_session_nonce")),
+        first_message_hash=_optional_text(payload.get("first_message_hash")),
+        created_at=_optional_text(payload.get("timestamp")),
+        turn_policy=policy.mode,
+        attachment_review=True,
+    )
+    captured = client.capture_message(
+        session.session_uuid,
+        "user",
+        content,
+        openwebui_conversation_id=conversation_id,
+        temporary_chat_id=temporary_chat_id,
+        openwebui_message_id=message_id,
+        source_message_id=message_id,
+        timestamp=_optional_text(payload.get("timestamp")),
+        user_id=actor.user_uuid,
+        idempotency_key=f"review-prepare:{actor.user_uuid}:{message_id}",
+        turn_policy=policy.mode,
+        attachment_review=True,
+        workspace_uuid=actor.workspace_uuid,
+    )
+    prepared = client.preflight(
+        session.session_uuid,
+        captured.message_uuid,
+        target_model=_optional_text(payload.get("target_model")),
+        model_provider=_optional_text(payload.get("model_provider")),
+        model_context_window=_optional_int(payload.get("model_context_window")),
+        recent_conversation_text=_optional_text(payload.get("recent_conversation_text")),
+        turn_policy=policy.mode,
+        user_id=actor.user_uuid,
+        workspace_uuid=actor.workspace_uuid,
+        attachment_review=True,
+    )
+    return {
+        "status": prepared.status,
+        "attachment_uuid": prepared.attachment_uuid,
+        "input_message_uuid": captured.message_uuid,
+        "session_uuid": session.session_uuid,
+        "workspace_uuid": actor.workspace_uuid,
+        "message_id": message_id,
+        "generation": 1,
+    }
+
+
 @router.put("/memory-control/policy/defaults")
 async def set_policy_default(request: Request, actor: AuthenticatedActor) -> dict[str, Any]:
     payload = await _object_body(request)
@@ -113,3 +192,12 @@ async def _object_body(request: Request) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise HTTPException(status_code=422, detail="JSON object required")
     return dict(value)
+
+
+def _optional_text(value: Any) -> str | None:
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
+
+def _optional_int(value: Any) -> int | None:
+    return int(value) if value is not None else None

@@ -200,7 +200,7 @@ def falkordb_service(test_name: str) -> Iterator[ExternalService]:
             container_name,
             "-p",
             f"{port}:6379",
-            "falkordb/falkordb:latest",
+            "falkordb/falkordb:v4.18.10",
         ],
         test_name,
         "start_falkordb_container",

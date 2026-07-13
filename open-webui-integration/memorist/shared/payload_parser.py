@@ -130,7 +130,7 @@ def insert_memory_attachment(
             break
     messages.insert(insert_at, message)
     if attachment_uuid:
-        metadata["memorist_attachment_uuid"] = attachment_uuid
+        metadata["memorist_delivered_attachment_uuid"] = attachment_uuid
     metadata["memorist_context_untrusted"] = True
     return body
 

@@ -14,9 +14,11 @@ MEMORIST_CORE_URL=http://localhost:8777
 Do not configure provider API keys in Memorist integration files. Use Open WebUI Admin Settings → Connections for model providers.
 # Authenticated backend router
 
-Mount `memorist.backend.router.router` in the Open WebUI backend under the existing
-authenticated API application. The Open WebUI authentication/membership middleware must set
-`request.state.memorist_actor.user_uuid` and `.workspace_uuid`; never derive these values from
+The shipped Compose files start Open WebUI through
+`python -m memorist.backend.openwebui_entrypoint`. The entrypoint mounts the router under the
+native authenticated API application, uses Open WebUI's `get_verified_user`, and supplies the
+workspace only from `MEMORIST_OPENWEBUI_WORKSPACE_UUID`. Never derive either identity from
 request headers, JSON, query parameters, or browser storage. The frontend uses
 `/api/v1/memorist`, while only the backend Filter/router may reach `/memcore` with the service
-credential and actor-assertion secret.
+credential and actor-assertion secret. A custom deployment must reproduce this same mount and
+dependency binding.

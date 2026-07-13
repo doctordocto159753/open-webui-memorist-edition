@@ -8,10 +8,14 @@ services:
       MEMORIST_CORE_URL: http://memorist-core:8777
       MEMORIST_ACTOR_ASSERTION_SECRET: ${MEMORIST_ACTOR_ASSERTION_SECRET:?required}
       MEMORIST_ACTOR_SERVICE_TOKEN: ${MEMORIST_ACTOR_SERVICE_TOKEN:?required}
+      MEMORIST_OPENWEBUI_WORKSPACE_UUID: ${MEMORIST_OPENWEBUI_WORKSPACE_UUID:?required}
+      PYTHONPATH: /memorist-integration
+    command: ["python", "-m", "memorist.backend.openwebui_entrypoint"]
     ports:
       - "${OPEN_WEBUI_PORT:-3000}:8080"
     volumes:
       - openwebui-data:/app/backend/data
+      - ./open-webui-integration/memorist:/memorist-integration/memorist:ro
     depends_on:
       memorist-core:
         condition: service_started

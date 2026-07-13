@@ -134,6 +134,14 @@ def _resolve_session_payload(request: SessionResolveRequest) -> dict[str, Any]:
             ),
         )
         session = resolution.session
+        if request.user_id:
+            _bind_session_actor(
+                connection,
+                session.session_uuid,
+                request.user_id,
+                workspace_uuid,
+            )
+            connection.commit()
         return {
             "session_uuid": session.session_uuid,
             "workspace_uuid": session.workspace_uuid,
@@ -221,6 +229,10 @@ def capture_message(request: MessageCaptureRequest) -> dict[str, Any]:
                 raise HTTPException(status_code=404, detail="session not found")
             if request.workspace_uuid and session.workspace_uuid != request.workspace_uuid:
                 raise HTTPException(status_code=403, detail="session workspace mismatch")
+            if request.user_id and request.workspace_uuid:
+                _assert_session_actor(
+                    connection, session_uuid, request.user_id, request.workspace_uuid
+                )
 
     idempotency_key = request.idempotency_key or _capture_key(request, session_uuid)
     try:
@@ -467,6 +479,13 @@ def _resolve_session_payload_full(
                 ),
             )
             diagnostics.append("created_session_without_existing_alias")
+        if request.user_id:
+            _pg_bind_session_actor(
+                connection,
+                str(session["session_uuid"]),
+                request.user_id,
+                workspace_uuid,
+            )
         if conversation_id:
             _pg_attach_alias(connection, str(session["session_uuid"]), conversation_id, user_id)
         aliases = _pg_aliases(connection, str(session["session_uuid"]))
@@ -509,6 +528,10 @@ def _capture_message_full(settings: Settings, request: MessageCaptureRequest) ->
                 raise HTTPException(status_code=404, detail="session not found")
             if request.workspace_uuid and session.get("workspace_uuid") != request.workspace_uuid:
                 raise HTTPException(status_code=403, detail="session workspace mismatch")
+            if request.user_id and request.workspace_uuid:
+                _pg_assert_session_actor(
+                    connection, session_uuid, request.user_id, request.workspace_uuid
+                )
             connection.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 (f"openwebui-capture:{session_uuid}",),
@@ -814,6 +837,37 @@ def _pg_session_exists(connection: Any, session_uuid: str) -> dict[str, Any] | N
     return dict(row) if row is not None else None
 
 
+def _pg_bind_session_actor(
+    connection: Any, session_uuid: str, user_uuid: str, workspace_uuid: str
+) -> None:
+    existing = connection.execute(
+        "SELECT user_uuid, workspace_uuid FROM memorist_session_actors WHERE session_uuid = %s",
+        (session_uuid,),
+    ).fetchone()
+    if existing is None:
+        connection.execute(
+            "INSERT INTO memorist_session_actors "
+            "(session_uuid, user_uuid, workspace_uuid, created_at, schema_version) "
+            "VALUES (%s, %s, %s, %s, 1)",
+            (session_uuid, user_uuid, workspace_uuid, utc_now()),
+        )
+        return
+    if existing["user_uuid"] != user_uuid or existing["workspace_uuid"] != workspace_uuid:
+        raise HTTPException(status_code=404, detail="session not found")
+
+
+def _pg_assert_session_actor(
+    connection: Any, session_uuid: str, user_uuid: str, workspace_uuid: str
+) -> None:
+    row = connection.execute(
+        "SELECT 1 FROM memorist_session_actors "
+        "WHERE session_uuid = %s AND user_uuid = %s AND workspace_uuid = %s",
+        (session_uuid, user_uuid, workspace_uuid),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+
 def _pg_attach_alias(
     connection: Any,
     session_uuid: str,
@@ -927,6 +981,37 @@ def _ensure_workspace_uuid(connection: Any, workspace_uuid: str, name: str) -> s
         (workspace_uuid, name, now, now),
     )
     return workspace_uuid
+
+
+def _bind_session_actor(
+    connection: Any, session_uuid: str, user_uuid: str, workspace_uuid: str
+) -> None:
+    existing = connection.execute(
+        "SELECT user_uuid, workspace_uuid FROM memorist_session_actors WHERE session_uuid = ?",
+        (session_uuid,),
+    ).fetchone()
+    if existing is None:
+        connection.execute(
+            "INSERT INTO memorist_session_actors "
+            "(session_uuid, user_uuid, workspace_uuid, created_at, schema_version) "
+            "VALUES (?, ?, ?, ?, 1)",
+            (session_uuid, user_uuid, workspace_uuid, utc_now()),
+        )
+        return
+    if existing["user_uuid"] != user_uuid or existing["workspace_uuid"] != workspace_uuid:
+        raise HTTPException(status_code=404, detail="session not found")
+
+
+def _assert_session_actor(
+    connection: Any, session_uuid: str, user_uuid: str, workspace_uuid: str
+) -> None:
+    row = connection.execute(
+        "SELECT 1 FROM memorist_session_actors "
+        "WHERE session_uuid = ? AND user_uuid = ? AND workspace_uuid = ?",
+        (session_uuid, user_uuid, workspace_uuid),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="session not found")
 
 
 def _default_project_uuid(connection: Any, workspace_uuid: str, name: str) -> str:

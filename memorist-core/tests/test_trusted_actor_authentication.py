@@ -183,3 +183,18 @@ def test_session_and_capture_are_bound_to_verified_workspace(
         headers=_headers(_assertion("POST", capture_path, user=user, workspace=foreign_workspace)),
     )
     assert rejected.status_code == 403
+
+    other_user = f"actor-{uuid4().hex}"
+    cross_user = client.post(
+        capture_path,
+        json={
+            "session_uuid": session_uuid,
+            "role": "user",
+            "content": "must not cross user",
+            "user_id": other_user,
+            "workspace_uuid": workspace,
+            "turn_policy": "no_recall",
+        },
+        headers=_headers(_assertion("POST", capture_path, user=other_user, workspace=workspace)),
+    )
+    assert cross_user.status_code == 404

@@ -40,6 +40,44 @@ export type MemoristPolicyResolution = {
   openwebui_native_memory_independent: true;
 };
 
+export type MemoristAttachmentReviewPrepare = {
+  conversation_id?: string | null;
+  temporary_chat_id?: string | null;
+  message_id: string;
+  content: string;
+  title?: string | null;
+  timestamp?: string | null;
+  target_model?: string | null;
+  model_provider?: string | null;
+  model_context_window?: number | null;
+  recent_conversation_text?: string | null;
+};
+
+export type MemoristPreparedAttachment = {
+  status: string;
+  attachment_uuid: string;
+  input_message_uuid: string;
+  session_uuid: string;
+  workspace_uuid: string;
+  message_id: string;
+  generation: number;
+};
+
+export type MemoristApprovedReviewMetadata = {
+  memorist_review_ui_active: true;
+  memorist_approved_attachment_uuid: string;
+  memorist_input_message_uuid: string;
+};
+
+export type MemoristSendWithoutReview = {
+  memorist: { turn_policy: "no_recall"; attachment_review: false };
+  metadata: {
+    memorist_review_ui_active: false;
+    memorist_input_message_uuid: string;
+    memorist_review_disposition: "suppressed" | "cancelled_before_send";
+  };
+};
+
 export type MemoristHealth = {
   status: ImportRunStatus;
   service: string;
@@ -148,14 +186,17 @@ export type PrivacyAcknowledgementResponse = {
 };
 
 export class MemoristClient {
-  constructor(private readonly baseUrl: string = "/api/v1/memorist") {}
+  constructor(
+    private readonly baseUrl: string = "/memcore",
+    private readonly controlBaseUrl: string = "/api/v1/memorist",
+  ) {}
 
   async health(): Promise<MemoristHealth> {
     return this.get<MemoristHealth>("/health");
   }
 
   async config(): Promise<unknown> { return this.get("/config/effective"); }
-  async sessions(): Promise<unknown> { return this.get("/openwebui/status"); }
+  async sessions(): Promise<unknown> { return this.controlGet("/openwebui/status"); }
   async messages(): Promise<unknown> { return this.get("/memories"); }
   async blocks(): Promise<unknown> { return this.get("/blocks/rebuild-stale"); }
   async imports(): Promise<unknown> { return this.get("/imports"); }
@@ -174,14 +215,14 @@ export class MemoristClient {
   async setModelControlDefault(payload: ModelControlRoleDefaultSet): Promise<ModelControlRoleDefaultSetResponse> { return this.post("/model-control/defaults", payload); }
   async acknowledgeModelControlPrivacy(payload: PrivacyAcknowledgementRequest): Promise<PrivacyAcknowledgementResponse> { return this.post("/model-control/privacy/acknowledge", payload); }
   async modelRoleCosts(): Promise<unknown> { return this.get("/costs/model-roles"); }
-  async diagnostics(): Promise<unknown> { return this.get("/openwebui/status"); }
+  async diagnostics(): Promise<unknown> { return this.controlGet("/openwebui/status"); }
   async resolveMemoristPolicy(payload: {
     user_uuid?: string | null;
     chat_uuid?: string | null;
     workspace_uuid?: string | null;
     memorist?: { turn_policy?: MemoristTurnPolicy; attachment_review?: boolean };
   }): Promise<MemoristPolicyResolution> {
-    return this.post("/memory-control/policy/resolve", payload);
+    return this.controlPost("/memory-control/policy/resolve", payload);
   }
   async setMemoristDefault(payload: {
     scope_type: "user" | "chat";
@@ -190,34 +231,67 @@ export class MemoristClient {
     turn_policy: MemoristTurnPolicy;
     attachment_review?: boolean;
   }): Promise<unknown> {
-    return this.put("/memory-control/policy/defaults", payload);
+    return this.controlPut("/memory-control/policy/defaults", payload);
   }
   async previewAttachment(attachmentUuid: string): Promise<unknown> {
-    return this.get(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/preview`);
+    return this.controlGet(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/preview`);
   }
   async fetchAttachmentSources(attachmentUuid: string): Promise<unknown> {
-    return this.get(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/sources`);
+    return this.controlGet(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/sources`);
   }
   async approveAttachment(attachmentUuid: string, idempotencyKey: string): Promise<unknown> {
-    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/approve`, { idempotency_key: idempotencyKey });
+    return this.controlPost(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/approve`, { idempotency_key: idempotencyKey });
   }
   async suppressAttachment(attachmentUuid: string, idempotencyKey: string): Promise<unknown> {
-    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/suppress`, { idempotency_key: idempotencyKey });
+    return this.controlPost(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/suppress`, { idempotency_key: idempotencyKey });
   }
   async cancelAttachmentBeforeSend(attachmentUuid: string, idempotencyKey: string): Promise<unknown> {
-    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/cancel`, { idempotency_key: idempotencyKey });
+    return this.controlPost(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/cancel`, { idempotency_key: idempotencyKey });
   }
   async recordAttachmentDelivery(attachmentUuid: string, idempotencyKey: string, responseMessageUuid?: string): Promise<unknown> {
-    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/delivery`, { idempotency_key: idempotencyKey, response_message_uuid: responseMessageUuid });
+    return this.controlPost(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/delivery`, { idempotency_key: idempotencyKey, response_message_uuid: responseMessageUuid });
   }
   async recordAttachmentRejection(attachmentUuid: string, idempotencyKey: string): Promise<unknown> {
-    return this.post(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/rejection`, { idempotency_key: idempotencyKey });
+    return this.controlPost(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/rejection`, { idempotency_key: idempotencyKey });
   }
   async regenerateWithoutRecall(attachmentUuid: string, sourceResponseMessageUuid: string, idempotencyKey: string): Promise<MemoristRegenerationInstruction> {
-    return this.post<MemoristRegenerationInstruction>(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/regenerate-without-recall`, {
+    return this.controlPost<MemoristRegenerationInstruction>(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/regenerate-without-recall`, {
       idempotency_key: idempotencyKey,
       response_message_uuid: sourceResponseMessageUuid,
     });
+  }
+  async prepareAttachmentReview(payload: MemoristAttachmentReviewPrepare): Promise<MemoristPreparedAttachment> {
+    return this.controlPost<MemoristPreparedAttachment>("/memory-control/review/prepare", payload);
+  }
+  async approveAttachmentForSend(
+    prepared: MemoristPreparedAttachment,
+    idempotencyKey: string,
+  ): Promise<MemoristApprovedReviewMetadata> {
+    await this.approveAttachment(prepared.attachment_uuid, idempotencyKey);
+    return {
+      memorist_review_ui_active: true,
+      memorist_approved_attachment_uuid: prepared.attachment_uuid,
+      memorist_input_message_uuid: prepared.input_message_uuid,
+    };
+  }
+  async sendPreparedWithoutMemorist(
+    prepared: MemoristPreparedAttachment,
+    disposition: "suppressed" | "cancelled_before_send",
+    idempotencyKey: string,
+  ): Promise<MemoristSendWithoutReview> {
+    if (disposition === "suppressed") {
+      await this.suppressAttachment(prepared.attachment_uuid, idempotencyKey);
+    } else {
+      await this.cancelAttachmentBeforeSend(prepared.attachment_uuid, idempotencyKey);
+    }
+    return {
+      memorist: { turn_policy: "no_recall", attachment_review: false },
+      metadata: {
+        memorist_review_ui_active: false,
+        memorist_input_message_uuid: prepared.input_message_uuid,
+        memorist_review_disposition: disposition,
+      },
+    };
   }
   buildRegenerationRequest(instruction: MemoristRegenerationInstruction): MemoristRegenerationRequestBody {
     return {
@@ -263,6 +337,34 @@ export class MemoristClient {
       method: "PUT",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error(await this.errorDetail(response));
+    return response.json() as Promise<T>;
+  }
+
+  private async controlGet<T = unknown>(path: string): Promise<T> {
+    const response = await fetch(`${this.controlBaseUrl}${path}`, { credentials: "same-origin" });
+    if (!response.ok) throw new Error(await this.errorDetail(response));
+    return response.json() as Promise<T>;
+  }
+
+  private async controlPost<T = unknown>(path: string, body: unknown): Promise<T> {
+    const response = await fetch(`${this.controlBaseUrl}${path}`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error(await this.errorDetail(response));
+    return response.json() as Promise<T>;
+  }
+
+  private async controlPut<T = unknown>(path: string, body: unknown): Promise<T> {
+    const response = await fetch(`${this.controlBaseUrl}${path}`, {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     if (!response.ok) throw new Error(await this.errorDetail(response));

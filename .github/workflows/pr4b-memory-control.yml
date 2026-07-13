@@ -186,6 +186,7 @@ jobs:
         run: |
           uv run pytest ../open-webui-integration/memorist/tests/test_filter_contract.py -k review -q
           uv run pytest ../open-webui-integration/memorist/tests/test_backend_proxy.py -q
+          uv run pytest ../open-webui-integration/memorist/tests/test_client_fail_open.py -k signs -q
 
   regeneration-concurrency-lite:
     name: Regeneration Concurrency — Lite
