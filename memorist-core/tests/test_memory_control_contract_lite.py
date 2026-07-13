@@ -53,7 +53,7 @@ def test_normalized_policy_is_immutable_and_server_profile_is_absent() -> None:
     assert policy.private is True
     assert "runtime_profile" not in policy.model_dump()
     with pytest.raises((ValidationError, AttributeError)):
-        policy.recall_enabled = True  # type: ignore[misc]
+        policy.recall_enabled = True
 
 
 def test_policy_precedence_turn_chat_user_system(tmp_path: Path) -> None:

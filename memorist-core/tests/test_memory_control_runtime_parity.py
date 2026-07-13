@@ -4,6 +4,7 @@ import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -39,7 +40,7 @@ def _settings(runtime: str, tmp_path: Path) -> Settings:
 
 
 @contextmanager
-def _connection(settings: Settings) -> Iterator[object]:
+def _connection(settings: Settings) -> Iterator[Any]:
     initialize_runtime_storage(settings)
     with memory_control_connection(settings) as connection:
         yield connection
