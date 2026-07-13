@@ -52,6 +52,7 @@ jobs:
       - name: Format and lint changed Python
         working-directory: memorist-core
         run: |
+          set +e
           uv run ruff check --fix \
             src/memcore/api/routes_openwebui.py \
             src/memcore/api/routes_retrieval.py \
@@ -59,7 +60,8 @@ jobs:
             src/memcore/openwebui/model_scheduling.py \
             tests/test_pr4b_scope_closure.py \
             ../open-webui-integration/memorist/backend/router.py \
-            ../open-webui-integration/memorist/tests/test_backend_proxy.py
+            ../open-webui-integration/memorist/tests/test_backend_proxy.py \
+            > ../scope-closure-ruff.log 2>&1
           uv run ruff format \
             src/memcore/api/routes_openwebui.py \
             src/memcore/api/routes_retrieval.py \
@@ -67,7 +69,8 @@ jobs:
             src/memcore/openwebui/model_scheduling.py \
             tests/test_pr4b_scope_closure.py \
             ../open-webui-integration/memorist/backend/router.py \
-            ../open-webui-integration/memorist/tests/test_backend_proxy.py
+            ../open-webui-integration/memorist/tests/test_backend_proxy.py \
+            >> ../scope-closure-ruff.log 2>&1
           uv run ruff check \
             src/memcore/api/routes_openwebui.py \
             src/memcore/api/routes_retrieval.py \
@@ -75,7 +78,26 @@ jobs:
             src/memcore/openwebui/model_scheduling.py \
             tests/test_pr4b_scope_closure.py \
             ../open-webui-integration/memorist/backend/router.py \
-            ../open-webui-integration/memorist/tests/test_backend_proxy.py
+            ../open-webui-integration/memorist/tests/test_backend_proxy.py \
+            >> ../scope-closure-ruff.log 2>&1
+          status=$?
+          cat ../scope-closure-ruff.log
+          exit $status
+      - name: Upload patched tree diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr4b-scope-closure-debug
+          path: |
+            scope-closure-ruff.log
+            memorist-core/src/memcore/api/routes_openwebui.py
+            memorist-core/src/memcore/api/routes_retrieval.py
+            memorist-core/src/memcore/openwebui/commands.py
+            memorist-core/src/memcore/openwebui/model_scheduling.py
+            memorist-core/tests/test_pr4b_scope_closure.py
+            open-webui-integration/memorist/backend/router.py
+            open-webui-integration/memorist/tests/test_backend_proxy.py
+            open-webui-integration/memorist/ui/memoristClient.ts
       - name: Validate Lite policy, ownership, and Processing Node scope
         working-directory: memorist-core
         run: |
@@ -96,6 +118,7 @@ jobs:
           git diff --check
       - name: Commit verified closure and remove temporary automation
         run: |
+          rm -f scope-closure-ruff.log
           rm -f scripts/pr4b_scope_closure.py scripts/pr4b_scope_closure_post.py
           rm -f .github/workflows/pr4b-scope-closure-apply.yml
           git config user.name "github-actions[bot]"
