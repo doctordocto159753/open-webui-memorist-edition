@@ -7,6 +7,7 @@ on:
     paths: &closure_paths
       - scripts/pr4b_scope_closure.py
       - scripts/pr4b_scope_closure_post.py
+      - memorist-core/src/memcore/storage/postgres/compat.py
       - memorist-core/src/memcore/storage/postgres/migrations/0014_scoped_model_role_defaults.sql
       - .github/workflows/pr4b-scope-closure-apply.yml
   pull_request:
@@ -59,6 +60,7 @@ jobs:
             src/memcore/api/routes_retrieval.py \
             src/memcore/openwebui/commands.py \
             src/memcore/openwebui/model_scheduling.py \
+            src/memcore/storage/postgres/compat.py \
             tests/test_pr4b_scope_closure.py \
             ../open-webui-integration/memorist/backend/router.py \
             ../open-webui-integration/memorist/tests/test_backend_proxy.py \
@@ -68,6 +70,7 @@ jobs:
             src/memcore/api/routes_retrieval.py \
             src/memcore/openwebui/commands.py \
             src/memcore/openwebui/model_scheduling.py \
+            src/memcore/storage/postgres/compat.py \
             tests/test_pr4b_scope_closure.py \
             ../open-webui-integration/memorist/backend/router.py \
             ../open-webui-integration/memorist/tests/test_backend_proxy.py \
@@ -77,6 +80,7 @@ jobs:
             src/memcore/api/routes_retrieval.py \
             src/memcore/openwebui/commands.py \
             src/memcore/openwebui/model_scheduling.py \
+            src/memcore/storage/postgres/compat.py \
             tests/test_pr4b_scope_closure.py \
             ../open-webui-integration/memorist/backend/router.py \
             ../open-webui-integration/memorist/tests/test_backend_proxy.py \
@@ -95,6 +99,7 @@ jobs:
             memorist-core/src/memcore/api/routes_retrieval.py
             memorist-core/src/memcore/openwebui/commands.py
             memorist-core/src/memcore/openwebui/model_scheduling.py
+            memorist-core/src/memcore/storage/postgres/compat.py
             memorist-core/tests/test_pr4b_scope_closure.py
             open-webui-integration/memorist/backend/router.py
             open-webui-integration/memorist/tests/test_backend_proxy.py
