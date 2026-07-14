@@ -199,22 +199,13 @@ def test_current_greeting_baseline_enforces_gate_in_lite_and_full(
     )
     _run_pipeline(settings, message_uuid, force_phatic=False)
     snapshot = _snapshot(settings, message_uuid)
-    if RUNTIME == "lite":
-        assert snapshot == SemanticSnapshot(
-            dominant_functions=["phatic"],
-            routes=["ignore:ignored"],
-            gate_decisions=["discard"],
-            candidates=[],
-            memory_count=0,
-        )
-    else:
-        assert snapshot == SemanticSnapshot(
-            dominant_functions=["referential"],
-            routes=["manual_review:ready"],
-            gate_decisions=["discard"],
-            candidates=[],
-            memory_count=0,
-        )
+    assert snapshot == SemanticSnapshot(
+        dominant_functions=["phatic"],
+        routes=["ignore:ignored"],
+        gate_decisions=["discard"],
+        candidates=[],
+        memory_count=0,
+    )
 
 
 def test_forced_phatic_annotation_routes_ignore_and_creates_no_memory(
