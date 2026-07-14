@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
 import json
 from typing import Any
 
@@ -75,7 +74,7 @@ def _postgres_confidence(confidence: JakobsonConfidence) -> str:
 def _secondary(raw: Any) -> list[str]:
     if raw is None:
         return []
-    if isinstance(raw, list):
+    if isinstance(raw, list | tuple | set):
         return [str(item) for item in raw]
     if isinstance(raw, str):
         try:
@@ -84,8 +83,6 @@ def _secondary(raw: Any) -> list[str]:
             return []
         if isinstance(loaded, list):
             return [str(item) for item in loaded]
-    if isinstance(raw, Iterable):
-        return [str(item) for item in raw]
     return []
 
 
