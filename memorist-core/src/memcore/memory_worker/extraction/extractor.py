@@ -53,9 +53,12 @@ class CandidateExtractor:
         reason_codes = [*mapping.rejection_reason_codes] if mapping is not None else []
         reason_codes.extend(_rejection_reasons(text, source_authority, sensitivity))
         status = _status_from_reasons(reason_codes)
-        if mapping is not None and mapping.status is CandidateStatus.NEEDS_REVIEW:
-            if status is not CandidateStatus.REJECTED:
-                status = CandidateStatus.NEEDS_REVIEW
+        if (
+            mapping is not None
+            and mapping.status is CandidateStatus.NEEDS_REVIEW
+            and status is not CandidateStatus.REJECTED
+        ):
+            status = CandidateStatus.NEEDS_REVIEW
         if candidate_type is CandidateType.UNRESOLVED_QUESTION and not reason_codes:
             reason_codes.append(reasons.QUESTION_NOT_ASSERTION)
             status = CandidateStatus.REJECTED
@@ -77,7 +80,9 @@ class CandidateExtractor:
             confidence = min(confidence, 0.65)
         if status is CandidateStatus.REJECTED:
             confidence = min(confidence, 0.35)
-        importance = mapping.importance if mapping is not None else _importance(candidate_type, text)
+        importance = (
+            mapping.importance if mapping is not None else _importance(candidate_type, text)
+        )
 
         candidate = MemoryCandidate(
             processing_run_uuid=processing_run_uuid,
