@@ -3,8 +3,6 @@ name: PR4-D Focused Diagnostic
 "on":
   pull_request:
     branches: [main]
-  push:
-    branches: [codex/pr4d-canonical-semantic-authority-parity]
   workflow_dispatch:
 
 jobs:
