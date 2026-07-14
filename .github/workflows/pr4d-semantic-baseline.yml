@@ -1,0 +1,84 @@
+name: PR4-D Semantic Baseline
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [codex/pr4d-canonical-semantic-authority-parity]
+  workflow_dispatch:
+
+jobs:
+  semantic-baseline-lite:
+    name: Semantic Baseline — Lite
+    runs-on: ubuntu-latest
+    env:
+      MEMORIST_SEMANTIC_BASELINE_RUNTIME: lite
+      MEMORIST_RUNTIME_PROFILE: lite
+      MEMORIST_CANONICAL_STORE: sqlite
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Characterize current Lite semantics
+        working-directory: memorist-core
+        run: |
+          uv run pytest tests/test_pr4d_semantic_baseline.py -q --junitxml=semantic-baseline-lite.xml
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('semantic-baseline-lite.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+
+  semantic-baseline-full:
+    name: Semantic Baseline — Full PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: memorist
+          POSTGRES_PASSWORD: memorist
+          POSTGRES_DB: memorist_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U memorist -d memorist_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MEMORIST_SEMANTIC_BASELINE_RUNTIME: full
+      MEMORIST_RUNTIME_PROFILE: full
+      MEMORIST_CANONICAL_STORE: postgres
+      MEMORIST_POSTGRES_DSN: postgresql://memorist:memorist@localhost:5432/memorist_test
+      MEMORIST_GRAPH_BACKEND: disabled
+      MEMORIST_ALLOW_FULL_GRAPH_DEGRADED: "true"
+      MEMORIST_HOT_SCHEDULER: in_memory
+      MEMORIST_OBJECT_STORE_PATH: /tmp/memorist-objects
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Characterize current Full/PostgreSQL semantics
+        working-directory: memorist-core
+        run: |
+          uv run pytest tests/test_pr4d_semantic_baseline.py -q --junitxml=semantic-baseline-full.xml
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('semantic-baseline-full.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+
+  semantic-baseline-type-and-lint:
+    name: Semantic Baseline — Type and Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Python lint, format, and type checks
+        working-directory: memorist-core
+        run: |
+          uv run ruff check tests/test_pr4d_semantic_baseline.py
+          uv run ruff format --check tests/test_pr4d_semantic_baseline.py
+          uv run mypy tests/test_pr4d_semantic_baseline.py
+      - name: Diff check
+        run: git diff --check
