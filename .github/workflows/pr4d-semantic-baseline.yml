@@ -1,6 +1,6 @@
 name: PR4-D Semantic Baseline
 
-on:
+"on":
   pull_request:
     branches: [main]
   push:
@@ -23,19 +23,7 @@ jobs:
         run: uv sync --all-extras
       - name: Characterize current Lite semantics
         working-directory: memorist-core
-        run: |
-          set -o pipefail
-          uv run pytest tests/test_pr4d_semantic_baseline.py -vv --tb=long --junitxml=semantic-baseline-lite.xml 2>&1 | tee semantic-baseline-lite.log
-          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('semantic-baseline-lite.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
-      - name: Upload Lite semantic baseline evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: semantic-baseline-lite-${{ github.sha }}
-          path: |
-            memorist-core/semantic-baseline-lite.xml
-            memorist-core/semantic-baseline-lite.log
-          if-no-files-found: warn
+        run: uv run pytest tests/test_pr4d_semantic_baseline.py -q
 
   semantic-baseline-full:
     name: Semantic Baseline — Full PostgreSQL
@@ -69,21 +57,9 @@ jobs:
       - name: Install dependencies
         working-directory: memorist-core
         run: uv sync --all-extras
-      - name: Characterize current Full/PostgreSQL semantics
+      - name: Characterize current Full PostgreSQL semantics
         working-directory: memorist-core
-        run: |
-          set -o pipefail
-          uv run pytest tests/test_pr4d_semantic_baseline.py -vv --tb=long --junitxml=semantic-baseline-full.xml 2>&1 | tee semantic-baseline-full.log
-          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('semantic-baseline-full.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
-      - name: Upload Full semantic baseline evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: semantic-baseline-full-${{ github.sha }}
-          path: |
-            memorist-core/semantic-baseline-full.xml
-            memorist-core/semantic-baseline-full.log
-          if-no-files-found: warn
+        run: uv run pytest tests/test_pr4d_semantic_baseline.py -q
 
   canonical-semantic-contract:
     name: Canonical Semantic Contract
@@ -96,9 +72,7 @@ jobs:
         run: uv sync --all-extras
       - name: Validate canonical semantic contract
         working-directory: memorist-core
-        run: |
-          uv run pytest tests/test_pr4d_canonical_semantic_contract.py -q --junitxml=canonical-semantic-contract.xml
-          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('canonical-semantic-contract.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+        run: uv run pytest tests/test_pr4d_canonical_semantic_contract.py -q
 
   shared-factor-resolver:
     name: Shared Receiver and Context Resolver
@@ -109,11 +83,9 @@ jobs:
       - name: Install dependencies
         working-directory: memorist-core
         run: uv sync --all-extras
-      - name: Validate shared receiver/context resolver
+      - name: Validate shared receiver context resolver
         working-directory: memorist-core
-        run: |
-          uv run pytest tests/test_pr4d_semantic_factor_resolver.py -q --junitxml=semantic-factor-resolver.xml
-          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('semantic-factor-resolver.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+        run: uv run pytest tests/test_pr4d_semantic_factor_resolver.py -q
 
   semantic-baseline-type-and-lint:
     name: Semantic Baseline — Type and Lint
@@ -127,8 +99,9 @@ jobs:
       - name: Python lint, format, and type checks
         working-directory: memorist-core
         run: |
-          uv run ruff check src/memcore/memory_worker/semantic src/memcore/memory_worker/routing tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py tests/test_pr4d_semantic_factor_resolver.py
-          uv run ruff format --check src/memcore/memory_worker/semantic src/memcore/memory_worker/routing tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py tests/test_pr4d_semantic_factor_resolver.py
-          uv run mypy src/memcore/memory_worker/semantic src/memcore/memory_worker/routing tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py tests/test_pr4d_semantic_factor_resolver.py
+          TARGETS="src/memcore/memory_worker/semantic src/memcore/memory_worker/routing tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py tests/test_pr4d_semantic_factor_resolver.py"
+          uv run ruff check $TARGETS
+          uv run ruff format --check $TARGETS
+          uv run mypy $TARGETS
       - name: Diff check
         run: git diff --check
