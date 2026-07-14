@@ -1,0 +1,46 @@
+name: PR4-D Focused Diagnostic
+
+"on":
+  push:
+    branches: [codex/pr4d-canonical-semantic-authority-parity]
+  workflow_dispatch:
+
+jobs:
+  focused-diagnostic:
+    name: PR4-D Focused Diagnostic
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - name: Run focused diagnostics from persistent workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: doctordocto159753/open-webui-memorist-edition
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -o pipefail
+          WORK=/home/github-runner/actions-runner/_work/open-webui-memorist-edition/open-webui-memorist-edition
+          if [ ! -d "$WORK/.git" ]; then
+            rm -rf "$WORK"
+            mkdir -p "$(dirname "$WORK")"
+            git clone --quiet "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$WORK"
+          fi
+          cd "$WORK"
+          git fetch --quiet origin "$HEAD_SHA"
+          git checkout --quiet "$HEAD_SHA"
+          cd memorist-core
+          UV_BIN="/home/github-runner/.local/bin/uv"
+          if [ ! -x "$UV_BIN" ]; then
+            UV_BIN="uv"
+          fi
+          "$UV_BIN" sync --all-extras --quiet
+          set +e
+          "$UV_BIN" run pytest \
+            tests/test_pr4d_canonical_semantic_contract.py \
+            tests/test_pr4d_shared_routing_policy.py \
+            tests/test_pr4d_gate_candidate_policy.py \
+            tests/test_pr4d_semantic_baseline.py \
+            -q --tb=short > /tmp/pr4d-focused.log 2>&1
+          status=$?
+          echo "=== PR4-D focused pytest tail ==="
+          tail -n 160 /tmp/pr4d-focused.log
+          echo "=== exit status: $status ==="
+          exit $status
