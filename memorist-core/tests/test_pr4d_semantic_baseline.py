@@ -5,6 +5,7 @@ import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +19,7 @@ from memcore.memory_worker.postgres.pipeline import PostgresMemoryWorkerPipeline
 from memcore.memory_worker.prepared import PreparedJakobsonInference
 
 RUNTIME = "full" if os.getenv("MEMORIST_SEMANTIC_BASELINE_RUNTIME") == "full" else "lite"
+WORKSPACE_UUID = "00000000-0000-0000-0000-00000000d004"
 MODEL_TARGET: dict[str, object] = {
     "model_role": "memory_extraction",
     "provider_type": "deterministic",
@@ -61,7 +63,7 @@ def runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient
     return TestClient(create_app()), settings
 
 
-def _headers(user: str, workspace: str = "semantic-workspace") -> dict[str, str]:
+def _headers(user: str, workspace: str = WORKSPACE_UUID) -> dict[str, str]:
     return {
         "X-Memorist-User-Id": user,
         "X-Memorist-Workspace-Id": workspace,
@@ -69,13 +71,13 @@ def _headers(user: str, workspace: str = "semantic-workspace") -> dict[str, str]
 
 
 def _capture_user_message(client: TestClient, *, content: str, conversation: str) -> str:
-    user = f"semantic-user-{conversation}"
+    user = str(uuid5(NAMESPACE_URL, f"semantic-user:{conversation}"))
     session = client.post(
         "/memcore/openwebui/session/resolve",
         json={
             "openwebui_conversation_id": conversation,
             "user_id": user,
-            "workspace_uuid": "semantic-workspace",
+            "workspace_uuid": WORKSPACE_UUID,
             "turn_policy": "no_recall",
         },
         headers=_headers(user),
