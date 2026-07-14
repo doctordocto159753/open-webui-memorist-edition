@@ -3,19 +3,19 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from memcore.memory_worker.routing.models import RouteDecision
+from memcore.memory_worker.semantic.factors import (
+    HIGH_PRIORITY_INSTRUCTION,
+    PRIVACY_CONTEXT,
+    ContextKind,
+    ReceiverKind,
+    resolve_semantic_factors,
+)
 from memcore.models import (
     JakobsonConfidence,
     JakobsonFunction,
     MemorySignalRouteStatus,
     MemorySignalRouteType,
-)
-from memcore.memory_worker.routing.models import RouteDecision
-from memcore.memory_worker.semantic.factors import (
-    ContextKind,
-    HIGH_PRIORITY_INSTRUCTION,
-    PRIVACY_CONTEXT,
-    ReceiverKind,
-    resolve_semantic_factors,
 )
 
 PERSIAN_PROMPT_WORD = "پرامپت"
