@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from memcore.memory_worker.routing.models import RouteDecision
-from memcore.memory_worker.semantic.routing_policy import decide_semantic_routes
-from memcore.models import (
-    JakobsonSentenceAnnotation,
-    MemorySignalRoute,
-    MemorySignalRouteStatus,
-    MemorySignalRouteType,
+from memcore.memory_worker.semantic.routing_policy import (
+    decide_semantic_routes,
+    route_status_for_type,
 )
+from memcore.models import JakobsonSentenceAnnotation, MemorySignalRoute
 from memcore.validators.ijson import load_ijson
 
 
@@ -42,12 +40,6 @@ class SignalRouter:
             receiver_hint=annotation.receiver_value,
             context_hint=annotation.context_value,
         )
-
-
-def route_status_for_type(route_type: MemorySignalRouteType) -> MemorySignalRouteStatus:
-    if route_type is MemorySignalRouteType.IGNORE:
-        return MemorySignalRouteStatus.IGNORED
-    return MemorySignalRouteStatus.READY
 
 
 def _annotation_text(annotation: JakobsonSentenceAnnotation) -> str:
