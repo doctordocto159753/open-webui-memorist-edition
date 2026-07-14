@@ -15,6 +15,12 @@ from memcore.memory_worker.semantic.factors import (
     resolve_receiver,
     resolve_semantic_factors,
 )
+from memcore.memory_worker.semantic.gate_policy import (
+    GateCandidatePolicy,
+    candidate_policy_for_gate_and_route,
+    gate_allows_analysis,
+    gate_allows_candidate_creation,
+)
 from memcore.memory_worker.semantic.routing_policy import (
     decide_semantic_routes,
     route_status_for_type,
@@ -28,10 +34,14 @@ __all__ = [
     "CanonicalSemanticFactor",
     "CanonicalSemanticProvenance",
     "ContextKind",
+    "GateCandidatePolicy",
     "ReceiverKind",
     "ResolvedSemanticFactors",
     "SemanticFactorMatch",
+    "candidate_policy_for_gate_and_route",
     "decide_semantic_routes",
+    "gate_allows_analysis",
+    "gate_allows_candidate_creation",
     "resolve_context",
     "resolve_receiver",
     "resolve_semantic_factors",
