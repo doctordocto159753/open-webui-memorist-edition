@@ -1,6 +1,8 @@
 name: PR4-D Focused Diagnostic
 
 "on":
+  pull_request:
+    branches: [main]
   push:
     branches: [codex/pr4d-canonical-semantic-authority-parity]
   workflow_dispatch:
@@ -14,7 +16,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: doctordocto159753/open-webui-memorist-edition
-          HEAD_SHA: ${{ github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -o pipefail
           WORK=/home/github-runner/actions-runner/_work/open-webui-memorist-edition/open-webui-memorist-edition
