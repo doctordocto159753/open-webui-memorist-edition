@@ -10,7 +10,7 @@ name: PR4-D Semantic Baseline
 jobs:
   semantic-baseline-lite:
     name: Semantic Baseline — Lite
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, memorist-ci]
     env:
       MEMORIST_SEMANTIC_BASELINE_RUNTIME: lite
       MEMORIST_RUNTIME_PROFILE: lite
@@ -27,7 +27,7 @@ jobs:
 
   semantic-baseline-full:
     name: Semantic Baseline — Full PostgreSQL
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, memorist-ci]
     services:
       postgres:
         image: postgres:16
@@ -63,7 +63,7 @@ jobs:
 
   canonical-semantic-contract:
     name: Canonical Semantic Contract
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -76,7 +76,7 @@ jobs:
 
   shared-factor-resolver:
     name: Shared Receiver and Context Resolver
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -89,7 +89,7 @@ jobs:
 
   shared-routing-policy:
     name: Shared Semantic Routing Policy
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -102,7 +102,7 @@ jobs:
 
   shared-gate-candidate-policy:
     name: Shared Gate Candidate Policy
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -115,7 +115,7 @@ jobs:
 
   semantic-baseline-type-and-lint:
     name: Semantic Baseline — Type and Lint
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
