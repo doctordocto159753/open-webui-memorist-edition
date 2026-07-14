@@ -20,12 +20,14 @@ jobs:
         run: |
           set -o pipefail
           WORK=/home/github-runner/actions-runner/_work/open-webui-memorist-edition/open-webui-memorist-edition
+          AUTH_REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
           if [ ! -d "$WORK/.git" ]; then
             rm -rf "$WORK"
             mkdir -p "$(dirname "$WORK")"
-            git clone --quiet "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$WORK"
+            git clone --quiet "$AUTH_REMOTE" "$WORK"
           fi
           cd "$WORK"
+          git remote set-url origin "$AUTH_REMOTE"
           git fetch --quiet origin "$HEAD_SHA"
           git checkout --quiet "$HEAD_SHA"
           cd memorist-core
