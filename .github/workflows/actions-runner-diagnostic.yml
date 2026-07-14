@@ -1,6 +1,10 @@
 name: Actions Runner Diagnostic
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/actions-runner-diagnostic.yml
   push:
     branches: [codex/pr4d-canonical-semantic-authority-parity]
     paths:
