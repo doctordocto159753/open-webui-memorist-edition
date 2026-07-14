@@ -24,8 +24,18 @@ jobs:
       - name: Characterize current Lite semantics
         working-directory: memorist-core
         run: |
-          uv run pytest tests/test_pr4d_semantic_baseline.py -q --junitxml=semantic-baseline-lite.xml
+          set -o pipefail
+          uv run pytest tests/test_pr4d_semantic_baseline.py -vv --tb=long --junitxml=semantic-baseline-lite.xml 2>&1 | tee semantic-baseline-lite.log
           uv run python -c "import xml.etree.ElementTree as E; r=E.parse('semantic-baseline-lite.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+      - name: Upload Lite semantic baseline evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semantic-baseline-lite-${{ github.sha }}
+          path: |
+            memorist-core/semantic-baseline-lite.xml
+            memorist-core/semantic-baseline-lite.log
+          if-no-files-found: warn
 
   semantic-baseline-full:
     name: Semantic Baseline — Full PostgreSQL
@@ -62,8 +72,18 @@ jobs:
       - name: Characterize current Full/PostgreSQL semantics
         working-directory: memorist-core
         run: |
-          uv run pytest tests/test_pr4d_semantic_baseline.py -q --junitxml=semantic-baseline-full.xml
+          set -o pipefail
+          uv run pytest tests/test_pr4d_semantic_baseline.py -vv --tb=long --junitxml=semantic-baseline-full.xml 2>&1 | tee semantic-baseline-full.log
           uv run python -c "import xml.etree.ElementTree as E; r=E.parse('semantic-baseline-full.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+      - name: Upload Full semantic baseline evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semantic-baseline-full-${{ github.sha }}
+          path: |
+            memorist-core/semantic-baseline-full.xml
+            memorist-core/semantic-baseline-full.log
+          if-no-files-found: warn
 
   semantic-baseline-type-and-lint:
     name: Semantic Baseline — Type and Lint
