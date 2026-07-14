@@ -87,9 +87,8 @@ def resolve_semantic_factors(
 ) -> ResolvedSemanticFactors:
     """Resolve receiver and context using the shared PR4-D semantic lexicon.
 
-    This is intentionally deterministic and side-effect free. Task 03 wires the
-    existing Jakobson deterministic path and signal routing to this resolver;
-    later tasks can expand the resolver without creating more regex forks.
+    This is deterministic and side-effect free. Task 03 wires signal routing to
+    this resolver; later tasks can expand usage without creating regex forks.
     """
 
     return ResolvedSemanticFactors(
