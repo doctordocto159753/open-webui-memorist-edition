@@ -31,9 +31,13 @@ jobs:
           git fetch --quiet origin "$HEAD_SHA"
           git checkout --quiet "$HEAD_SHA"
           cd memorist-core
-          UV_BIN="/home/github-runner/.local/bin/uv"
+          UV_BIN="/home/github-runner/actions-runner/_work/_tool/uv/0.11.28/x86_64/uv"
           if [ ! -x "$UV_BIN" ]; then
-            UV_BIN="uv"
+            UV_BIN="/home/github-runner/.local/bin/uv"
+          fi
+          if [ ! -x "$UV_BIN" ]; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null
+            UV_BIN="/home/github-runner/.local/bin/uv"
           fi
           "$UV_BIN" sync --all-extras --quiet
           set +e
