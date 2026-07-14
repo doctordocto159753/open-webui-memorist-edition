@@ -74,7 +74,7 @@ def install_lite_gate_candidate_guard(repository_type: type[Any]) -> None:
 
 
 def _raw_output_with_selected_route(analysis: LinguisticAnalysis, route: Any) -> str:
-    loaded = load_ijson(analysis.raw_output_ijson)
+    loaded = load_ijson(analysis.raw_output_ijson or "{}")
     raw_output = loaded if isinstance(loaded, dict) else {}
     raw_output["pr4d_selected_route"] = {
         "route_uuid": _value(route, "route_uuid"),
