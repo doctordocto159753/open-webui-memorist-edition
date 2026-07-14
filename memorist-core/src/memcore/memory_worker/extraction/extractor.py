@@ -54,7 +54,8 @@ class CandidateExtractor:
         reason_codes.extend(_rejection_reasons(text, source_authority, sensitivity))
         status = _status_from_reasons(reason_codes)
         if mapping is not None and mapping.status is CandidateStatus.NEEDS_REVIEW:
-            status = CandidateStatus.NEEDS_REVIEW if status is not CandidateStatus.REJECTED else status
+            if status is not CandidateStatus.REJECTED:
+                status = CandidateStatus.NEEDS_REVIEW
         if candidate_type is CandidateType.UNRESOLVED_QUESTION and not reason_codes:
             reason_codes.append(reasons.QUESTION_NOT_ASSERTION)
             status = CandidateStatus.REJECTED
@@ -76,6 +77,7 @@ class CandidateExtractor:
             confidence = min(confidence, 0.65)
         if status is CandidateStatus.REJECTED:
             confidence = min(confidence, 0.35)
+        importance = mapping.importance if mapping is not None else _importance(candidate_type, text)
 
         candidate = MemoryCandidate(
             processing_run_uuid=processing_run_uuid,
@@ -88,7 +90,7 @@ class CandidateExtractor:
             source_authority=source_authority,
             explicitness=explicitness,
             confidence=confidence,
-            importance=mapping.importance if mapping is not None else _importance(candidate_type, text),
+            importance=importance,
             valid_from=_valid_from(temporal),
             valid_until=None,
             temporal_precision=_temporal_precision(temporal),
@@ -277,7 +279,7 @@ def _route_uuid_from_analysis(analysis: LinguisticAnalysis) -> str | None:
 
 
 def _analysis_route_metadata(analysis: LinguisticAnalysis) -> dict[str, Any]:
-    loaded = load_ijson(analysis.raw_output_ijson)
+    loaded = load_ijson(analysis.raw_output_ijson or "{}")
     if not isinstance(loaded, dict):
         return {}
     route = loaded.get("pr4d_selected_route")
