@@ -41,8 +41,13 @@ def test_shared_policy_routes_phatic_only_to_ignore() -> None:
         dominant_function=JakobsonFunction.PHATIC,
     )
 
-    assert [decision.route_type for decision in decisions] == [MemorySignalRouteType.IGNORE]
-    assert route_status_for_type(decisions[0].route_type) is MemorySignalRouteStatus.IGNORED
+    assert [decision.route_type for decision in decisions] == [
+        MemorySignalRouteType.IGNORE
+    ]
+    assert (
+        route_status_for_type(decisions[0].route_type)
+        is MemorySignalRouteStatus.IGNORED
+    )
 
 
 def test_lite_signal_router_delegates_phatic_only_to_shared_ignore_policy() -> None:
