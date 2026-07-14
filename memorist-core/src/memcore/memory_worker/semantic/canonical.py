@@ -68,7 +68,9 @@ class CanonicalRouteDecision(CanonicalSemanticModel):
 
     @model_validator(mode="after")
     def validate_ignore_route_status(self) -> Self:
-        if self.route_type is MemorySignalRouteType.IGNORE and self.status is not MemorySignalRouteStatus.IGNORED:
+        route_is_ignore = self.route_type is MemorySignalRouteType.IGNORE
+        status_is_ignored = self.status is MemorySignalRouteStatus.IGNORED
+        if route_is_ignore and not status_is_ignored:
             raise ValueError("ignore routes must be recorded with ignored status")
         return self
 
@@ -81,7 +83,7 @@ class CanonicalRouteDecision(CanonicalSemanticModel):
 
 
 class CanonicalLinguisticComplements(CanonicalSemanticModel):
-    """StructuredAnalyzer-style data that supplements, but does not own, routing authority."""
+    """StructuredAnalyzer data that supplements, but does not own, routing authority."""
 
     speech_acts: tuple[str, ...] = Field(default_factory=tuple)
     conceptual_nuclei: tuple[str, ...] = Field(default_factory=tuple)
@@ -167,7 +169,8 @@ class CanonicalSemanticDecision(CanonicalSemanticModel):
     @property
     def candidate_creation_blockers(self) -> tuple[str, ...]:
         blockers: list[str] = []
-        if self.gate.decision in {GateDecisionValue.DISCARD, GateDecisionValue.RETAIN_RAW_ONLY}:
+        blocked_gate_decisions = {GateDecisionValue.DISCARD, GateDecisionValue.RETAIN_RAW_ONLY}
+        if self.gate.decision in blocked_gate_decisions:
             blockers.append(f"gate:{self.gate.decision.value}")
         if not self.has_ready_memory_route:
             blockers.append("route:none_ready")
