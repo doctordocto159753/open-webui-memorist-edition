@@ -1,0 +1,42 @@
+name: PR4-D Final Lint Diagnostic
+
+"on":
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pr4d-final-lint-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  final-lint:
+    name: PR4-D Final Lint Diagnostic
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - name: Print final lint and type failures
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: doctordocto159753/open-webui-memorist-edition
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          W=/home/github-runner/actions-runner/_work/open-webui-memorist-edition/open-webui-memorist-edition
+          A="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          U=/home/github-runner/actions-runner/_work/_tool/uv/0.11.28/x86_64/uv
+          [ -x "$U" ] || U=/home/github-runner/.local/bin/uv
+          cd "$W"
+          git remote set-url origin "$A"
+          git fetch --quiet origin "$HEAD_SHA"
+          git checkout --quiet "$HEAD_SHA"
+          cd memorist-core
+          "$U" sync --all-extras --quiet
+          TARGETS="src/memcore/memory_worker/semantic src/memcore/memory_worker/routing src/memcore/memory_worker/postgres/deterministic_fallback.py src/memcore/memory_worker/postgres/routing_policy_adapter.py src/memcore/memory_worker/postgres/gated_candidate_adapter.py src/memcore/repositories/lite_gate_candidate_guard.py src/memcore/repositories/__init__.py tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py tests/test_pr4d_semantic_factor_resolver.py tests/test_pr4d_shared_routing_policy.py tests/test_pr4d_gate_candidate_policy.py tests/test_pr4d_lite_gate_candidate_guard.py"
+          set +e
+          "$U" run ruff check $TARGETS
+          RC=$?
+          "$U" run ruff format --check $TARGETS
+          RF=$?
+          "$U" run mypy $TARGETS
+          MT=$?
+          echo "FINAL_STATUS ruff=$RC format=$RF mypy=$MT"
+          [ "$RC" -eq 0 ] && [ "$RF" -eq 0 ] && [ "$MT" -eq 0 ]
