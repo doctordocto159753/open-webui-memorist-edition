@@ -9,7 +9,12 @@ from memcore.memory_worker.prompts.versions import (
 from memcore.memory_worker.semantic.gate_policy import (
     candidate_policy_for_gate_and_route,
 )
-from memcore.models import MemorySignalRouteStatus, MemorySignalRouteType, new_uuid, utc_now
+from memcore.models import (
+    MemorySignalRouteStatus,
+    MemorySignalRouteType,
+    new_uuid,
+    utc_now,
+)
 
 _EXISTING_CANDIDATE_SQL = " ".join(
     (
