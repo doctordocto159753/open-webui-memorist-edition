@@ -13,7 +13,12 @@ from memcore.models import GateDecisionValue, MemorySignalRouteStatus, MemorySig
 
 
 class _Result:
-    def __init__(self, *, one: object | None = None, many: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        one: object | None = None,
+        many: list[dict[str, Any]] | None = None,
+    ) -> None:
         self.one = one
         self.many = many or []
 
@@ -145,7 +150,7 @@ def test_full_candidate_adapter_blocks_ignored_routes_before_insert() -> None:
     assert pipeline.connection.evidence_params == []
 
 
-def test_full_candidate_adapter_allows_analyze_ready_route_and_records_policy_metadata() -> None:
+def test_full_candidate_adapter_allows_analyze_ready_route_and_metadata() -> None:
     pipeline = _FakePipeline(
         [
             {
