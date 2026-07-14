@@ -9,7 +9,11 @@ from memcore.memory_worker.semantic import (
     gate_allows_analysis,
     gate_allows_candidate_creation,
 )
-from memcore.models import GateDecisionValue, MemorySignalRouteStatus, MemorySignalRouteType
+from memcore.models import (
+    GateDecisionValue,
+    MemorySignalRouteStatus,
+    MemorySignalRouteType,
+)
 
 
 class _Result:
