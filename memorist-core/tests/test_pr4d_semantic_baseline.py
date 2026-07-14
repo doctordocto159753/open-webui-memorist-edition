@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,7 @@ from memcore.memory_worker.pipeline import MemoryWorkerPipeline
 from memcore.memory_worker.postgres.pipeline import PostgresMemoryWorkerPipeline
 from memcore.memory_worker.prepared import PreparedJakobsonInference
 
-RUNTIME = "full" if __import__("os").getenv("MEMORIST_SEMANTIC_BASELINE_RUNTIME") == "full" else "lite"
+RUNTIME = "full" if os.getenv("MEMORIST_SEMANTIC_BASELINE_RUNTIME") == "full" else "lite"
 MODEL_TARGET: dict[str, object] = {
     "model_role": "memory_extraction",
     "provider_type": "deterministic",
@@ -39,7 +40,7 @@ def runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient
     monkeypatch.setenv("MEMORIST_ALLOW_LEGACY_ACTOR_HEADERS_FOR_TESTS", "true")
     monkeypatch.setenv("MEMORIST_OBJECT_STORE_PATH", str(tmp_path / "objects"))
     if RUNTIME == "full":
-        dsn = __import__("os").getenv("MEMORIST_POSTGRES_DSN")
+        dsn = os.getenv("MEMORIST_POSTGRES_DSN")
         if not dsn:
             pytest.fail("Full semantic baseline characterization requires PostgreSQL")
         monkeypatch.setenv("MEMORIST_RUNTIME_PROFILE", "full")
@@ -67,7 +68,7 @@ def _headers(user: str, workspace: str = "semantic-workspace") -> dict[str, str]
     }
 
 
-def _capture_user_message(client: TestClient, *, content: str, conversation: str) -> tuple[str, str]:
+def _capture_user_message(client: TestClient, *, content: str, conversation: str) -> str:
     user = f"semantic-user-{conversation}"
     session = client.post(
         "/memcore/openwebui/session/resolve",
@@ -96,7 +97,7 @@ def _capture_user_message(client: TestClient, *, content: str, conversation: str
         headers=_headers(user, str(session_payload["workspace_uuid"])),
     )
     assert captured.status_code == 200, captured.text
-    return str(captured.json()["message_uuid"]), str(session_payload["workspace_uuid"])
+    return str(captured.json()["message_uuid"])
 
 
 def _run_pipeline(settings: Settings, message_uuid: str, *, force_phatic: bool) -> None:
@@ -183,7 +184,7 @@ def test_current_greeting_baseline_differs_between_lite_and_full(
     runtime: tuple[TestClient, Settings],
 ) -> None:
     client, settings = runtime
-    message_uuid, _workspace = _capture_user_message(
+    message_uuid = _capture_user_message(
         client,
         content="سلام",
         conversation="current-greeting-baseline",
@@ -212,7 +213,7 @@ def test_forced_phatic_annotation_baseline_records_full_gate_but_still_creates_m
     runtime: tuple[TestClient, Settings],
 ) -> None:
     client, settings = runtime
-    message_uuid, _workspace = _capture_user_message(
+    message_uuid = _capture_user_message(
         client,
         content="سلام",
         conversation="forced-phatic-baseline",
