@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from memcore.memory_worker.postgres.routing_policy_adapter import record_routes
+from memcore.memory_worker.postgres import PostgresMemoryWorkerPipeline
 from memcore.memory_worker.routing.signal_router import SignalRouter
 from memcore.memory_worker.semantic import decide_semantic_routes, route_status_for_type
 from memcore.models import (
@@ -54,11 +54,11 @@ def test_lite_signal_router_delegates_phatic_only_to_shared_ignore_policy() -> N
     assert routes[0].status is MemorySignalRouteStatus.IGNORED
 
 
-def test_full_route_adapter_uses_shared_policy_for_phatic_only() -> None:
+def test_full_pipeline_wiring_uses_shared_policy_for_phatic_only() -> None:
     pipeline = _FakePipeline()
 
-    record_routes(
-        pipeline,
+    PostgresMemoryWorkerPipeline._record_routes(
+        pipeline,  # type: ignore[arg-type]
         "message-1",
         [_annotation_row(text="سلام", dominant="phatic")],
     )
@@ -81,8 +81,8 @@ def test_lite_and_full_shared_policy_match_team_instruction_routes() -> None:
     lite_types = [route.route_type for route in SignalRouter().route(annotation)]
 
     pipeline = _FakePipeline()
-    record_routes(
-        pipeline,
+    PostgresMemoryWorkerPipeline._record_routes(
+        pipeline,  # type: ignore[arg-type]
         "message-1",
         [
             _annotation_row(
