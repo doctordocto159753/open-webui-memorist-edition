@@ -14,7 +14,7 @@ jobs:
     name: PR4-D Final Lint Diagnostic
     runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
-      - name: Print final lint and type failures
+      - name: Print expected ruff import diff
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: doctordocto159753/open-webui-memorist-edition
@@ -30,13 +30,5 @@ jobs:
           git checkout --quiet "$HEAD_SHA"
           cd memorist-core
           "$U" sync --all-extras --quiet
-          TARGETS="src/memcore/memory_worker/semantic src/memcore/memory_worker/routing src/memcore/memory_worker/postgres/deterministic_fallback.py src/memcore/memory_worker/postgres/routing_policy_adapter.py src/memcore/memory_worker/postgres/gated_candidate_adapter.py src/memcore/repositories/lite_gate_candidate_guard.py src/memcore/repositories/__init__.py tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py tests/test_pr4d_semantic_factor_resolver.py tests/test_pr4d_shared_routing_policy.py tests/test_pr4d_gate_candidate_policy.py tests/test_pr4d_lite_gate_candidate_guard.py"
-          set +e
-          "$U" run ruff check $TARGETS
-          RC=$?
-          "$U" run ruff format --check $TARGETS
-          RF=$?
-          "$U" run mypy $TARGETS
-          MT=$?
-          echo "FINAL_STATUS ruff=$RC format=$RF mypy=$MT"
-          [ "$RC" -eq 0 ] && [ "$RF" -eq 0 ] && [ "$MT" -eq 0 ]
+          "$U" run ruff check --fix --diff \
+            src/memcore/memory_worker/semantic/routing_policy.py
