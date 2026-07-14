@@ -162,8 +162,9 @@ def _routes_by_unit(routes: list[dict[str, Any]]) -> dict[str, list[dict[str, An
 
 def _selected_route(routes: list[dict[str, Any]]) -> dict[str, Any] | None:
     for route in routes:
-        if str(route.get("status")) == MemorySignalRouteStatus.READY.value and str(
-            route.get("route_type")
-        ) != MemorySignalRouteType.IGNORE.value:
+        if (
+            str(route.get("status")) == MemorySignalRouteStatus.READY.value
+            and str(route.get("route_type")) != MemorySignalRouteType.IGNORE.value
+        ):
             return route
     return routes[0] if routes else None
