@@ -20,10 +20,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         working-directory: memorist-core
-        run: uv sync --all-extras
+        run: uv sync --all-extras --quiet
       - name: Characterize current Lite semantics
         working-directory: memorist-core
-        run: uv run pytest tests/test_pr4d_semantic_baseline.py -q
+        run: uv run pytest tests/test_pr4d_semantic_baseline.py -q --tb=short
 
   semantic-baseline-full:
     name: Semantic Baseline — Full PostgreSQL
@@ -56,10 +56,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         working-directory: memorist-core
-        run: uv sync --all-extras
+        run: uv sync --all-extras --quiet
       - name: Characterize current Full PostgreSQL semantics
         working-directory: memorist-core
-        run: uv run pytest tests/test_pr4d_semantic_baseline.py -q
+        run: uv run pytest tests/test_pr4d_semantic_baseline.py -q --tb=short
 
   canonical-semantic-contract:
     name: Canonical Semantic Contract
@@ -69,10 +69,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         working-directory: memorist-core
-        run: uv sync --all-extras
+        run: uv sync --all-extras --quiet
       - name: Validate canonical semantic contract
         working-directory: memorist-core
-        run: uv run pytest tests/test_pr4d_canonical_semantic_contract.py -q
+        run: uv run pytest tests/test_pr4d_canonical_semantic_contract.py -q --tb=short
 
   shared-factor-resolver:
     name: Shared Receiver and Context Resolver
@@ -82,10 +82,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         working-directory: memorist-core
-        run: uv sync --all-extras
+        run: uv sync --all-extras --quiet
       - name: Validate shared receiver context resolver
         working-directory: memorist-core
-        run: uv run pytest tests/test_pr4d_semantic_factor_resolver.py -q
+        run: uv run pytest tests/test_pr4d_semantic_factor_resolver.py -q --tb=short
 
   shared-routing-policy:
     name: Shared Semantic Routing Policy
@@ -95,10 +95,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         working-directory: memorist-core
-        run: uv sync --all-extras
+        run: uv sync --all-extras --quiet
       - name: Validate shared routing policy
         working-directory: memorist-core
-        run: uv run pytest tests/test_pr4d_shared_routing_policy.py -q
+        run: uv run pytest tests/test_pr4d_shared_routing_policy.py -q --tb=short
 
   shared-gate-candidate-policy:
     name: Shared Gate Candidate Policy
@@ -108,10 +108,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         working-directory: memorist-core
-        run: uv sync --all-extras
+        run: uv sync --all-extras --quiet
       - name: Validate gate candidate policy
         working-directory: memorist-core
-        run: uv run pytest tests/test_pr4d_gate_candidate_policy.py -q
+        run: uv run pytest tests/test_pr4d_gate_candidate_policy.py -q --tb=short
 
   semantic-baseline-type-and-lint:
     name: Semantic Baseline — Type and Lint
@@ -121,7 +121,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         working-directory: memorist-core
-        run: uv sync --all-extras
+        run: uv sync --all-extras --quiet
       - name: Python lint, format, and type checks
         working-directory: memorist-core
         run: |
