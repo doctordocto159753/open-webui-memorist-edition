@@ -8,7 +8,7 @@ from memcore.memory_worker.semantic.routing_policy import (
     decide_semantic_routes,
     route_status_for_type,
 )
-from memcore.models import JakobsonConfidence, MemorySignalRouteType, new_uuid, utc_now
+from memcore.models import JakobsonConfidence, new_uuid, utc_now
 
 
 _CONFIDENCE_VALUE = {
