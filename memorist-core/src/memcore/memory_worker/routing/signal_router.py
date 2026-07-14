@@ -1,17 +1,12 @@
 from __future__ import annotations
 
 from memcore.memory_worker.routing.models import RouteDecision
-from memcore.memory_worker.routing.rules import (
-    AI_RECEIVER,
-    EMOTIVE_CONTEXT,
-    HIGH_PRIORITY_INSTRUCTION,
-    JIRA_CONTEXT,
-    POETIC_CONTEXT,
-    PRIVACY_CONTEXT,
-    PROCESS_CONTEXT,
-    RESOURCE_CONTEXT,
-    TEAM_RECEIVER,
+from memcore.memory_worker.semantic import (
+    ContextKind,
+    ReceiverKind,
+    resolve_semantic_factors,
 )
+from memcore.memory_worker.semantic.factors import HIGH_PRIORITY_INSTRUCTION, PRIVACY_CONTEXT
 from memcore.models import (
     JakobsonConfidence,
     JakobsonFunction,
@@ -52,11 +47,17 @@ class SignalRouter:
 
     def decide(self, annotation: JakobsonSentenceAnnotation) -> list[RouteDecision]:
         text = _annotation_text(annotation)
-        receiver = annotation.receiver_value or ""
-        context = annotation.context_value or ""
         secondary = _secondary(annotation)
+        factors = resolve_semantic_factors(
+            text,
+            dominant_function=annotation.dominant_function,
+            receiver_hint=annotation.receiver_value,
+            context_hint=annotation.context_value,
+        )
+        receiver_kind = factors.receiver.kind
+        context_kind = factors.context.kind
 
-        if PRIVACY_CONTEXT.search(text):
+        if context_kind == ContextKind.PRIVACY.value or PRIVACY_CONTEXT.search(text):
             return [
                 RouteDecision(
                     route_type=MemorySignalRouteType.PRIVACY_REVIEW,
@@ -68,7 +69,7 @@ class SignalRouter:
             ]
 
         if annotation.dominant_function is JakobsonFunction.CONATIVE:
-            if TEAM_RECEIVER.search(receiver) or TEAM_RECEIVER.search(text):
+            if receiver_kind == ReceiverKind.TEAM.value:
                 return [
                     RouteDecision(
                         route_type=MemorySignalRouteType.WORKFLOW_POLICY,
@@ -85,7 +86,7 @@ class SignalRouter:
                         reason="Instruction implies an obligation for the team.",
                     ),
                 ]
-            if AI_RECEIVER.search(receiver) or AI_RECEIVER.search(text):
+            if receiver_kind == ReceiverKind.AI.value:
                 route_type = (
                     MemorySignalRouteType.PROMPT_INSTRUCTION
                     if HIGH_PRIORITY_INSTRUCTION.search(text)
@@ -111,7 +112,7 @@ class SignalRouter:
             ]
 
         if annotation.dominant_function is JakobsonFunction.REFERENTIAL:
-            if JIRA_CONTEXT.search(text) or JIRA_CONTEXT.search(context):
+            if context_kind == ContextKind.JIRA.value:
                 return [
                     RouteDecision(
                         route_type=MemorySignalRouteType.JIRA_CONFIGURATION,
@@ -121,7 +122,7 @@ class SignalRouter:
                         reason="Referential sentence describes Jira configuration or process.",
                     )
                 ]
-            if PROCESS_CONTEXT.search(text) or PROCESS_CONTEXT.search(context):
+            if context_kind == ContextKind.PROCESS.value:
                 return [
                     RouteDecision(
                         route_type=MemorySignalRouteType.PROCESS_FACT,
@@ -131,7 +132,7 @@ class SignalRouter:
                         reason="Referential sentence describes project/process facts.",
                     )
                 ]
-            if RESOURCE_CONTEXT.search(text):
+            if context_kind == ContextKind.RESOURCE.value:
                 return [
                     RouteDecision(
                         route_type=MemorySignalRouteType.RESOURCE_REFERENCE,
@@ -148,7 +149,8 @@ class SignalRouter:
         ):
             route_type = (
                 MemorySignalRouteType.PROMPT_INSTRUCTION
-                if "prompt" in text.lower() or "پرامپت" in text
+                if context_kind == ContextKind.METALINGUAL.value and "prompt" in text.lower()
+                or "پرامپت" in text
                 else MemorySignalRouteType.TERMINOLOGY_RULE
             )
             return [
@@ -164,7 +166,7 @@ class SignalRouter:
         if annotation.dominant_function is JakobsonFunction.EMOTIVE:
             route_type = (
                 MemorySignalRouteType.USER_PREFERENCE
-                if EMOTIVE_CONTEXT.search(text)
+                if context_kind == ContextKind.EMOTIVE.value
                 else MemorySignalRouteType.EMOTIONAL_STANCE
             )
             return [
@@ -177,7 +179,10 @@ class SignalRouter:
                 )
             ]
 
-        if annotation.dominant_function is JakobsonFunction.POETIC or POETIC_CONTEXT.search(text):
+        if (
+            annotation.dominant_function is JakobsonFunction.POETIC
+            or context_kind == ContextKind.POETIC.value
+        ):
             return [
                 RouteDecision(
                     route_type=MemorySignalRouteType.STYLE_POLICY,
