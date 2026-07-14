@@ -6,6 +6,11 @@ from memcore.memory_worker.extraction.confidence import derive_confidence
 from memcore.memory_worker.extraction.evidence import primary_evidence
 from memcore.memory_worker.extraction.schemas import ExtractedCandidate
 from memcore.memory_worker.extraction.sensitivity import classify_sensitivity
+from memcore.memory_worker.semantic.candidate_mapping import (
+    ROUTE_CANDIDATE_MAPPING_VERSION,
+    RouteCandidateMapping,
+    candidate_mapping_for_route,
+)
 from memcore.models import (
     CandidateStatus,
     CandidateType,
@@ -26,17 +31,30 @@ class CandidateExtractor:
         unit: TextUnit,
         processing_run_uuid: str,
         analysis: LinguisticAnalysis,
+        route_type: str | None = None,
+        route_uuid: str | None = None,
     ) -> list[ExtractedCandidate]:
         text = unit.text.strip()
         if not text:
             return []
 
-        candidate_type, subject_key, predicate, obj = _classify_candidate(text)
+        mapping = candidate_mapping_for_route(
+            route_type or _route_type_from_analysis(analysis),
+            text,
+            message_uuid=message.message_uuid,
+        )
+        if route_uuid is None:
+            route_uuid = _route_uuid_from_analysis(analysis)
+
+        candidate_type, subject_key, predicate, obj = _candidate_shape(text, mapping)
         sensitivity = classify_sensitivity(text)
         source_authority = _source_authority(message.role.value)
         explicitness = Explicitness.EXPLICIT
-        reason_codes = _rejection_reasons(text, source_authority, sensitivity)
+        reason_codes = [*mapping.rejection_reason_codes] if mapping is not None else []
+        reason_codes.extend(_rejection_reasons(text, source_authority, sensitivity))
         status = _status_from_reasons(reason_codes)
+        if mapping is not None and mapping.status is CandidateStatus.NEEDS_REVIEW:
+            status = CandidateStatus.NEEDS_REVIEW if status is not CandidateStatus.REJECTED else status
         if candidate_type is CandidateType.UNRESOLVED_QUESTION and not reason_codes:
             reason_codes.append(reasons.QUESTION_NOT_ASSERTION)
             status = CandidateStatus.REJECTED
@@ -70,17 +88,14 @@ class CandidateExtractor:
             source_authority=source_authority,
             explicitness=explicitness,
             confidence=confidence,
-            importance=_importance(candidate_type, text),
+            importance=mapping.importance if mapping is not None else _importance(candidate_type, text),
             valid_from=_valid_from(temporal),
             valid_until=None,
             temporal_precision=_temporal_precision(temporal),
             status=status,
             sensitivity_class=sensitivity,
             extraction_metadata_ijson=dump_ijson(
-                {
-                    "extractor_version": "deterministic-extractor-v1",
-                    "analysis_uuid": analysis.analysis_uuid,
-                }
+                _extraction_metadata(analysis, mapping=mapping, route_uuid=route_uuid)
             ),
             rejection_reason_codes_ijson=dump_ijson(reason_codes) if reason_codes else None,
         )
@@ -90,6 +105,20 @@ class CandidateExtractor:
                 evidence=[primary_evidence(candidate.candidate_uuid, message.message_uuid, unit)],
             )
         ]
+
+
+def _candidate_shape(
+    text: str,
+    mapping: RouteCandidateMapping | None,
+) -> tuple[CandidateType | None, str | None, str | None, Any]:
+    if mapping is not None:
+        return (
+            mapping.candidate_type,
+            mapping.subject_key,
+            mapping.predicate,
+            mapping.object_value,
+        )
+    return _classify_candidate(text)
 
 
 def _classify_candidate(
@@ -211,3 +240,45 @@ def _temporal_precision(temporal: Any) -> str | None:
         precision = temporal[0].get("precision")
         return str(precision) if precision else None
     return None
+
+
+def _extraction_metadata(
+    analysis: LinguisticAnalysis,
+    *,
+    mapping: RouteCandidateMapping | None,
+    route_uuid: str | None,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "extractor_version": "deterministic-extractor-v1",
+        "analysis_uuid": analysis.analysis_uuid,
+    }
+    if mapping is not None:
+        metadata.update(
+            {
+                "route_candidate_mapping": True,
+                "route_mapping_version": ROUTE_CANDIDATE_MAPPING_VERSION,
+                "route_type": mapping.route_type.value,
+                "route_uuid": route_uuid,
+            }
+        )
+    return metadata
+
+
+def _route_type_from_analysis(analysis: LinguisticAnalysis) -> str | None:
+    raw = _analysis_route_metadata(analysis)
+    route_type = raw.get("route_type")
+    return str(route_type) if route_type is not None else None
+
+
+def _route_uuid_from_analysis(analysis: LinguisticAnalysis) -> str | None:
+    raw = _analysis_route_metadata(analysis)
+    route_uuid = raw.get("route_uuid")
+    return str(route_uuid) if route_uuid is not None else None
+
+
+def _analysis_route_metadata(analysis: LinguisticAnalysis) -> dict[str, Any]:
+    loaded = load_ijson(analysis.raw_output_ijson)
+    if not isinstance(loaded, dict):
+        return {}
+    route = loaded.get("pr4d_selected_route")
+    return route if isinstance(route, dict) else {}
