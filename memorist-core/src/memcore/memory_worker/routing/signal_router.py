@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from memcore.memory_worker.routing.models import RouteDecision
-from memcore.memory_worker.semantic import (
+from memcore.memory_worker.semantic.factors import (
     ContextKind,
+    HIGH_PRIORITY_INSTRUCTION,
+    PRIVACY_CONTEXT,
     ReceiverKind,
     resolve_semantic_factors,
 )
-from memcore.memory_worker.semantic.factors import HIGH_PRIORITY_INSTRUCTION, PRIVACY_CONTEXT
 from memcore.models import (
     JakobsonConfidence,
     JakobsonFunction,
@@ -16,6 +17,9 @@ from memcore.models import (
     MemorySignalRouteType,
 )
 from memcore.validators.ijson import load_ijson
+
+
+PERSIAN_PROMPT_WORD = "\u067e\u0631\u0627\u0645\u067e\u062a"
 
 
 class SignalRouter:
@@ -147,10 +151,12 @@ class SignalRouter:
             annotation.dominant_function is JakobsonFunction.METALINGUAL
             or "metalingual" in secondary
         ):
+            prompt_context = context_kind == ContextKind.METALINGUAL.value and (
+                "prompt" in text.lower() or PERSIAN_PROMPT_WORD in text
+            )
             route_type = (
                 MemorySignalRouteType.PROMPT_INSTRUCTION
-                if context_kind == ContextKind.METALINGUAL.value and "prompt" in text.lower()
-                or "پرامپت" in text
+                if prompt_context
                 else MemorySignalRouteType.TERMINOLOGY_RULE
             )
             return [
