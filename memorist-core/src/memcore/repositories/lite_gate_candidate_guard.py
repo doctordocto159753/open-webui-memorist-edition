@@ -5,6 +5,7 @@ from typing import Any
 
 from memcore.memory_worker.semantic.gate_policy import candidate_policy_for_gate_and_route
 from memcore.models import LinguisticAnalysis
+from memcore.validators.ijson import dump_ijson, load_ijson
 
 _GetForUnit = Callable[[Any, str, str], LinguisticAnalysis | None]
 _INSTALLED_REPOSITORIES: set[type[Any]] = set()
@@ -17,7 +18,7 @@ _GATE_SQL = """
     LIMIT 1
 """
 _ROUTE_SQL = """
-    SELECT msr.route_type, msr.status
+    SELECT msr.route_uuid, msr.annotation_uuid, msr.route_type, msr.status
     FROM memory_signal_routes msr
     JOIN jakobson_sentence_annotations jsa
       ON jsa.annotation_uuid = msr.annotation_uuid
@@ -61,10 +62,27 @@ def install_lite_gate_candidate_guard(repository_type: type[Any]) -> None:
         )
         if not policy.allows_candidate_creation:
             return None
-        return original(self, text_unit_uuid, processing_run_uuid)
+        analysis = original(self, text_unit_uuid, processing_run_uuid)
+        if analysis is None or route is None:
+            return analysis
+        return analysis.model_copy(
+            update={"raw_output_ijson": _raw_output_with_selected_route(analysis, route)}
+        )
 
     repository_type.get_for_unit = guarded_get_for_unit
     _INSTALLED_REPOSITORIES.add(repository_type)
+
+
+def _raw_output_with_selected_route(analysis: LinguisticAnalysis, route: Any) -> str:
+    loaded = load_ijson(analysis.raw_output_ijson)
+    raw_output = loaded if isinstance(loaded, dict) else {}
+    raw_output["pr4d_selected_route"] = {
+        "route_uuid": _value(route, "route_uuid"),
+        "annotation_uuid": _value(route, "annotation_uuid"),
+        "route_type": _value(route, "route_type"),
+        "route_status": _value(route, "status"),
+    }
+    return dump_ijson(raw_output)
 
 
 def _value(row: Any, key: str) -> Any:
