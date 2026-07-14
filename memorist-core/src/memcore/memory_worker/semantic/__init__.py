@@ -6,6 +6,15 @@ from memcore.memory_worker.semantic.canonical import (
     CanonicalSemanticFactor,
     CanonicalSemanticProvenance,
 )
+from memcore.memory_worker.semantic.factors import (
+    ContextKind,
+    ReceiverKind,
+    ResolvedSemanticFactors,
+    SemanticFactorMatch,
+    resolve_context,
+    resolve_receiver,
+    resolve_semantic_factors,
+)
 
 __all__ = [
     "CanonicalGateDecision",
@@ -14,4 +23,11 @@ __all__ = [
     "CanonicalSemanticDecision",
     "CanonicalSemanticFactor",
     "CanonicalSemanticProvenance",
+    "ContextKind",
+    "ReceiverKind",
+    "ResolvedSemanticFactors",
+    "SemanticFactorMatch",
+    "resolve_context",
+    "resolve_receiver",
+    "resolve_semantic_factors",
 ]
