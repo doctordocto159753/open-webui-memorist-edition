@@ -9,7 +9,6 @@ from memcore.memory_worker.semantic.routing_policy import (
 )
 from memcore.models import JakobsonConfidence, new_uuid, utc_now
 
-
 _CONFIDENCE_VALUE = {
     JakobsonConfidence.HIGH: "0.90",
     JakobsonConfidence.MEDIUM: "0.75",
