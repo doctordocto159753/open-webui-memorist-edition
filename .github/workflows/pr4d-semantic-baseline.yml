@@ -17,6 +17,9 @@ jobs:
       MEMORIST_CANONICAL_STORE: sqlite
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         working-directory: memorist-core
@@ -53,6 +56,9 @@ jobs:
       MEMORIST_OBJECT_STORE_PATH: /tmp/memorist-objects
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         working-directory: memorist-core
@@ -66,6 +72,9 @@ jobs:
     runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         working-directory: memorist-core
@@ -79,6 +88,9 @@ jobs:
     runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         working-directory: memorist-core
@@ -92,6 +104,9 @@ jobs:
     runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         working-directory: memorist-core
@@ -105,6 +120,9 @@ jobs:
     runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         working-directory: memorist-core
@@ -118,6 +136,9 @@ jobs:
     runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         working-directory: memorist-core
