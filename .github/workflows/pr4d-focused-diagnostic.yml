@@ -6,37 +6,14 @@ name: PR4-D Focused Diagnostic
   workflow_dispatch:
 
 jobs:
-  lint-and-full-diagnostic:
-    name: PR4-D Lint and Full Diagnostic
+  ruff-import-diagnostic:
+    name: PR4-D Ruff Import Diagnostic
     runs-on: [self-hosted, linux, x64, memorist-ci]
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: memorist
-          POSTGRES_PASSWORD: memorist
-          POSTGRES_DB: memorist_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U memorist -d memorist_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      MEMORIST_SEMANTIC_BASELINE_RUNTIME: full
-      MEMORIST_RUNTIME_PROFILE: full
-      MEMORIST_CANONICAL_STORE: postgres
-      MEMORIST_POSTGRES_DSN: postgresql://memorist:memorist@localhost:5432/memorist_test
-      MEMORIST_GRAPH_BACKEND: disabled
-      MEMORIST_ALLOW_FULL_GRAPH_DEGRADED: "true"
-      MEMORIST_HOT_SCHEDULER: in_memory
-      MEMORIST_OBJECT_STORE_PATH: /tmp/memorist-objects
     steps:
-      - name: Run compact diagnostics from persistent workspace
+      - name: Print ruff import diff
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: doctordocto159753/open-webui-memorist-edition
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          W=/home/github-runner/actions-runner/_work/open-webui-memorist-edition/open-webui-memorist-edition; A="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"; U=/home/github-runner/actions-runner/_work/_tool/uv/0.11.28/x86_64/uv; [ -x "$U" ] || U=/home/github-runner/.local/bin/uv; cd "$W" && git remote set-url origin "$A" && git fetch --quiet origin "$HEAD_SHA" && git checkout --quiet "$HEAD_SHA" && cd memorist-core && UV_BIN="$U" bash scripts/pr4d_diag.sh
+          W=/home/github-runner/actions-runner/_work/open-webui-memorist-edition/open-webui-memorist-edition; A="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"; U=/home/github-runner/actions-runner/_work/_tool/uv/0.11.28/x86_64/uv; [ -x "$U" ] || U=/home/github-runner/.local/bin/uv; cd "$W" && git remote set-url origin "$A" && git fetch --quiet origin "$HEAD_SHA" && git checkout --quiet "$HEAD_SHA" && cd memorist-core && "$U" run ruff check --fix --diff src/memcore/memory_worker/postgres/routing_policy_adapter.py
