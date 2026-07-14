@@ -5,11 +5,13 @@ from typing import Any
 
 from memcore.memory_worker.postgres.gated_candidate_adapter import record_candidates
 from memcore.memory_worker.semantic import (
+    ROUTE_CANDIDATE_MAPPING_VERSION,
     candidate_policy_for_gate_and_route,
     gate_allows_analysis,
     gate_allows_candidate_creation,
 )
 from memcore.models import (
+    CandidateType,
     GateDecisionValue,
     MemorySignalRouteStatus,
     MemorySignalRouteType,
@@ -177,9 +179,15 @@ def test_full_candidate_adapter_allows_analyze_ready_route_and_metadata() -> Non
     )
 
     assert len(pipeline.connection.candidate_params) == 1
-    metadata = json.loads(pipeline.connection.candidate_params[0][6])
+    candidate_params = pipeline.connection.candidate_params[0]
+    assert candidate_params[3] == CandidateType.CONSTRAINT.value
+    assert candidate_params[4] == "project"
+    assert candidate_params[5] == "constraint"
+    assert candidate_params[7].startswith("constraint:project:constraint:")
+    metadata = json.loads(candidate_params[12])
     assert metadata["gate_decision"] == GateDecisionValue.ANALYZE_HIGH_CONFIDENCE.value
     assert metadata["route_type"] == MemorySignalRouteType.TASK_CONSTRAINT.value
+    assert metadata["route_mapping_version"] == ROUTE_CANDIDATE_MAPPING_VERSION
     assert metadata["requires_high_confidence_pass"] is True
     assert len(pipeline.connection.evidence_params) == 1
     assert pipeline.connection.evidence_params[0][5] == "route-1"
