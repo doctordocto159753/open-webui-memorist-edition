@@ -100,6 +100,21 @@ jobs:
           uv run pytest tests/test_pr4d_canonical_semantic_contract.py -q --junitxml=canonical-semantic-contract.xml
           uv run python -c "import xml.etree.ElementTree as E; r=E.parse('canonical-semantic-contract.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
 
+  shared-factor-resolver:
+    name: Shared Receiver and Context Resolver
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Validate shared receiver/context resolver
+        working-directory: memorist-core
+        run: |
+          uv run pytest tests/test_pr4d_semantic_factor_resolver.py -q --junitxml=semantic-factor-resolver.xml
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('semantic-factor-resolver.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+
   semantic-baseline-type-and-lint:
     name: Semantic Baseline — Type and Lint
     runs-on: ubuntu-latest
@@ -112,8 +127,8 @@ jobs:
       - name: Python lint, format, and type checks
         working-directory: memorist-core
         run: |
-          uv run ruff check src/memcore/memory_worker/semantic tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py
-          uv run ruff format --check src/memcore/memory_worker/semantic tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py
-          uv run mypy src/memcore/memory_worker/semantic tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py
+          uv run ruff check src/memcore/memory_worker/semantic src/memcore/memory_worker/routing tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py tests/test_pr4d_semantic_factor_resolver.py
+          uv run ruff format --check src/memcore/memory_worker/semantic src/memcore/memory_worker/routing tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py tests/test_pr4d_semantic_factor_resolver.py
+          uv run mypy src/memcore/memory_worker/semantic src/memcore/memory_worker/routing tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py tests/test_pr4d_semantic_factor_resolver.py
       - name: Diff check
         run: git diff --check
