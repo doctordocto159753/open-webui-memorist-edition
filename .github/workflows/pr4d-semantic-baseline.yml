@@ -87,6 +87,19 @@ jobs:
         working-directory: memorist-core
         run: uv run pytest tests/test_pr4d_semantic_factor_resolver.py -q
 
+  shared-routing-policy:
+    name: Shared Semantic Routing Policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Validate shared routing policy
+        working-directory: memorist-core
+        run: uv run pytest tests/test_pr4d_shared_routing_policy.py -q
+
   semantic-baseline-type-and-lint:
     name: Semantic Baseline — Type and Lint
     runs-on: ubuntu-latest
@@ -99,7 +112,7 @@ jobs:
       - name: Python lint, format, and type checks
         working-directory: memorist-core
         run: |
-          TARGETS="src/memcore/memory_worker/semantic src/memcore/memory_worker/routing tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py tests/test_pr4d_semantic_factor_resolver.py"
+          TARGETS="src/memcore/memory_worker/semantic src/memcore/memory_worker/routing src/memcore/memory_worker/postgres/deterministic_fallback.py src/memcore/memory_worker/postgres/routing_policy_adapter.py tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py tests/test_pr4d_semantic_factor_resolver.py tests/test_pr4d_shared_routing_policy.py"
           uv run ruff check $TARGETS
           uv run ruff format --check $TARGETS
           uv run mypy $TARGETS
