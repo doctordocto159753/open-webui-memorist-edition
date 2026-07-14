@@ -3,6 +3,12 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from memcore.models import (
+    JakobsonConfidence,
+    JakobsonFunction,
+    MemorySignalRouteStatus,
+    MemorySignalRouteType,
+)
 from memcore.memory_worker.routing.models import RouteDecision
 from memcore.memory_worker.semantic.factors import (
     ContextKind,
@@ -10,12 +16,6 @@ from memcore.memory_worker.semantic.factors import (
     PRIVACY_CONTEXT,
     ReceiverKind,
     resolve_semantic_factors,
-)
-from memcore.models import (
-    JakobsonConfidence,
-    JakobsonFunction,
-    MemorySignalRouteStatus,
-    MemorySignalRouteType,
 )
 
 PERSIAN_PROMPT_WORD = "پرامپت"
