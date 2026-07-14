@@ -37,8 +37,12 @@ def record_routes(
             status = route_status_for_type(decision.route_type)
             self.connection.execute(
                 """
-                INSERT INTO memory_signal_routes (route_uuid, annotation_uuid, message_uuid, unit_uuid, dominant_function, secondary_functions_jsonb, route_type,
-                  extractor_id, priority, confidence, reason, status, created_at, schema_version)
+                INSERT INTO memory_signal_routes (
+                  route_uuid, annotation_uuid, message_uuid, unit_uuid,
+                  dominant_function, secondary_functions_jsonb, route_type,
+                  extractor_id, priority, confidence, reason, status,
+                  created_at, schema_version
+                )
                 VALUES (%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s,1)
                 ON CONFLICT (annotation_uuid, route_type, extractor_id) DO NOTHING
                 """,
