@@ -14,6 +14,13 @@ from memcore.config import Settings
 from memcore.memory_worker.contracts import PIPELINE_VERSION, PROMPT_BUNDLE_VERSION
 from memcore.memory_worker.gating import DeterministicGate
 from memcore.memory_worker.identity import build_processing_identity
+from memcore.memory_worker.postgres.deterministic_fallback import (
+    deterministic_jakobson_output,
+)
+from memcore.memory_worker.postgres.gated_candidate_adapter import (
+    record_candidates,
+)
+from memcore.memory_worker.postgres.routing_policy_adapter import record_routes
 from memcore.memory_worker.prepared import PreparedJakobsonInference
 from memcore.memory_worker.prompts import render_prompt, validate_prompt_execution
 from memcore.memory_worker.prompts.versions import (
@@ -786,50 +793,7 @@ class PostgresMemoryWorkerPipeline:
     def _record_routes(
         self, message_uuid: str, annotations: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        extractor_by_function = {
-            "conative": "memorist.conative_instruction_extractor",
-            "referential": "memorist.referential_context_extractor",
-            "metalingual": "memorist.metalingual_policy_extractor",
-            "emotive": "memorist.emotive_preference_extractor",
-            "poetic": "memorist.poetic_style_extractor",
-            "phatic": "memorist.referential_context_extractor",
-        }
-        type_by_function = {
-            "conative": "task_constraint",
-            "referential": "process_fact",
-            "metalingual": "terminology_rule",
-            "emotive": "user_preference",
-            "poetic": "style_policy",
-            "phatic": "process_fact",
-        }
-        for annotation in annotations:
-            func = str(annotation["dominant_function"])
-            route_uuid = new_uuid()
-            self.connection.execute(
-                """
-                INSERT INTO memory_signal_routes (route_uuid, annotation_uuid, message_uuid, unit_uuid, dominant_function, secondary_functions_jsonb, route_type,
-                  extractor_id, priority, confidence, reason, status, created_at, schema_version)
-                VALUES (%s,%s,%s,%s,%s,%s::jsonb,%s,%s,50,'0.75','structured extraction route','ready',%s,1)
-                ON CONFLICT (annotation_uuid, route_type, extractor_id) DO NOTHING
-                """,
-                (
-                    route_uuid,
-                    annotation["annotation_uuid"],
-                    message_uuid,
-                    annotation["unit_uuid"],
-                    func,
-                    json.dumps(annotation.get("secondary_functions_jsonb") or []),
-                    type_by_function.get(func, "process_fact"),
-                    extractor_by_function.get(func, "memorist.referential_context_extractor"),
-                    utc_now(),
-                ),
-            )
-        return [
-            dict(row)
-            for row in self.connection.execute(
-                "SELECT * FROM memory_signal_routes WHERE message_uuid = %s", (message_uuid,)
-            ).fetchall()
-        ]
+        return record_routes(self, message_uuid, annotations)
 
     def _record_gates(
         self, processing_run_uuid: str, units: list[dict[str, Any]]
@@ -939,67 +903,18 @@ class PostgresMemoryWorkerPipeline:
         import_run_uuid: str | None = None,
         model_name: str | None = None,
     ) -> list[dict[str, Any]]:
-        route_by_unit = {r["unit_uuid"]: r for r in routes}
-        annotation_by_unit = {a["unit_uuid"]: a for a in annotations}
-        for unit in units:
-            existing = self.connection.execute(
-                "SELECT 1 FROM memory_candidates WHERE processing_run_uuid = %s AND text_unit_uuid = %s AND normalized_text = %s",
-                (processing_run_uuid, unit["text_unit_uuid"], unit["text"]),
-            ).fetchone()
-            if existing:
-                continue
-            route = route_by_unit.get(unit["text_unit_uuid"])
-            annotation = annotation_by_unit.get(unit["text_unit_uuid"])
-            candidate_uuid = new_uuid()
-            self.connection.execute(
-                """
-                INSERT INTO memory_candidates (candidate_uuid, processing_run_uuid, text_unit_uuid, candidate_type, subject_key, predicate, object_jsonb,
-                  normalized_text, source_authority, explicitness, confidence, importance, sensitivity, status, rejection_reason, extraction_metadata_jsonb,
-                  created_at, schema_version, prompt_execution_uuid)
-                VALUES (%s,%s,%s,'observation',%s,'states',%s::jsonb,%s,'user_message','explicit',0.76,0.55,'normal','accepted',NULL,%s::jsonb,%s,1,%s)
-                """,
-                (
-                    candidate_uuid,
-                    processing_run_uuid,
-                    unit["text_unit_uuid"],
-                    f"message:{message['message_uuid']}",
-                    json.dumps({"text": unit["text"]}),
-                    unit["text"],
-                    json.dumps(
-                        {
-                            "provider_type": provider_type,
-                            "prompt_id": JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-                        }
-                    ),
-                    utc_now(),
-                    prompt_execution_uuid,
-                ),
-            )
-            self.connection.execute(
-                """
-                INSERT INTO candidate_evidence (evidence_uuid, candidate_uuid, message_uuid, text_unit_uuid, annotation_uuid, route_uuid, evidence_text, start_char, end_char, created_at, schema_version)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1)
-                """,
-                (
-                    new_uuid(),
-                    candidate_uuid,
-                    message["message_uuid"],
-                    unit["text_unit_uuid"],
-                    annotation["annotation_uuid"] if annotation else None,
-                    route["route_uuid"] if route else None,
-                    unit["text"],
-                    unit["start_char"],
-                    unit["end_char"],
-                    utc_now(),
-                ),
-            )
-        return [
-            dict(row)
-            for row in self.connection.execute(
-                "SELECT * FROM memory_candidates WHERE processing_run_uuid = %s",
-                (processing_run_uuid,),
-            ).fetchall()
-        ]
+        return record_candidates(
+            self,
+            processing_run_uuid,
+            message,
+            units,
+            annotations,
+            routes,
+            prompt_execution_uuid,
+            provider_type,
+            import_run_uuid,
+            model_name,
+        )
 
     def _record_memories(
         self,
@@ -1082,69 +997,7 @@ class PostgresMemoryWorkerPipeline:
         return created
 
     def _deterministic_jakobson_output(self, units: list[dict[str, Any]]) -> dict[str, Any]:
-        sentences = []
-        for idx, unit in enumerate(units, start=1):
-            text = unit["text"]
-            sentences.append(
-                {
-                    "id": idx,
-                    "text": text,
-                    "six_factors": {
-                        "sender_addresser": {
-                            "value": "user",
-                            "evidence": text,
-                            "confidence": "medium",
-                        },
-                        "receiver_addressee": {
-                            "value": "assistant",
-                            "evidence": text,
-                            "confidence": "medium",
-                        },
-                        "message": {"value": text, "evidence": text, "confidence": "high"},
-                        "context_referent": {
-                            "value": text,
-                            "evidence": text,
-                            "confidence": "medium",
-                        },
-                        "code": {
-                            "value": "natural language",
-                            "evidence": text,
-                            "confidence": "medium",
-                        },
-                        "contact_channel": {
-                            "value": "chat",
-                            "evidence": text,
-                            "confidence": "medium",
-                        },
-                    },
-                    "dominant_function": "referential",
-                    "secondary_functions": [],
-                    "function_reason": "Deterministic fallback classifies the sentence as referential.",
-                    "notes": "deterministic fallback",
-                }
-            )
-        return {
-            "schema_version": "1.0",
-            "prompt_id": JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-            "prompt_version": PROMPT_PACK_VERSION,
-            "status": "ok",
-            "warnings": ["deterministic_fallback"],
-            "items": [],
-            "analysis_level": "sentence",
-            "model": "jakobson_six_factor",
-            "input_language": "mixed",
-            "sentence_count": len(sentences),
-            "sentences": sentences,
-            "overall_summary": {
-                "dominant_overall_function": "referential",
-                "secondary_overall_functions": [],
-                "main_sender": "user",
-                "main_receiver": "assistant",
-                "main_context": "conversation",
-                "main_code": "natural language",
-                "main_contact_channel": "chat",
-            },
-        }
+        return deterministic_jakobson_output(self, units)
 
     def _summary(
         self, message_uuid: str, processing_run_uuid: str, replay: bool
