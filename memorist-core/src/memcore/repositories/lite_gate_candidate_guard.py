@@ -7,6 +7,7 @@ from memcore.memory_worker.semantic.gate_policy import candidate_policy_for_gate
 from memcore.models import LinguisticAnalysis
 
 _GetForUnit = Callable[[Any, str, str], LinguisticAnalysis | None]
+_INSTALLED_REPOSITORIES: set[type[Any]] = set()
 
 _GATE_SQL = """
     SELECT decision, requires_high_confidence_pass
@@ -36,9 +37,9 @@ _ROUTE_SQL = """
 def install_lite_gate_candidate_guard(repository_type: type[Any]) -> None:
     """Gate Lite analysis retrieval before the candidate extraction boundary."""
 
-    original: _GetForUnit = repository_type.get_for_unit
-    if getattr(original, "__pr4d_gate_candidate_guard__", False):
+    if repository_type in _INSTALLED_REPOSITORIES:
         return
+    original: _GetForUnit = repository_type.get_for_unit
 
     def guarded_get_for_unit(
         self: Any,
@@ -62,8 +63,8 @@ def install_lite_gate_candidate_guard(repository_type: type[Any]) -> None:
             return None
         return original(self, text_unit_uuid, processing_run_uuid)
 
-    setattr(guarded_get_for_unit, "__pr4d_gate_candidate_guard__", True)
     repository_type.get_for_unit = guarded_get_for_unit
+    _INSTALLED_REPOSITORIES.add(repository_type)
 
 
 def _value(row: Any, key: str) -> Any:
