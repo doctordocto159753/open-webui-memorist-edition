@@ -1,0 +1,43 @@
+name: PR4-D Task 06 Diagnostic
+
+"on":
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pr4d-task06-diagnostic-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  task06-diagnostic:
+    name: PR4-D Task 06 Diagnostic
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - name: Run compact Task 06 diagnostics
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: doctordocto159753/open-webui-memorist-edition
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          W=/home/github-runner/actions-runner/_work/open-webui-memorist-edition/open-webui-memorist-edition
+          A="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          U=/home/github-runner/actions-runner/_work/_tool/uv/0.11.28/x86_64/uv
+          [ -x "$U" ] || U=/home/github-runner/.local/bin/uv
+          cd "$W"
+          git remote set-url origin "$A"
+          git fetch --quiet origin "$HEAD_SHA"
+          git checkout --quiet "$HEAD_SHA"
+          cd memorist-core
+          "$U" sync --all-extras --quiet
+          TARGETS="src/memcore/memory_worker/semantic/candidate_mapping.py src/memcore/memory_worker/extraction/extractor.py src/memcore/memory_worker/postgres/gated_candidate_adapter.py src/memcore/repositories/lite_gate_candidate_guard.py tests/test_pr4d_gate_candidate_policy.py tests/test_pr4d_route_candidate_mapping.py"
+          set +e
+          "$U" run ruff check $TARGETS > /tmp/pr4d-task06-ruff.log 2>&1; rc=$?
+          echo "=== ruff check status: $rc ==="; cat /tmp/pr4d-task06-ruff.log
+          "$U" run ruff format --check $TARGETS > /tmp/pr4d-task06-format.log 2>&1; rf=$?
+          echo "=== ruff format status: $rf ==="; cat /tmp/pr4d-task06-format.log
+          "$U" run mypy $TARGETS > /tmp/pr4d-task06-mypy.log 2>&1; ms=$?
+          echo "=== mypy status: $ms ==="; cat /tmp/pr4d-task06-mypy.log
+          "$U" run pytest tests/test_pr4d_route_candidate_mapping.py tests/test_pr4d_gate_candidate_policy.py -q --tb=short > /tmp/pr4d-task06-pytest.log 2>&1; ps=$?
+          echo "=== pytest status: $ps ==="; cat /tmp/pr4d-task06-pytest.log
+          [ "$rc" -eq 0 ] && [ "$rf" -eq 0 ] && [ "$ms" -eq 0 ] && [ "$ps" -eq 0 ]
