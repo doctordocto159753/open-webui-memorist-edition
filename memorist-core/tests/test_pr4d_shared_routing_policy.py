@@ -21,7 +21,7 @@ class _FakeConnection:
     def __init__(self) -> None:
         self.insert_params: list[tuple[Any, ...]] = []
 
-    def execute(self, sql: str, params: tuple[Any, ...]) -> "_FakeConnection":
+    def execute(self, sql: str, params: tuple[Any, ...]) -> _FakeConnection:
         if "INSERT INTO memory_signal_routes" in sql:
             self.insert_params.append(params)
         return self
@@ -41,19 +41,12 @@ def test_shared_policy_routes_phatic_only_to_ignore() -> None:
         dominant_function=JakobsonFunction.PHATIC,
     )
 
-    assert [decision.route_type for decision in decisions] == [
-        MemorySignalRouteType.IGNORE
-    ]
-    assert (
-        route_status_for_type(decisions[0].route_type)
-        is MemorySignalRouteStatus.IGNORED
-    )
+    assert [decision.route_type for decision in decisions] == [MemorySignalRouteType.IGNORE]
+    assert route_status_for_type(decisions[0].route_type) is MemorySignalRouteStatus.IGNORED
 
 
 def test_lite_signal_router_delegates_phatic_only_to_shared_ignore_policy() -> None:
-    routes = SignalRouter().route(
-        _annotation(text="سلام", dominant=JakobsonFunction.PHATIC)
-    )
+    routes = SignalRouter().route(_annotation(text="سلام", dominant=JakobsonFunction.PHATIC))
 
     assert [route.route_type for route in routes] == [MemorySignalRouteType.IGNORE]
     assert routes[0].status is MemorySignalRouteStatus.IGNORED
