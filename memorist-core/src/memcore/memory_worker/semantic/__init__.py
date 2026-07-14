@@ -23,6 +23,9 @@ from memcore.memory_worker.semantic.canonical import (
     CanonicalSemanticFactor,
     CanonicalSemanticProvenance,
 )
+from memcore.memory_worker.semantic.deterministic_policy import (
+    classify_deterministic_function,
+)
 from memcore.memory_worker.semantic.factors import (
     ContextKind,
     ReceiverKind,
@@ -73,6 +76,7 @@ __all__ = [
     "build_candidate_draft",
     "candidate_mapping_for_route",
     "candidate_policy_for_gate_and_route",
+    "classify_deterministic_function",
     "decide_candidate_provenance",
     "decide_semantic_routes",
     "gate_allows_analysis",

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 from memcore.memory_worker.prompts.versions import (
     JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-    PROMPT_PACK_VERSION,
+    JAKOBSON_SENTENCE_ANALYSIS_VERSION,
 )
-from memcore.memory_worker.semantic import SemanticFactorMatch, resolve_semantic_factors
+from memcore.memory_worker.semantic import (
+    SemanticFactorMatch,
+    classify_deterministic_function,
+    resolve_semantic_factors,
+)
 from memcore.models import JakobsonFunction
 
 
@@ -22,9 +27,10 @@ def deterministic_jakobson_output(_self: object, units: list[dict[str, Any]]) ->
     sentences: list[dict[str, Any]] = []
     for idx, unit in enumerate(units, start=1):
         text = str(unit["text"])
+        dominant, secondary, reason = classify_deterministic_function(text)
         resolved = resolve_semantic_factors(
             text,
-            dominant_function=JakobsonFunction.REFERENTIAL,
+            dominant_function=dominant,
         )
         receiver = _factor_payload(
             resolved.receiver,
@@ -42,7 +48,7 @@ def deterministic_jakobson_output(_self: object, units: list[dict[str, Any]]) ->
                 "text": text,
                 "six_factors": {
                     "sender_addresser": {
-                        "value": "user",
+                        "value": str(unit.get("speaker_role") or "user"),
                         "evidence": text,
                         "confidence": "medium",
                     },
@@ -60,17 +66,27 @@ def deterministic_jakobson_output(_self: object, units: list[dict[str, Any]]) ->
                         "confidence": "medium",
                     },
                 },
-                "dominant_function": JakobsonFunction.REFERENTIAL.value,
-                "secondary_functions": [],
-                "function_reason": "Deterministic fallback classifies the sentence as referential.",
+                "dominant_function": dominant.value,
+                "secondary_functions": [item.value for item in secondary],
+                "function_reason": reason,
                 "notes": "deterministic fallback",
             }
         )
 
+    function_counts = Counter(sentence["dominant_function"] for sentence in sentences)
+    dominant_overall = (
+        function_counts.most_common(1)[0][0]
+        if function_counts
+        else JakobsonFunction.REFERENTIAL.value
+    )
+    secondary_overall = [
+        function for function, _ in function_counts.most_common() if function != dominant_overall
+    ]
+
     return {
         "schema_version": "1.0",
         "prompt_id": JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-        "prompt_version": PROMPT_PACK_VERSION,
+        "prompt_version": JAKOBSON_SENTENCE_ANALYSIS_VERSION,
         "status": "ok",
         "warnings": ["deterministic_fallback"],
         "items": [],
@@ -80,9 +96,13 @@ def deterministic_jakobson_output(_self: object, units: list[dict[str, Any]]) ->
         "sentence_count": len(sentences),
         "sentences": sentences,
         "overall_summary": {
-            "dominant_overall_function": JakobsonFunction.REFERENTIAL.value,
-            "secondary_overall_functions": [],
-            "main_sender": "user",
+            "dominant_overall_function": dominant_overall,
+            "secondary_overall_functions": secondary_overall,
+            "main_sender": (
+                "user"
+                if any(str(unit.get("speaker_role") or "user") == "user" for unit in units)
+                else None
+            ),
             "main_receiver": _overall_factor_value(
                 sentences, "receiver_addressee", fallback="assistant"
             ),

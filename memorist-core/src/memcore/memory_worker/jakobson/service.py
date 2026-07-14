@@ -24,12 +24,14 @@ from memcore.memory_worker.providers.openai_compatible import (
 )
 from memcore.memory_worker.routing.signal_router import SignalRouter
 from memcore.memory_worker.segmentation.sentence_segmenter import SentenceSegmenter
+from memcore.memory_worker.semantic.deterministic_policy import (
+    classify_deterministic_function,
+)
 from memcore.memory_worker.semantic.factors import resolve_semantic_factors
 from memcore.model_control.security import sanitize_error_message
 from memcore.models import (
     JakobsonAnalysisRun,
     JakobsonAnalysisRunStatus,
-    JakobsonFunction,
     Message,
     ModelRole,
     TextUnit,
@@ -388,7 +390,7 @@ def _jakobson_input(units: list[TextUnit]) -> dict[str, Any]:
 
 def _analyze_unit(unit: TextUnit, sentence_id: int) -> dict[str, Any]:
     text = unit.text
-    dominant, secondary, reason = _classify_function(text)
+    dominant, secondary, reason = classify_deterministic_function(text)
     factors = resolve_semantic_factors(text, dominant_function=dominant)
     code = _code(text, unit.language_hint or unit.language_code)
     return {
@@ -414,67 +416,6 @@ def _analyze_unit(unit: TextUnit, sentence_id: int) -> dict[str, Any]:
         "secondary_functions": [item.value for item in secondary],
         "function_reason": reason,
         "notes": "",
-    }
-
-
-def _classify_function(text: str) -> tuple[JakobsonFunction, list[JakobsonFunction], str]:
-    lowered = text.lower()
-    if _is_phatic(text, lowered):
-        return JakobsonFunction.PHATIC, [], "The sentence opens or maintains contact."
-    has_instruction = _has_instruction(text, lowered)
-    has_metalanguage = _has_metalanguage(text, lowered)
-    if has_instruction:
-        secondary = [JakobsonFunction.METALINGUAL] if has_metalanguage else []
-        return (
-            JakobsonFunction.CONATIVE,
-            secondary,
-            "The sentence tells the receiver what to do.",
-        )
-    if has_metalanguage:
-        return (
-            JakobsonFunction.METALINGUAL,
-            [],
-            "The sentence defines, translates, or comments on wording.",
-        )
-    if _has_emotive(text, lowered):
-        return JakobsonFunction.EMOTIVE, [], "The sentence expresses sender stance or desire."
-    if _has_poetic(text, lowered):
-        return JakobsonFunction.POETIC, [], "The sentence foregrounds wording or style."
-    return JakobsonFunction.REFERENTIAL, [], "The sentence mainly describes context or facts."
-
-
-def _has_instruction(text: str, lowered: str) -> bool:
-    return bool(
-        re.search(r"\b(must|should|do not|don't|add|define|create|implement|use|route)\b", lowered)
-        or re.search(r"باید|حتما|تعریف کن|اضافه کن|پیاده‌سازی کن|استفاده کن|نکن|وظیفه", text)
-    )
-
-
-def _has_metalanguage(text: str, lowered: str) -> bool:
-    return bool(
-        re.search(r"\b(term|terminology|wording|definition|translation|meaning|prompt)\b", lowered)
-        or re.search(r"اصطلاح|واژه|تعریف|ترجمه|معنی|منظور|پرامپت", text)
-    )
-
-
-def _has_emotive(text: str, lowered: str) -> bool:
-    return bool(
-        re.search(r"\b(prefer|want|like|dislike|frustrated|wish|approve)\b", lowered)
-        or re.search(r"ترجیح|می‌خواهم|دوست دارم|کلافه|ناراحت|نگران|راضی", text)
-    )
-
-
-def _has_poetic(text: str, lowered: str) -> bool:
-    return bool(re.search(r"\b(slogan|rhythm|wordplay|branding tone)\b", lowered) or "شعار" in text)
-
-
-def _is_phatic(text: str, lowered: str) -> bool:
-    stripped = text.strip(" .!؟?")
-    return stripped in {"سلام", "درود", "hello", "hi", "hey"} or lowered.strip() in {
-        "hello",
-        "hi",
-        "hey",
-        "thanks",
     }
 
 

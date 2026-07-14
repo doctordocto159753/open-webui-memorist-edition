@@ -143,6 +143,44 @@ def test_full_postgres_deterministic_fallback_expected_to_use_shared_factor_reso
     }
 
 
+def test_lite_and_full_share_deterministic_function_classification() -> None:
+    for text, expected in (
+        ("I prefer concise answers.", JakobsonFunction.EMOTIVE),
+        ("You must update the prompt wording.", JakobsonFunction.CONATIVE),
+        ("Hello.", JakobsonFunction.PHATIC),
+    ):
+        lite_unit = cast(
+            Any,
+            SimpleNamespace(
+                text_unit_uuid=new_uuid(),
+                text=text,
+                speaker_role="user",
+                language_hint="en",
+                language_code="en",
+                start_char=0,
+                end_char=len(text),
+            ),
+        )
+        full_unit = {
+            "text_unit_uuid": new_uuid(),
+            "text": text,
+            "speaker_role": "user",
+            "start_char": 0,
+            "end_char": len(text),
+        }
+        lite = DeterministicJakobsonProvider().analyze([lite_unit], text)
+        pipeline = object.__new__(PostgresMemoryWorkerPipeline)
+        full = PostgresMemoryWorkerPipeline._deterministic_jakobson_output(pipeline, [full_unit])
+
+        assert lite["sentences"][0]["dominant_function"] == expected.value
+        assert full["sentences"][0]["dominant_function"] == expected.value
+        assert (
+            full["sentences"][0]["secondary_functions"]
+            == lite["sentences"][0]["secondary_functions"]
+        )
+        assert full["sentences"][0]["function_reason"] == lite["sentences"][0]["function_reason"]
+
+
 def test_signal_router_uses_shared_receiver_resolution_for_hints() -> None:
     annotation = _annotation(
         text="Update the rollout checklist.",
