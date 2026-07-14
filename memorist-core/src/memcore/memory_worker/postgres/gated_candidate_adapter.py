@@ -3,19 +3,18 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from memcore.memory_worker.prompts.versions import (
-    JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
+from memcore.memory_worker.semantic.authority import (
+    CandidateAuthorityContext,
+    CanonicalRouteReference,
+    select_authoritative_route,
 )
-from memcore.memory_worker.semantic.candidate_mapping import (
-    ROUTE_CANDIDATE_MAPPING_VERSION,
-    RouteCandidateMapping,
-    candidate_mapping_for_route,
-)
-from memcore.memory_worker.semantic.gate_policy import (
-    candidate_policy_for_gate_and_route,
+from memcore.memory_worker.semantic.candidate_service import (
+    CandidateServiceInput,
+    build_candidate_draft,
 )
 from memcore.models import (
     CandidateStatus,
+    GateDecisionValue,
     MemorySignalRouteStatus,
     MemorySignalRouteType,
     new_uuid,
@@ -39,8 +38,8 @@ _INSERT_CANDIDATE_SQL = """
       prompt_execution_uuid
     )
     VALUES (
-      %s,%s,%s,%s,%s,%s,%s::jsonb,%s,'user_message',
-      'explicit',0.76,%s,'normal',%s,%s,%s::jsonb,%s,1,%s
+      %s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,
+      %s,%s,%s,%s,%s,%s,%s::jsonb,%s,1,%s
     )
 """
 _INSERT_EVIDENCE_SQL = """
@@ -73,73 +72,81 @@ def record_candidates(
     routes: list[dict[str, Any]],
     prompt_execution_uuid: str,
     provider_type: str,
+    import_run_uuid: str | None = None,
+    model_name: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Persist Full/PostgreSQL candidates only after gate and route eligibility."""
+    """Persist shared candidate drafts; Full owns SQL, not candidate semantics."""
 
     gate_by_unit = _gate_by_unit(self, processing_run_uuid)
     routes_by_unit = _routes_by_unit(routes)
-    annotation_by_unit = {a["unit_uuid"]: a for a in annotations}
+    annotation_by_unit = {str(item["unit_uuid"]): item for item in annotations}
     for unit in units:
-        unit_uuid = unit["text_unit_uuid"]
-        route = _selected_route(routes_by_unit.get(unit_uuid, []))
+        unit_uuid = str(unit["text_unit_uuid"])
+        annotation = annotation_by_unit.get(unit_uuid)
+        selected_route = select_authoritative_route(
+            [_route_reference(item, annotation) for item in routes_by_unit.get(unit_uuid, [])]
+        )
         gate = gate_by_unit.get(unit_uuid)
-        policy = candidate_policy_for_gate_and_route(
-            gate_decision=gate.get("decision") if gate else None,
-            route_type=route.get("route_type") if route else None,
-            route_status=route.get("status") if route else None,
+        authority = CandidateAuthorityContext(
+            gate_decision=_gate_decision(gate.get("decision") if gate else None),
             requires_high_confidence_pass=bool(
                 gate.get("requires_high_confidence_pass") if gate else False
             ),
+            selected_route=selected_route,
+            analysis_run_uuid=(
+                str(annotation["analysis_run_uuid"])
+                if annotation and annotation.get("analysis_run_uuid")
+                else None
+            ),
+            prompt_execution_uuid=prompt_execution_uuid,
         )
-        if not policy.allows_candidate_creation:
-            continue
-
-        mapping = candidate_mapping_for_route(
-            route.get("route_type") if route else None,
-            str(unit["text"]),
-            message_uuid=str(message["message_uuid"]),
+        draft = build_candidate_draft(
+            CandidateServiceInput(
+                message_uuid=str(message["message_uuid"]),
+                message_role=str(message.get("role") or "user"),
+                text_unit_uuid=unit_uuid,
+                text=str(unit["text"]),
+                start_char=int(unit["start_char"]),
+                end_char=int(unit["end_char"]),
+                processing_run_uuid=processing_run_uuid,
+                authority=authority,
+                imported_record=import_run_uuid is not None,
+                provider_type=provider_type,
+                model_name=model_name,
+            )
         )
-        if mapping is None:
+        if draft is None:
             continue
 
         existing = self.connection.execute(
             _EXISTING_CANDIDATE_SQL,
-            (processing_run_uuid, unit_uuid, mapping.normalized_text),
+            (processing_run_uuid, unit_uuid, draft.normalized_text),
         ).fetchone()
         if existing:
             continue
 
-        annotation = annotation_by_unit.get(unit_uuid)
         candidate_uuid = new_uuid()
         self.connection.execute(
             _INSERT_CANDIDATE_SQL,
             (
                 candidate_uuid,
-                processing_run_uuid,
-                unit_uuid,
-                mapping.candidate_type.value,
-                mapping.subject_key,
-                mapping.predicate,
-                json.dumps({"value": mapping.object_value}),
-                mapping.normalized_text,
-                mapping.importance,
-                _postgres_status(mapping.status),
-                _postgres_rejection_reason(mapping),
-                json.dumps(
-                    {
-                        "provider_type": provider_type,
-                        "prompt_id": JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-                        "gate_decision": policy.gate_decision,
-                        "route_candidate_mapping": True,
-                        "route_mapping_version": ROUTE_CANDIDATE_MAPPING_VERSION,
-                        "route_type": policy.route_type,
-                        "route_status": policy.route_status,
-                        "requires_high_confidence_pass": policy.requires_high_confidence_pass,
-                    },
-                    sort_keys=True,
-                ),
+                draft.processing_run_uuid,
+                draft.text_unit_uuid,
+                draft.candidate_type.value,
+                draft.subject_key,
+                draft.predicate,
+                json.dumps(draft.object_payload, sort_keys=True),
+                draft.normalized_text,
+                draft.source_authority.value,
+                draft.explicitness.value,
+                draft.confidence,
+                draft.importance,
+                draft.sensitivity.value,
+                _postgres_status(draft.status),
+                _postgres_rejection_reason(draft.rejection_reason_codes),
+                json.dumps(draft.metadata, sort_keys=True),
                 utc_now(),
-                prompt_execution_uuid,
+                draft.prompt_execution_uuid,
             ),
         )
         self.connection.execute(
@@ -147,13 +154,13 @@ def record_candidates(
             (
                 new_uuid(),
                 candidate_uuid,
-                message["message_uuid"],
-                unit_uuid,
-                annotation["annotation_uuid"] if annotation else None,
-                route["route_uuid"] if route else None,
-                unit["text"],
-                unit["start_char"],
-                unit["end_char"],
+                draft.message_uuid,
+                draft.text_unit_uuid,
+                draft.annotation_uuid,
+                draft.route_uuid,
+                draft.evidence_text,
+                draft.start_char,
+                draft.end_char,
                 utc_now(),
             ),
         )
@@ -174,10 +181,8 @@ def _postgres_status(status: CandidateStatus) -> str:
     return "accepted"
 
 
-def _postgres_rejection_reason(mapping: RouteCandidateMapping) -> str | None:
-    if not mapping.rejection_reason_codes:
-        return None
-    return json.dumps(list(mapping.rejection_reason_codes))
+def _postgres_rejection_reason(reason_codes: tuple[str, ...]) -> str | None:
+    return json.dumps(list(reason_codes)) if reason_codes else None
 
 
 def _gate_by_unit(self: Any, processing_run_uuid: str) -> dict[str, dict[str, Any]]:
@@ -195,11 +200,24 @@ def _routes_by_unit(routes: list[dict[str, Any]]) -> dict[str, list[dict[str, An
     return grouped
 
 
-def _selected_route(routes: list[dict[str, Any]]) -> dict[str, Any] | None:
-    for route in routes:
-        if (
-            str(route.get("status")) == MemorySignalRouteStatus.READY.value
-            and str(route.get("route_type")) != MemorySignalRouteType.IGNORE.value
-        ):
-            return route
-    return routes[0] if routes else None
+def _route_reference(
+    route: dict[str, Any],
+    annotation: dict[str, Any] | None,
+) -> CanonicalRouteReference:
+    return CanonicalRouteReference(
+        route_uuid=str(route["route_uuid"]),
+        annotation_uuid=str(
+            route.get("annotation_uuid")
+            or (annotation.get("annotation_uuid") if annotation else "")
+        ),
+        route_type=MemorySignalRouteType(str(route["route_type"])),
+        route_status=MemorySignalRouteStatus(str(route["status"])),
+        priority=int(route.get("priority") or 0),
+    )
+
+
+def _gate_decision(value: Any) -> GateDecisionValue | None:
+    try:
+        return GateDecisionValue(str(value)) if value is not None else None
+    except ValueError:
+        return None

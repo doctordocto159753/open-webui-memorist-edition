@@ -232,7 +232,18 @@ def test_assistant_speculation_and_forget_request_do_not_create_memory(
     }
 
     assert memories == []
-    assert operations == {"REJECT", "MANUAL_REVIEW"}
+    forget_gate = connection.execute(
+        """
+        SELECT gd.decision
+        FROM memory_gate_decisions gd
+        JOIN text_units tu ON tu.text_unit_uuid = gd.text_unit_uuid
+        WHERE tu.message_uuid = ?
+        """,
+        (forget.message_uuid,),
+    ).fetchone()
+    assert forget_gate is not None
+    assert forget_gate["decision"] == GateDecisionValue.MANUAL_REVIEW.value
+    assert operations == {"REJECT"}
 
 
 class FailingClassifier:

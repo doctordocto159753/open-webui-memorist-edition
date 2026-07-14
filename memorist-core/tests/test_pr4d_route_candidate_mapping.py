@@ -5,13 +5,17 @@ import json
 from memcore.memory_worker.extraction.extractor import CandidateExtractor
 from memcore.memory_worker.semantic import (
     ROUTE_CANDIDATE_MAPPING_VERSION,
+    CandidateAuthorityContext,
+    CanonicalRouteReference,
     candidate_mapping_for_route,
 )
 from memcore.models import (
     CandidateStatus,
     CandidateType,
     CreatorType,
+    GateDecisionValue,
     LinguisticAnalysis,
+    MemorySignalRouteStatus,
     MemorySignalRouteType,
     Message,
     MessageRole,
@@ -48,8 +52,10 @@ def test_candidate_extractor_uses_explicit_route_mapping_when_classifier_abstain
         _unit("Dark-mode answers are easier for me to read."),
         _RUN_UUID,
         _analysis(),
-        route_type=MemorySignalRouteType.USER_PREFERENCE.value,
-        route_uuid="route-1",
+        authority=_authority(
+            MemorySignalRouteType.USER_PREFERENCE,
+            "00000000-0000-4000-8000-000000000007",
+        ),
     )
 
     assert len(extracted) == 1
@@ -60,25 +66,19 @@ def test_candidate_extractor_uses_explicit_route_mapping_when_classifier_abstain
     assert candidate.normalized_text.startswith("preference:user:preference:")
     metadata = json.loads(candidate.extraction_metadata_ijson or "{}")
     assert metadata["route_mapping_version"] == ROUTE_CANDIDATE_MAPPING_VERSION
-    assert metadata["route_uuid"] == "route-1"
+    assert metadata["route_uuid"] == "00000000-0000-4000-8000-000000000007"
 
 
-def test_candidate_extractor_uses_route_injected_into_lite_analysis() -> None:
-    analysis = _analysis(
-        raw_output={
-            "pr4d_selected_route": {
-                "route_uuid": "route-2",
-                "route_type": MemorySignalRouteType.TASK_CONSTRAINT.value,
-                "route_status": "ready",
-            }
-        }
-    )
-
+def test_candidate_extractor_uses_explicit_canonical_authority_context() -> None:
     extracted = CandidateExtractor().extract(
         _message(),
         _unit("Use the release checklist before publishing."),
         _RUN_UUID,
-        analysis,
+        _analysis(),
+        authority=_authority(
+            MemorySignalRouteType.TASK_CONSTRAINT,
+            "00000000-0000-4000-8000-000000000008",
+        ),
     )
 
     assert len(extracted) == 1
@@ -88,7 +88,7 @@ def test_candidate_extractor_uses_route_injected_into_lite_analysis() -> None:
     assert candidate.predicate == "constraint"
     metadata = json.loads(candidate.extraction_metadata_ijson or "{}")
     assert metadata["route_type"] == MemorySignalRouteType.TASK_CONSTRAINT.value
-    assert metadata["route_uuid"] == "route-2"
+    assert metadata["route_uuid"] == "00000000-0000-4000-8000-000000000008"
 
 
 def _message() -> Message:
@@ -131,4 +131,23 @@ def _analysis(raw_output: dict[str, object] | None = None) -> LinguisticAnalysis
         memory_signals_ijson=dump_ijson({}),
         abstention_ijson=dump_ijson({}),
         raw_output_ijson=dump_ijson(raw_output or {}),
+    )
+
+
+def _authority(
+    route_type: MemorySignalRouteType,
+    route_uuid: str,
+) -> CandidateAuthorityContext:
+    return CandidateAuthorityContext(
+        gate_decision=GateDecisionValue.ANALYZE,
+        requires_high_confidence_pass=False,
+        selected_route=CanonicalRouteReference(
+            route_uuid=route_uuid,
+            annotation_uuid="00000000-0000-4000-8000-000000000009",
+            route_type=route_type,
+            route_status=MemorySignalRouteStatus.READY,
+            priority=90,
+        ),
+        analysis_run_uuid="00000000-0000-4000-8000-000000000010",
+        prompt_execution_uuid="00000000-0000-4000-8000-000000000006",
     )

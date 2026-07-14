@@ -184,10 +184,13 @@ def test_full_candidate_adapter_allows_analyze_ready_route_and_metadata() -> Non
     assert candidate_params[4] == "project"
     assert candidate_params[5] == "constraint"
     assert candidate_params[7].startswith("constraint:project:constraint:")
-    metadata = json.loads(candidate_params[11])
+    assert candidate_params[8] == "user_explicit"
+    assert candidate_params[9] == "explicit"
+    metadata = json.loads(candidate_params[15])
     assert metadata["gate_decision"] == GateDecisionValue.ANALYZE_HIGH_CONFIDENCE.value
     assert metadata["route_type"] == MemorySignalRouteType.TASK_CONSTRAINT.value
     assert metadata["route_mapping_version"] == ROUTE_CANDIDATE_MAPPING_VERSION
+    assert metadata["semantic_authority"] == "jakobson"
     assert metadata["requires_high_confidence_pass"] is True
     assert len(pipeline.connection.evidence_params) == 1
     assert pipeline.connection.evidence_params[0][5] == "route-1"

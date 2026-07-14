@@ -10,7 +10,7 @@ on:
 jobs:
   pr3-full-backend-suite:
     name: PR3 Full Backend Suite
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, memorist-ci]
     env:
       MEMORIST_RUNTIME_PROFILE: lite
       MEMORIST_CANONICAL_STORE: sqlite
@@ -30,7 +30,7 @@ jobs:
 
   pr3-lite-import-integration:
     name: PR3 Lite Import Integration
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, memorist-ci]
     env:
       MEMORIST_RUNTIME_PROFILE: lite
       MEMORIST_CANONICAL_STORE: sqlite
@@ -50,7 +50,7 @@ jobs:
 
   pr3-full-postgres-import-e2e:
     name: PR3 Full PostgreSQL Import E2E
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, memorist-ci]
     services: &postgres_service
       postgres:
         image: postgres:16
@@ -99,7 +99,7 @@ jobs:
 
   pr3-remote-provider-execution:
     name: PR3 Full PostgreSQL Remote Provider
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, memorist-ci]
     services: *postgres_service
     env: *postgres_env
     steps:
@@ -117,7 +117,7 @@ jobs:
 
   pr3-worker-lifecycle-and-concurrency:
     name: PR3 Worker Lifecycle and Concurrency
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, memorist-ci]
     services: *postgres_service
     env: *postgres_env
     steps:
@@ -145,7 +145,7 @@ jobs:
 
   pr3-import-security:
     name: PR3 Import Security
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -160,7 +160,7 @@ jobs:
 
   pr3-frontend-workflow:
     name: PR3 Frontend Workflow
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -178,7 +178,7 @@ jobs:
 
   pr3-type-and-lint:
     name: PR3 Type and Lint
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5

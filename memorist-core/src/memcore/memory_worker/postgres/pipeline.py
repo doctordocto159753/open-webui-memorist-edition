@@ -329,6 +329,8 @@ class PostgresMemoryWorkerPipeline:
                 routes,
                 prompt_execution_uuid,
                 provider_type,
+                import_run_uuid,
+                model_name,
             )
             memories = self._record_memories(
                 message, candidates, content_hash, prompt_execution_uuid
@@ -934,6 +936,8 @@ class PostgresMemoryWorkerPipeline:
         routes: list[dict[str, Any]],
         prompt_execution_uuid: str,
         provider_type: str,
+        import_run_uuid: str | None = None,
+        model_name: str | None = None,
     ) -> list[dict[str, Any]]:
         route_by_unit = {r["unit_uuid"]: r for r in routes}
         annotation_by_unit = {a["unit_uuid"]: a for a in annotations}
@@ -1006,6 +1010,8 @@ class PostgresMemoryWorkerPipeline:
     ) -> int:
         created = 0
         for candidate in candidates:
+            if str(candidate.get("status")) != "accepted":
+                continue
             memory_uuid = new_uuid()
             version_uuid = new_uuid()
             canonical_key = (

@@ -134,7 +134,6 @@ jobs:
         run: |
           uv run pytest \
             tests/test_pr4d_gate_candidate_policy.py \
-            tests/test_pr4d_lite_gate_candidate_guard.py \
             -q --tb=short
 
   shared-route-candidate-mapper:
@@ -153,6 +152,54 @@ jobs:
         working-directory: memorist-core
         run: uv run pytest tests/test_pr4d_route_candidate_mapping.py -q --tb=short
 
+  shared-lite-canonical-authority:
+    name: Shared Lite Canonical Authority
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras --quiet
+      - name: Validate Lite canonical authority
+        working-directory: memorist-core
+        run: uv run pytest tests/test_pr4d_lite_canonical_authority.py -q --tb=short
+
+  shared-candidate-service:
+    name: Shared Candidate Service
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras --quiet
+      - name: Validate shared candidate service
+        working-directory: memorist-core
+        run: uv run pytest tests/test_pr4d_shared_candidate_service.py -q --tb=short
+
+  trust-provenance-policy:
+    name: Trust and Provenance Policy
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras --quiet
+      - name: Validate trust and provenance policy
+        working-directory: memorist-core
+        run: uv run pytest tests/test_pr4d_trust_provenance_policy.py -q --tb=short
+
   semantic-baseline-type-and-lint:
     name: Semantic Baseline — Type and Lint
     runs-on: [self-hosted, linux, x64, memorist-ci]
@@ -168,7 +215,7 @@ jobs:
       - name: Python lint, format, and type checks
         working-directory: memorist-core
         run: |
-          TARGETS="src/memcore/memory_worker/semantic src/memcore/memory_worker/routing src/memcore/memory_worker/extraction/extractor.py src/memcore/memory_worker/postgres/deterministic_fallback.py src/memcore/memory_worker/postgres/routing_policy_adapter.py src/memcore/memory_worker/postgres/gated_candidate_adapter.py src/memcore/repositories/lite_gate_candidate_guard.py src/memcore/repositories/__init__.py tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py tests/test_pr4d_semantic_factor_resolver.py tests/test_pr4d_shared_routing_policy.py tests/test_pr4d_gate_candidate_policy.py tests/test_pr4d_lite_gate_candidate_guard.py tests/test_pr4d_route_candidate_mapping.py"
+          TARGETS="src/memcore/memory_worker/semantic src/memcore/memory_worker/routing src/memcore/memory_worker/extraction/extractor.py src/memcore/memory_worker/pipeline.py src/memcore/memory_worker/postgres/deterministic_fallback.py src/memcore/memory_worker/postgres/routing_policy_adapter.py src/memcore/memory_worker/postgres/gated_candidate_adapter.py src/memcore/memory_worker/postgres/pipeline.py src/memcore/repositories/__init__.py tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py tests/test_pr4d_semantic_factor_resolver.py tests/test_pr4d_shared_routing_policy.py tests/test_pr4d_gate_candidate_policy.py tests/test_pr4d_route_candidate_mapping.py tests/test_pr4d_lite_canonical_authority.py tests/test_pr4d_shared_candidate_service.py tests/test_pr4d_trust_provenance_policy.py"
           uv run ruff check $TARGETS
           uv run ruff format --check $TARGETS
           uv run mypy $TARGETS

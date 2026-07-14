@@ -25,6 +25,7 @@ from memcore.memory_worker.jakobson.service import (
 from memcore.memory_worker.jakobson.validator import validate_jakobson_provider_output
 from memcore.memory_worker.prepared import PreparedJakobsonInference
 from memcore.memory_worker.segmentation.sentence_segmenter import SentenceSegmenter
+from memcore.memory_worker.semantic.authority import LiteCandidateAuthorityResolver
 from memcore.model_control.repository import ModelControlRepository
 from memcore.model_control.schemas import UsageEventCreate
 from memcore.models import (
@@ -63,6 +64,7 @@ class MemoryWorkerPipeline:
         self.gate = DeterministicGate()
         self.analyzer = StructuredAnalyzer()
         self.extractor = CandidateExtractor()
+        self.candidate_authority = LiteCandidateAuthorityResolver(connection)
         self.consolidator = MemoryConsolidator(connection)
         self.jakobson = JakobsonAnalysisService(connection, segmenter=self.unitizer)
 
@@ -269,7 +271,15 @@ class MemoryWorkerPipeline:
         if analyses:
             self.messages.mark_processing_status(message_uuid, ProcessingStatus.ANALYZED)
 
-        candidates = self._extract_candidates(message, run.processing_run_uuid, units)
+        candidates = self._extract_candidates(
+            message,
+            run.processing_run_uuid,
+            units,
+            analysis_run_uuid=str(jakobson_result["analysis_run_uuid"]),
+            import_run_uuid=import_run_uuid,
+            provider_type=provider_type,
+            model_name=str(extraction_profile["model_name"]),
+        )
         self.messages.mark_processing_status(message_uuid, ProcessingStatus.CANDIDATES_CREATED)
 
         decisions_created = [
@@ -437,13 +447,30 @@ class MemoryWorkerPipeline:
         message: Message,
         processing_run_uuid: str,
         units: list[TextUnit],
+        *,
+        analysis_run_uuid: str,
+        import_run_uuid: str | None,
+        provider_type: str,
+        model_name: str,
     ) -> list[MemoryCandidate]:
         candidates: list[MemoryCandidate] = []
         for unit in units:
             analysis = self.analyses.get_for_unit(unit.text_unit_uuid, processing_run_uuid)
-            if analysis is None:
-                continue
-            extracted = self.extractor.extract(message, unit, processing_run_uuid, analysis)
+            authority = self.candidate_authority.resolve(
+                text_unit_uuid=unit.text_unit_uuid,
+                processing_run_uuid=processing_run_uuid,
+                analysis_run_uuid=analysis_run_uuid,
+            )
+            extracted = self.extractor.extract(
+                message,
+                unit,
+                processing_run_uuid,
+                analysis,
+                authority=authority,
+                imported_record=import_run_uuid is not None,
+                provider_type=provider_type,
+                model_name=model_name,
+            )
             for item in extracted:
                 candidates.append(self.candidates.create_candidate(item.candidate, item.evidence))
                 self.jobs.enqueue_job_once(

@@ -1,7 +1,19 @@
+from memcore.memory_worker.semantic.authority import (
+    CandidateAuthorityContext,
+    CanonicalRouteReference,
+    LiteCandidateAuthorityResolver,
+    select_authoritative_route,
+)
 from memcore.memory_worker.semantic.candidate_mapping import (
     ROUTE_CANDIDATE_MAPPING_VERSION,
     RouteCandidateMapping,
     candidate_mapping_for_route,
+)
+from memcore.memory_worker.semantic.candidate_service import (
+    CandidateDraft,
+    CandidateServiceInput,
+    LinguisticCandidateComplements,
+    build_candidate_draft,
 )
 from memcore.memory_worker.semantic.canonical import (
     CanonicalGateDecision,
@@ -26,27 +38,42 @@ from memcore.memory_worker.semantic.gate_policy import (
     gate_allows_analysis,
     gate_allows_candidate_creation,
 )
+from memcore.memory_worker.semantic.provenance_policy import (
+    PROVENANCE_POLICY_VERSION,
+    CandidateProvenanceDecision,
+    decide_candidate_provenance,
+)
 from memcore.memory_worker.semantic.routing_policy import (
     decide_semantic_routes,
     route_status_for_type,
 )
 
 __all__ = [
+    "CandidateAuthorityContext",
+    "CandidateDraft",
+    "CandidateProvenanceDecision",
+    "CandidateServiceInput",
     "CanonicalGateDecision",
     "CanonicalLinguisticComplements",
     "CanonicalRouteDecision",
+    "CanonicalRouteReference",
     "CanonicalSemanticDecision",
     "CanonicalSemanticFactor",
     "CanonicalSemanticProvenance",
     "ContextKind",
     "GateCandidatePolicy",
+    "LinguisticCandidateComplements",
+    "LiteCandidateAuthorityResolver",
+    "PROVENANCE_POLICY_VERSION",
     "ROUTE_CANDIDATE_MAPPING_VERSION",
     "ReceiverKind",
     "ResolvedSemanticFactors",
     "RouteCandidateMapping",
     "SemanticFactorMatch",
+    "build_candidate_draft",
     "candidate_mapping_for_route",
     "candidate_policy_for_gate_and_route",
+    "decide_candidate_provenance",
     "decide_semantic_routes",
     "gate_allows_analysis",
     "gate_allows_candidate_creation",
@@ -54,4 +81,5 @@ __all__ = [
     "resolve_receiver",
     "resolve_semantic_factors",
     "route_status_for_type",
+    "select_authoritative_route",
 ]
