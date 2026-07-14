@@ -75,7 +75,10 @@ def candidate_policy_for_gate_and_route(
         reasons.append("gate_retain_raw_only")
     elif gate is GateDecisionValue.MANUAL_REVIEW:
         reasons.append("gate_manual_review_blocks_automatic_candidates")
-    elif gate is GateDecisionValue.ANALYZE_HIGH_CONFIDENCE or requires_high_confidence_pass:
+    elif (
+        gate is GateDecisionValue.ANALYZE_HIGH_CONFIDENCE
+        or requires_high_confidence_pass
+    ):
         reasons.append("gate_requires_high_confidence_pass")
 
     if _route_blocks_candidate_creation(route_type_value, route_status_value):
@@ -94,7 +97,8 @@ def candidate_policy_for_gate_and_route(
         allows_candidate_creation=allows_candidates,
         allows_automatic_memory_creation=allows_memory,
         requires_high_confidence_pass=bool(
-            requires_high_confidence_pass or gate is GateDecisionValue.ANALYZE_HIGH_CONFIDENCE
+            requires_high_confidence_pass
+            or gate is GateDecisionValue.ANALYZE_HIGH_CONFIDENCE
         ),
         reason_codes=tuple(reasons),
     )
@@ -104,7 +108,10 @@ def _route_blocks_candidate_creation(
     route_type: str | None,
     route_status: str | None,
 ) -> bool:
-    return route_type == MemorySignalRouteType.IGNORE.value or route_status == MemorySignalRouteStatus.IGNORED.value
+    return (
+        route_type == MemorySignalRouteType.IGNORE.value
+        or route_status == MemorySignalRouteStatus.IGNORED.value
+    )
 
 
 def _gate_value(value: GateDecisionValue | str | None) -> GateDecisionValue | None:
