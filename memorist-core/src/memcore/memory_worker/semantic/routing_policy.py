@@ -34,6 +34,12 @@ def decide_semantic_routes(
 
     This policy is intentionally persistence-neutral. Lite and Full runtimes
     should call it and then adapt the returned decisions to their storage model.
+
+    Invariants:
+    - phatic-only units route to `ignore` with ignored status;
+    - privacy review outranks non-phatic durable-memory routes;
+    - selected secondary functions may route only through explicitly enumerated
+      branches, rather than creating implicit route fan-out.
     """
 
     dominant = _dominant_function(dominant_function)
