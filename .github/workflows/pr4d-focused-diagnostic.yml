@@ -6,47 +6,65 @@ name: PR4-D Focused Diagnostic
   workflow_dispatch:
 
 jobs:
-  focused-diagnostic:
-    name: PR4-D Focused Diagnostic
+  lint-and-full-diagnostic:
+    name: PR4-D Lint and Full Diagnostic
     runs-on: [self-hosted, linux, x64, memorist-ci]
-    steps:
-      - name: Run focused diagnostics from persistent workspace
+    services:
+      postgres:
+        image: postgres:16
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: doctordocto159753/open-webui-memorist-edition
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          POSTGRES_USER: memorist
+          POSTGRES_PASSWORD: memorist
+          POSTGRES_DB: memorist_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U memorist -d memorist_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MEMORIST_SEMANTIC_BASELINE_RUNTIME: full
+      MEMORIST_RUNTIME_PROFILE: full
+      MEMORIST_CANONICAL_STORE: postgres
+      MEMORIST_POSTGRES_DSN: postgresql://memorist:memorist@localhost:5432/memorist_test
+      MEMORIST_GRAPH_BACKEND: disabled
+      MEMORIST_ALLOW_FULL_GRAPH_DEGRADED: "true"
+      MEMORIST_HOT_SCHEDULER: in_memory
+      MEMORIST_OBJECT_STORE_PATH: /tmp/memorist-objects
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
+      - uses: astral-sh/setup-uv@v5
+      - name: Run focused lint and full diagnostics
+        working-directory: memorist-core
         run: |
-          set -o pipefail
-          WORK=/home/github-runner/actions-runner/_work/open-webui-memorist-edition/open-webui-memorist-edition
-          AUTH_REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
-          if [ ! -d "$WORK/.git" ]; then
-            rm -rf "$WORK"
-            mkdir -p "$(dirname "$WORK")"
-            git clone --quiet "$AUTH_REMOTE" "$WORK"
-          fi
-          cd "$WORK"
-          git remote set-url origin "$AUTH_REMOTE"
-          git fetch --quiet origin "$HEAD_SHA"
-          git checkout --quiet "$HEAD_SHA"
-          cd memorist-core
-          UV_BIN="/home/github-runner/actions-runner/_work/_tool/uv/0.11.28/x86_64/uv"
-          if [ ! -x "$UV_BIN" ]; then
-            UV_BIN="/home/github-runner/.local/bin/uv"
-          fi
-          if [ ! -x "$UV_BIN" ]; then
-            curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null
-            UV_BIN="/home/github-runner/.local/bin/uv"
-          fi
-          "$UV_BIN" sync --all-extras --quiet
           set +e
-          "$UV_BIN" run pytest \
-            tests/test_pr4d_canonical_semantic_contract.py \
-            tests/test_pr4d_shared_routing_policy.py \
-            tests/test_pr4d_gate_candidate_policy.py \
-            tests/test_pr4d_semantic_baseline.py \
-            -q --tb=short > /tmp/pr4d-focused.log 2>&1
-          status=$?
-          echo "=== PR4-D focused pytest tail ==="
-          tail -n 160 /tmp/pr4d-focused.log
-          echo "=== exit status: $status ==="
-          exit $status
+          uv sync --all-extras --quiet
+          TARGETS="src/memcore/memory_worker/semantic src/memcore/memory_worker/routing src/memcore/memory_worker/postgres/deterministic_fallback.py src/memcore/memory_worker/postgres/routing_policy_adapter.py src/memcore/memory_worker/postgres/gated_candidate_adapter.py tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py tests/test_pr4d_semantic_factor_resolver.py tests/test_pr4d_shared_routing_policy.py tests/test_pr4d_gate_candidate_policy.py"
+
+          uv run ruff check $TARGETS > /tmp/pr4d-ruff-check.log 2>&1
+          ruff_check=$?
+          echo "=== ruff check status: $ruff_check ==="
+          tail -n 120 /tmp/pr4d-ruff-check.log
+
+          uv run ruff format --check $TARGETS > /tmp/pr4d-ruff-format.log 2>&1
+          ruff_format=$?
+          echo "=== ruff format status: $ruff_format ==="
+          tail -n 120 /tmp/pr4d-ruff-format.log
+
+          uv run mypy $TARGETS > /tmp/pr4d-mypy.log 2>&1
+          mypy_status=$?
+          echo "=== mypy status: $mypy_status ==="
+          tail -n 160 /tmp/pr4d-mypy.log
+
+          uv run pytest tests/test_pr4d_semantic_baseline.py -q --tb=short > /tmp/pr4d-full.log 2>&1
+          full_status=$?
+          echo "=== full baseline status: $full_status ==="
+          tail -n 180 /tmp/pr4d-full.log
+
+          if [ "$ruff_check" -ne 0 ] || [ "$ruff_format" -ne 0 ] || [ "$mypy_status" -ne 0 ] || [ "$full_status" -ne 0 ]; then
+            exit 1
+          fi
