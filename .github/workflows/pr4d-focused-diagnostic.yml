@@ -33,38 +33,16 @@ jobs:
       MEMORIST_HOT_SCHEDULER: in_memory
       MEMORIST_OBJECT_STORE_PATH: /tmp/memorist-objects
     steps:
-      - uses: actions/checkout@v4
-        with:
-          clean: false
-          show-progress: false
-      - uses: astral-sh/setup-uv@v5
-      - name: Run focused lint and full diagnostics
-        working-directory: memorist-core
+      - name: Run compact diagnostics from persistent workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: doctordocto159753/open-webui-memorist-edition
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          set +e
-          uv sync --all-extras --quiet
+          set +e; W=/home/github-runner/actions-runner/_work/open-webui-memorist-edition/open-webui-memorist-edition; A="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"; U=/home/github-runner/actions-runner/_work/_tool/uv/0.11.28/x86_64/uv; [ -x "$U" ] || U=/home/github-runner/.local/bin/uv; cd "$W" && git remote set-url origin "$A" && git fetch --quiet origin "$HEAD_SHA" && git checkout --quiet "$HEAD_SHA" && cd memorist-core && "$U" sync --all-extras --quiet
           TARGETS="src/memcore/memory_worker/semantic src/memcore/memory_worker/routing src/memcore/memory_worker/postgres/deterministic_fallback.py src/memcore/memory_worker/postgres/routing_policy_adapter.py src/memcore/memory_worker/postgres/gated_candidate_adapter.py tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py tests/test_pr4d_semantic_factor_resolver.py tests/test_pr4d_shared_routing_policy.py tests/test_pr4d_gate_candidate_policy.py"
-
-          uv run ruff check $TARGETS > /tmp/pr4d-ruff-check.log 2>&1
-          ruff_check=$?
-          echo "=== ruff check status: $ruff_check ==="
-          tail -n 120 /tmp/pr4d-ruff-check.log
-
-          uv run ruff format --check $TARGETS > /tmp/pr4d-ruff-format.log 2>&1
-          ruff_format=$?
-          echo "=== ruff format status: $ruff_format ==="
-          tail -n 120 /tmp/pr4d-ruff-format.log
-
-          uv run mypy $TARGETS > /tmp/pr4d-mypy.log 2>&1
-          mypy_status=$?
-          echo "=== mypy status: $mypy_status ==="
-          tail -n 160 /tmp/pr4d-mypy.log
-
-          uv run pytest tests/test_pr4d_semantic_baseline.py -q --tb=short > /tmp/pr4d-full.log 2>&1
-          full_status=$?
-          echo "=== full baseline status: $full_status ==="
-          tail -n 180 /tmp/pr4d-full.log
-
-          if [ "$ruff_check" -ne 0 ] || [ "$ruff_format" -ne 0 ] || [ "$mypy_status" -ne 0 ] || [ "$full_status" -ne 0 ]; then
-            exit 1
-          fi
+          "$U" run ruff check $TARGETS > /tmp/pr4d-ruff-check.log 2>&1; rc=$?; echo "=== ruff check status: $rc ==="; tail -n 80 /tmp/pr4d-ruff-check.log
+          "$U" run ruff format --check $TARGETS > /tmp/pr4d-ruff-format.log 2>&1; rf=$?; echo "=== ruff format status: $rf ==="; tail -n 80 /tmp/pr4d-ruff-format.log
+          "$U" run mypy $TARGETS > /tmp/pr4d-mypy.log 2>&1; ms=$?; echo "=== mypy status: $ms ==="; tail -n 120 /tmp/pr4d-mypy.log
+          "$U" run pytest tests/test_pr4d_semantic_baseline.py -q --tb=short > /tmp/pr4d-full.log 2>&1; fs=$?; echo "=== full baseline status: $fs ==="; tail -n 160 /tmp/pr4d-full.log
+          [ "$rc" -eq 0 ] && [ "$rf" -eq 0 ] && [ "$ms" -eq 0 ] && [ "$fs" -eq 0 ]
