@@ -6,10 +6,16 @@ from typing import Any
 from memcore.memory_worker.prompts.versions import (
     JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
 )
+from memcore.memory_worker.semantic.candidate_mapping import (
+    ROUTE_CANDIDATE_MAPPING_VERSION,
+    RouteCandidateMapping,
+    candidate_mapping_for_route,
+)
 from memcore.memory_worker.semantic.gate_policy import (
     candidate_policy_for_gate_and_route,
 )
 from memcore.models import (
+    CandidateStatus,
     MemorySignalRouteStatus,
     MemorySignalRouteType,
     new_uuid,
@@ -33,8 +39,8 @@ _INSERT_CANDIDATE_SQL = """
       prompt_execution_uuid
     )
     VALUES (
-      %s,%s,%s,'observation',%s,'states',%s::jsonb,%s,'user_message',
-      'explicit',0.76,0.55,'normal','accepted',NULL,%s::jsonb,%s,1,%s
+      %s,%s,%s,%s,%s,%s,%s::jsonb,%s,'user_message',
+      'explicit',0.76,%s,'normal',%s,%s,%s::jsonb,%s,1,%s
     )
 """
 _INSERT_EVIDENCE_SQL = """
@@ -88,9 +94,17 @@ def record_candidates(
         if not policy.allows_candidate_creation:
             continue
 
+        mapping = candidate_mapping_for_route(
+            route.get("route_type") if route else None,
+            str(unit["text"]),
+            message_uuid=str(message["message_uuid"]),
+        )
+        if mapping is None:
+            continue
+
         existing = self.connection.execute(
             _EXISTING_CANDIDATE_SQL,
-            (processing_run_uuid, unit_uuid, unit["text"]),
+            (processing_run_uuid, unit_uuid, mapping.normalized_text),
         ).fetchone()
         if existing:
             continue
@@ -103,14 +117,21 @@ def record_candidates(
                 candidate_uuid,
                 processing_run_uuid,
                 unit_uuid,
-                f"message:{message['message_uuid']}",
-                json.dumps({"text": unit["text"]}),
-                unit["text"],
+                mapping.candidate_type.value,
+                mapping.subject_key,
+                mapping.predicate,
+                json.dumps({"value": mapping.object_value}),
+                mapping.normalized_text,
+                mapping.importance,
+                _postgres_status(mapping.status),
+                _postgres_rejection_reason(mapping),
                 json.dumps(
                     {
                         "provider_type": provider_type,
                         "prompt_id": JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
                         "gate_decision": policy.gate_decision,
+                        "route_candidate_mapping": True,
+                        "route_mapping_version": ROUTE_CANDIDATE_MAPPING_VERSION,
                         "route_type": policy.route_type,
                         "route_status": policy.route_status,
                         "requires_high_confidence_pass": policy.requires_high_confidence_pass,
@@ -143,6 +164,20 @@ def record_candidates(
             (processing_run_uuid,),
         ).fetchall()
     ]
+
+
+def _postgres_status(status: CandidateStatus) -> str:
+    if status is CandidateStatus.NEEDS_REVIEW:
+        return "needs_review"
+    if status is CandidateStatus.REJECTED:
+        return "rejected"
+    return "accepted"
+
+
+def _postgres_rejection_reason(mapping: RouteCandidateMapping) -> str | None:
+    if not mapping.rejection_reason_codes:
+        return None
+    return json.dumps(list(mapping.rejection_reason_codes))
 
 
 def _gate_by_unit(self: Any, processing_run_uuid: str) -> dict[str, dict[str, Any]]:
