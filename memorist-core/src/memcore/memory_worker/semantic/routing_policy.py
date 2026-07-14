@@ -18,7 +18,6 @@ from memcore.models import (
     MemorySignalRouteType,
 )
 
-
 PERSIAN_PROMPT_WORD = "پرامپت"
 
 
