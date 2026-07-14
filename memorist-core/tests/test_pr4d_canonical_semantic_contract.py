@@ -22,7 +22,11 @@ from memcore.models import (
 
 
 def _factor(value: str | None = "value") -> CanonicalSemanticFactor:
-    return CanonicalSemanticFactor(value=value, evidence="evidence", confidence=JakobsonConfidence.HIGH)
+    return CanonicalSemanticFactor(
+        value=value,
+        evidence="evidence",
+        confidence=JakobsonConfidence.HIGH,
+    )
 
 
 def _gate(decision: GateDecisionValue) -> CanonicalGateDecision:
@@ -52,7 +56,9 @@ def _route(
     )
 
 
-def _provenance(runtime: CanonicalSemanticRuntime = CanonicalSemanticRuntime.LITE) -> CanonicalSemanticProvenance:
+def _provenance(
+    runtime: CanonicalSemanticRuntime = CanonicalSemanticRuntime.LITE,
+) -> CanonicalSemanticProvenance:
     return CanonicalSemanticProvenance(
         runtime=runtime,
         source_pipeline="pr4d.task02.test",
@@ -150,7 +156,9 @@ def test_contract_is_frozen_extra_forbidden_and_json_round_trippable() -> None:
     with pytest.raises(ValidationError):
         decision.text = "mutated"
     with pytest.raises(ValidationError):
-        CanonicalSemanticDecision.model_validate({**decision.model_dump(mode="json"), "extra": True})
+        CanonicalSemanticDecision.model_validate(
+            {**decision.model_dump(mode="json"), "extra": True}
+        )
 
 
 def test_invalid_route_and_secondary_function_shapes_are_rejected() -> None:
