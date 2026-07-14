@@ -67,7 +67,10 @@ EMOTIVE_CONTEXT = re.compile(
     r"ترجیح|می‌خواهم|دوست دارم|ناراحتم|کلافه|راضی|نگران",
     re.I,
 )
-POETIC_CONTEXT = re.compile(r"\b(slogan|style|rhythm|tone|branding)\b|شعار|سبک|لحن|برند", re.I)
+POETIC_CONTEXT = re.compile(
+    r"\b(slogan|style|rhythm|tone|branding)\b|شعار|سبک|لحن|برند",
+    re.I,
+)
 RESOURCE_CONTEXT = re.compile(r"https?://|www\.|file:|مسیر فایل|لینک|منبع", re.I)
 PRIVACY_CONTEXT = re.compile(
     r"\b(secret|password|token|api key|privacy)\b|رمز|توکن|کلید|حریم خصوصی",
