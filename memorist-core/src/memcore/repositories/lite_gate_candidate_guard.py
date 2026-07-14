@@ -20,8 +20,11 @@ _ROUTE_SQL = """
     FROM memory_signal_routes msr
     JOIN jakobson_sentence_annotations jsa
       ON jsa.annotation_uuid = msr.annotation_uuid
+    JOIN jakobson_analysis_runs jar
+      ON jar.analysis_run_uuid = jsa.analysis_run_uuid
     WHERE jsa.unit_uuid = ?
     ORDER BY
+      jar.created_at DESC,
       CASE WHEN msr.status = 'ready' AND msr.route_type <> 'ignore' THEN 0 ELSE 1 END,
       msr.priority DESC,
       msr.created_at,
