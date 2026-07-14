@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import Any, cast
+
+from memcore.memory_worker.jakobson.service import DeterministicJakobsonProvider
 from memcore.memory_worker.routing.signal_router import SignalRouter
 from memcore.memory_worker.semantic import (
     ContextKind,
@@ -80,6 +84,36 @@ def test_shared_resolver_detects_receiver_and_context_from_text_and_hints() -> N
     assert hinted.context.kind == ContextKind.JIRA.value
     assert persian.receiver.kind == ReceiverKind.AI.value
     assert persian.context.kind == ContextKind.METALINGUAL.value
+
+
+def test_deterministic_jakobson_provider_uses_shared_factor_resolver() -> None:
+    text = "The product team must update the Jira workflow."
+    unit = cast(
+        Any,
+        SimpleNamespace(
+            text_unit_uuid=new_uuid(),
+            text=text,
+            speaker_role="user",
+            language_hint="en",
+            language_code="en",
+            start_char=0,
+            end_char=len(text),
+        ),
+    )
+
+    output = DeterministicJakobsonProvider().analyze([unit], text)
+    sentence = output["sentences"][0]
+
+    assert sentence["six_factors"]["receiver_addressee"] == {
+        "value": "Product Team",
+        "evidence": "product team",
+        "confidence": "high",
+    }
+    assert sentence["six_factors"]["context_referent"] == {
+        "value": "Jira workflow",
+        "evidence": "Jira",
+        "confidence": "high",
+    }
 
 
 def test_signal_router_uses_shared_receiver_resolution_for_hints() -> None:
