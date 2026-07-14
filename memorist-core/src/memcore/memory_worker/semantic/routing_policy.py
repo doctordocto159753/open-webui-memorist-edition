@@ -11,7 +11,12 @@ from memcore.memory_worker.semantic.factors import (
     ReceiverKind,
     resolve_semantic_factors,
 )
-from memcore.models import JakobsonConfidence, JakobsonFunction, MemorySignalRouteType
+from memcore.models import (
+    JakobsonConfidence,
+    JakobsonFunction,
+    MemorySignalRouteStatus,
+    MemorySignalRouteType,
+)
 
 
 PERSIAN_PROMPT_WORD = "پرامپت"
@@ -85,6 +90,12 @@ def decide_semantic_routes(
             reason="No deterministic routing rule matched confidently.",
         )
     ]
+
+
+def route_status_for_type(route_type: MemorySignalRouteType) -> MemorySignalRouteStatus:
+    if route_type is MemorySignalRouteType.IGNORE:
+        return MemorySignalRouteStatus.IGNORED
+    return MemorySignalRouteStatus.READY
 
 
 def _conative_routes(*, text: str, receiver_kind: str) -> list[RouteDecision]:
