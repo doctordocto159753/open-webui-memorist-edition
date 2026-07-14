@@ -85,6 +85,21 @@ jobs:
             memorist-core/semantic-baseline-full.log
           if-no-files-found: warn
 
+  canonical-semantic-contract:
+    name: Canonical Semantic Contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras
+      - name: Validate canonical semantic contract
+        working-directory: memorist-core
+        run: |
+          uv run pytest tests/test_pr4d_canonical_semantic_contract.py -q --junitxml=canonical-semantic-contract.xml
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('canonical-semantic-contract.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
+
   semantic-baseline-type-and-lint:
     name: Semantic Baseline — Type and Lint
     runs-on: ubuntu-latest
@@ -97,8 +112,8 @@ jobs:
       - name: Python lint, format, and type checks
         working-directory: memorist-core
         run: |
-          uv run ruff check tests/test_pr4d_semantic_baseline.py
-          uv run ruff format --check tests/test_pr4d_semantic_baseline.py
-          uv run mypy tests/test_pr4d_semantic_baseline.py
+          uv run ruff check src/memcore/memory_worker/semantic tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py
+          uv run ruff format --check src/memcore/memory_worker/semantic tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py
+          uv run mypy src/memcore/memory_worker/semantic tests/test_pr4d_semantic_baseline.py tests/test_pr4d_canonical_semantic_contract.py
       - name: Diff check
         run: git diff --check
