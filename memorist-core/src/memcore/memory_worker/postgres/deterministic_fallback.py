@@ -108,9 +108,7 @@ def _factor_payload(
     }
 
 
-def _overall_factor_value(
-    sentences: list[dict[str, Any]], key: str, *, fallback: str
-) -> str:
+def _overall_factor_value(sentences: list[dict[str, Any]], key: str, *, fallback: str) -> str:
     if not sentences:
         return fallback
     value = sentences[0].get("six_factors", {}).get(key, {}).get("value")
