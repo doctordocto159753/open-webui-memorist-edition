@@ -1,0 +1,25 @@
+name: Actions Runner Diagnostic
+
+on:
+  push:
+    branches: [codex/pr4d-canonical-semantic-authority-parity]
+    paths:
+      - .github/workflows/actions-runner-diagnostic.yml
+  workflow_dispatch:
+
+jobs:
+  runner-diagnostic:
+    name: Runner Diagnostic — Ubuntu Echo
+    runs-on: ubuntu-latest
+    steps:
+      - name: Echo runner context
+        run: |
+          echo "runner diagnostic started"
+          echo "sha=${GITHUB_SHA}"
+          echo "ref=${GITHUB_REF}"
+          echo "event=${GITHUB_EVENT_NAME}"
+      - name: Shell sanity
+        run: |
+          pwd
+          uname -a
+          python3 --version
