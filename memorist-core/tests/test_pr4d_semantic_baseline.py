@@ -158,16 +158,22 @@ def _snapshot(settings: Settings, message_uuid: str) -> SemanticSnapshot:
                 "WHERE tu.message_uuid = ? ORDER BY mc.candidate_type, mc.status",
                 (message_uuid,),
             ),
-            memory_count=_scalar_int(
-                connection,
-                "SELECT count(*) FROM memories m "
-                "JOIN memory_versions mv ON mv.memory_uuid = m.memory_uuid "
-                "JOIN memory_candidates mc ON mc.candidate_uuid = mv.source_candidate_uuid "
-                "JOIN text_units tu ON tu.text_unit_uuid = mc.text_unit_uuid "
-                "WHERE tu.message_uuid = ?",
-                (message_uuid,),
-            ),
+            memory_count=_memory_count(connection, message_uuid),
         )
+
+
+def _memory_count(connection: Any, message_uuid: str) -> int:
+    if RUNTIME == "lite":
+        return _scalar_int(connection, "SELECT count(*) FROM memories", ())
+    return _scalar_int(
+        connection,
+        "SELECT count(*) FROM memories m "
+        "JOIN memory_versions mv ON mv.memory_uuid = m.memory_uuid "
+        "JOIN memory_candidates mc ON mc.candidate_uuid = mv.source_candidate_uuid "
+        "JOIN text_units tu ON tu.text_unit_uuid = mc.text_unit_uuid "
+        "WHERE tu.message_uuid = ?",
+        (message_uuid,),
+    )
 
 
 def _values(connection: Any, sql: str, params: tuple[object, ...]) -> list[str]:
