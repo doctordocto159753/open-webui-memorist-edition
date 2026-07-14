@@ -20,6 +20,8 @@ from memcore.models import (
 )
 from memcore.validators.ijson import dump_ijson
 
+_RUN_UUID = "00000000-0000-4000-8000-000000000005"
+
 
 def test_route_candidate_mapper_projects_route_type_to_candidate_shape() -> None:
     mapping = candidate_mapping_for_route(
@@ -40,11 +42,11 @@ def test_route_candidate_mapper_blocks_ignore_route() -> None:
     assert candidate_mapping_for_route(MemorySignalRouteType.IGNORE, "hello") is None
 
 
-def test_candidate_extractor_uses_explicit_route_mapping_when_text_classifier_would_abstain() -> None:
+def test_candidate_extractor_uses_explicit_route_mapping_when_classifier_abstains() -> None:
     extracted = CandidateExtractor().extract(
         _message(),
         _unit("Dark-mode answers are easier for me to read."),
-        "run-1",
+        _RUN_UUID,
         _analysis(),
         route_type=MemorySignalRouteType.USER_PREFERENCE.value,
         route_uuid="route-1",
@@ -75,7 +77,7 @@ def test_candidate_extractor_uses_route_injected_into_lite_analysis() -> None:
     extracted = CandidateExtractor().extract(
         _message(),
         _unit("Use the release checklist before publishing."),
-        "run-1",
+        _RUN_UUID,
         analysis,
     )
 
@@ -118,7 +120,7 @@ def _analysis(raw_output: dict[str, object] | None = None) -> LinguisticAnalysis
     return LinguisticAnalysis(
         analysis_uuid="00000000-0000-4000-8000-000000000004",
         text_unit_uuid="00000000-0000-4000-8000-000000000003",
-        processing_run_uuid="run-1",
+        processing_run_uuid=_RUN_UUID,
         analysis_schema_version="test",
         speech_acts_ijson=dump_ijson([]),
         jakobson_functions_ijson=dump_ijson({}),
