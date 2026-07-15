@@ -24,6 +24,8 @@ from memcore.models import (
     SourceAuthority,
 )
 
+CANDIDATE_SERVICE_VERSION = "pr4d-candidate-service-v1"
+
 
 @dataclass(frozen=True)
 class LinguisticCandidateComplements:
@@ -134,6 +136,7 @@ def build_candidate_draft(value: CandidateServiceInput) -> CandidateDraft | None
         "source_authority": provenance.source_authority.value,
         "explicitness": provenance.explicitness.value,
         "route_mapping_version": ROUTE_CANDIDATE_MAPPING_VERSION,
+        "candidate_service_version": CANDIDATE_SERVICE_VERSION,
         "provenance_policy_version": PROVENANCE_POLICY_VERSION,
         "gate_decision": policy.gate_decision,
         "gate_reason_codes": list(policy.reason_codes),
