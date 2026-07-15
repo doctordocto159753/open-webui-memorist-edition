@@ -150,4 +150,3 @@ def test_invalid_provider_endpoint_and_raw_secret_metadata_are_rejected(
     )
     assert metadata_secret.status_code == 422
     assert "forbidden" not in metadata_secret.text
-
