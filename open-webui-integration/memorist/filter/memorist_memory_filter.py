@@ -37,7 +37,9 @@ class Filter:
         self.valves = self.Valves()
         self._completed_response_keys: set[str] = set()
 
-    def inlet(self, body: dict[str, Any], __user__: dict[str, Any] | None = None) -> dict[str, Any]:
+    def inlet(
+        self, body: dict[str, Any], __user__: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         config = _config_from_valves(self.valves)
         remove_memory_attachments(body)
         if not config.enabled:
@@ -56,7 +58,9 @@ class Filter:
             actor_user_id = parsed.user_id
             request_control = body.get("memorist")
             if request_control is not None and not isinstance(request_control, dict):
-                raise MemoristIntegrationError("memorist request control must be an object")
+                raise MemoristIntegrationError(
+                    "memorist request control must be an object"
+                )
             policy = client.resolve_turn_policy(
                 user_id=actor_user_id,
                 chat_id=parsed.conversation_id or parsed.temporary_chat_id,
@@ -132,7 +136,9 @@ class Filter:
                     raise MemoristIntegrationError(
                         "attachment review requires the original Open WebUI message ID"
                     )
-                review_capture_key = f"review-prepare:{actor_user_id}:{parsed.message_id}"
+                review_capture_key = (
+                    f"review-prepare:{actor_user_id}:{parsed.message_id}"
+                )
             captured = client.capture_message(
                 resolved.session_uuid,
                 "user",
@@ -155,7 +161,9 @@ class Filter:
             metadata["memorist_session_uuid"] = resolved.session_uuid
             metadata["memorist_input_message_uuid"] = captured.message_uuid
             metadata["memorist_user_uuid"] = actor_user_id
-            metadata["memorist_workspace_uuid"] = resolved.workspace_uuid or parsed.workspace_id
+            metadata["memorist_workspace_uuid"] = (
+                resolved.workspace_uuid or parsed.workspace_id
+            )
             if metadata.get("memorist_review_disposition") in {
                 "suppressed",
                 "cancelled_before_send",
@@ -180,7 +188,9 @@ class Filter:
                     or approved.get("delivery_state") != "approved"
                     or not approved.get("rendered_attachment")
                 ):
-                    raise MemoristIntegrationError("approved attachment generation mismatch")
+                    raise MemoristIntegrationError(
+                        "approved attachment generation mismatch"
+                    )
                 client.record_attachment_delivery(
                     str(approved_uuid),
                     user_id=actor_user_id,
@@ -197,7 +207,11 @@ class Filter:
                 metadata.pop("memorist_pending_attachment_uuid", None)
                 metadata.pop("memorist_attachment_pending_review", None)
                 return body
-            if config.preflight_enabled and policy.recall_enabled and policy.attachment_enabled:
+            if (
+                config.preflight_enabled
+                and policy.recall_enabled
+                and policy.attachment_enabled
+            ):
                 self._attach_preflight(
                     body,
                     client,
@@ -313,7 +327,9 @@ class Filter:
                 workspace_uuid=workspace_uuid,
                 idempotency_key=f"filter-delivery:{input_message_uuid}:{result.attachment_uuid}",
             )
-        insert_memory_attachment(body, result.rendered_attachment, result.attachment_uuid)
+        insert_memory_attachment(
+            body, result.rendered_attachment, result.attachment_uuid
+        )
         metadata["memorist_delivered_attachment_uuid"] = result.attachment_uuid
         metadata.pop("memorist_pending_attachment_uuid", None)
         metadata["memorist_retrieval_run_uuid"] = result.retrieval_run_uuid
@@ -322,14 +338,18 @@ class Filter:
         metadata["memorist_budget_reason"] = result.budget_reason
 
 
-def _handle_failure(body: dict[str, Any], fail_open: bool, error: BaseException) -> dict[str, Any]:
+def _handle_failure(
+    body: dict[str, Any], fail_open: bool, error: BaseException
+) -> dict[str, Any]:
     warn("Memorist integration skipped", error)
     metadata = _metadata(body)
     metadata["memorist_last_error"] = sanitize_error(error)
     if fail_open:
         return body
     metadata["memorist_failed_closed"] = True
-    raise MemoristIntegrationError("Memorist preflight failed", developer_visible=True) from error
+    raise MemoristIntegrationError(
+        "Memorist preflight failed", developer_visible=True
+    ) from error
 
 
 def _metadata(body: dict[str, Any]) -> dict[str, Any]:
@@ -347,9 +367,15 @@ def _config_from_valves(valves: Any) -> MemoristIntegrationConfig:
         enabled=base.enabled and bool(getattr(valves, "enabled", base.enabled)),
         preflight_enabled=base.preflight_enabled
         and bool(getattr(valves, "preflight_enabled", base.preflight_enabled)),
-        preflight_timeout_ms=int(getattr(valves, "timeout_ms", base.preflight_timeout_ms)),
-        attachment_token_budget=int(getattr(valves, "token_budget", base.attachment_token_budget)),
-        attachment_max_tokens=int(getattr(valves, "token_budget", base.attachment_max_tokens)),
+        preflight_timeout_ms=int(
+            getattr(valves, "timeout_ms", base.preflight_timeout_ms)
+        ),
+        attachment_token_budget=int(
+            getattr(valves, "token_budget", base.attachment_token_budget)
+        ),
+        attachment_max_tokens=int(
+            getattr(valves, "token_budget", base.attachment_max_tokens)
+        ),
         retrieval_mode=str(getattr(valves, "retrieval_mode", base.retrieval_mode)),
         fail_open=base.fail_open and bool(getattr(valves, "fail_open", base.fail_open)),
         debug=base.debug or bool(getattr(valves, "debug", base.debug)),
