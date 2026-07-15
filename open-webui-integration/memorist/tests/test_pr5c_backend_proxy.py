@@ -111,7 +111,9 @@ def test_profile_proxy_forwards_env_reference_but_never_echoes_secret() -> None:
     assert response.json()["secret_configured"] is True
     assert secret_value not in response.text
     call = FakeCoreClient.calls[-1]
-    assert call["payload"]["secret_env_var_name"] == "MEMORIST_MEMORY_EXTRACTION_API_KEY"
+    assert (
+        call["payload"]["secret_env_var_name"] == "MEMORIST_MEMORY_EXTRACTION_API_KEY"
+    )
 
 
 def test_profile_proxy_rejects_raw_or_nested_secret_fields_before_forwarding() -> None:
@@ -136,4 +138,3 @@ def test_profile_proxy_rejects_raw_or_nested_secret_fields_before_forwarding() -
         assert response.status_code == 422
         assert "raw-provider-value" not in response.text
         assert FakeCoreClient.calls == []
-
