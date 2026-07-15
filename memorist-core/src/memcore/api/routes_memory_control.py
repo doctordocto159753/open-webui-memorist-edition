@@ -42,6 +42,12 @@ class PolicyDefaultRequest(BaseModel):
     attachment_review: bool = False
 
 
+class MemoryWorkflowUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory_enabled: bool
+
+
 class AttachmentActionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -141,6 +147,98 @@ def set_policy_default(
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+def _workflow_payload(
+    *,
+    chat_uuid: str,
+    resolved: Any,
+    persisted: dict[str, Any] | None,
+) -> dict[str, Any]:
+    policy = resolved.policy
+    fully_enabled = bool(
+        policy.capture_enabled and policy.recall_enabled and policy.attachment_enabled
+    )
+    state = "on" if fully_enabled else ("off" if policy.private else "limited")
+    return {
+        "chat_uuid": chat_uuid,
+        "session_uuid": None,
+        "memory_enabled": fully_enabled,
+        "capture_enabled": bool(policy.capture_enabled),
+        "recall_enabled": bool(policy.recall_enabled),
+        "attachment_enabled": bool(policy.attachment_enabled),
+        "state": state,
+        "scope": "chat",
+        "source": resolved.source,
+        "persisted": persisted is not None,
+        "updated_at": persisted.get("updated_at") if persisted is not None else None,
+        "regeneration_policy": "original_turn",
+    }
+
+
+@router.get("/workflow/chats/{chat_uuid}", response_model=None)
+def get_memory_workflow(
+    chat_uuid: str,
+    x_memorist_user_id: str | None = Header(default=None),
+    x_memorist_workspace_id: str | None = Header(default=None),
+) -> dict[str, Any]:
+    actor_user, actor_workspace = _actor(x_memorist_user_id, x_memorist_workspace_id)
+    settings = get_settings()
+    with memory_control_connection(settings) as connection:
+        repository = MemoryControlRepository(connection, settings.runtime_profile)
+        resolved = repository.resolve_actor_chat_policy(
+            system_default=settings.default_turn_policy,
+            workspace_uuid=actor_workspace,
+            user_uuid=actor_user,
+            chat_uuid=chat_uuid,
+        )
+        persisted = repository.actor_chat_default(
+            user_uuid=actor_user,
+            chat_uuid=chat_uuid,
+            workspace_uuid=actor_workspace,
+        )
+        return _workflow_payload(
+            chat_uuid=chat_uuid,
+            resolved=resolved,
+            persisted=persisted,
+        )
+
+
+@router.patch("/workflow/chats/{chat_uuid}", response_model=None)
+def update_memory_workflow(
+    chat_uuid: str,
+    request: MemoryWorkflowUpdateRequest,
+    x_memorist_user_id: str | None = Header(default=None),
+    x_memorist_workspace_id: str | None = Header(default=None),
+) -> dict[str, Any]:
+    actor_user, actor_workspace = _actor(x_memorist_user_id, x_memorist_workspace_id)
+    settings = get_settings()
+    with memory_control_connection(settings) as connection:
+        repository = MemoryControlRepository(connection, settings.runtime_profile)
+        current = repository.resolve_actor_chat_policy(
+            system_default=settings.default_turn_policy,
+            workspace_uuid=actor_workspace,
+            user_uuid=actor_user,
+            chat_uuid=chat_uuid,
+        )
+        persisted = repository.set_actor_chat_default(
+            user_uuid=actor_user,
+            chat_uuid=chat_uuid,
+            workspace_uuid=actor_workspace,
+            turn_policy="full" if request.memory_enabled else "private",
+            attachment_review=current.attachment_review,
+        )
+        resolved = repository.resolve_actor_chat_policy(
+            system_default=settings.default_turn_policy,
+            workspace_uuid=actor_workspace,
+            user_uuid=actor_user,
+            chat_uuid=chat_uuid,
+        )
+        return _workflow_payload(
+            chat_uuid=chat_uuid,
+            resolved=resolved,
+            persisted=persisted,
+        )
 
 
 @router.get("/attachments/{attachment_uuid}/preview", response_model=None)
