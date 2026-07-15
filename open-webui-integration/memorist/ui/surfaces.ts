@@ -1,5 +1,6 @@
 import "./processingNodes";
 import "./importWorkflow";
+import "./memoryAttachment";
 
 import { MEMORIST_PROCESSING_NODES_ROUTE } from "./processingNodes";
 
@@ -16,6 +17,7 @@ export const MEMORIST_UI_SURFACES = [
   "DiagnosticsTab",
   "SettingsTab",
   "MemoristProcessingNodesSettings",
+  "MemoryAttachment",
 ] as const;
 
 export type MemoristSurface = typeof MEMORIST_UI_SURFACES[number];
@@ -85,3 +87,5 @@ export function renderMemoristSettingsPanel(path: string): HTMLElement | undefin
   if (!route || typeof document === "undefined") return undefined;
   return document.createElement(route.element);
 }
+
+export { mountMemoryAttachmentForMessage } from "./memoryAttachment";
