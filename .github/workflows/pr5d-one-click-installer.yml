@@ -70,20 +70,13 @@ jobs:
         with:
           clean: false
           show-progress: false
-      - name: Validate release compose (root, lite + full)
-        run: |
-          docker compose -f docker-compose.release.yml --profile lite config -q
-          docker compose -f docker-compose.release.yml --profile full config -q
-      - name: Validate packaged compose (lite + full)
-        run: |
-          docker compose -f release/memorist-openwebui/compose.yml --profile lite config -q
-          docker compose -f release/memorist-openwebui/compose.yml --profile full config -q
-      - name: Assert PR5-C API-key roles reach memorist-core
-        run: |
-          docker compose -f docker-compose.release.yml --profile lite config \
-            | grep -q 'MEMORIST_MEMORY_EXTRACTION_API_KEY' \
-            && echo "OK: extraction key passthrough present" \
-            || (echo "FAIL: PR5-C key passthrough missing" && exit 1)
+      - name: Validate release compose (root + packaged, lite + full)
+        # Detects `docker compose` (v2) or `docker-compose` (v1) and selects
+        # files/profiles via COMPOSE_FILE / COMPOSE_PROFILES env vars so it does
+        # not depend on runner-specific `-f` / `--profile` flag parsing. Fails
+        # hard (not best-effort) if no Compose command is available, and asserts
+        # the PR5-C API-key passthrough renders into memorist-core.
+        run: python3 installer/scripts/validate_compose.py
 
   dry-run:
     name: Installer Package — Dry Run
