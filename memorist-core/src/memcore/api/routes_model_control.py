@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import ValidationError
 
 from memcore.config import Settings, get_settings
 from memcore.model_control.postgres_repository import PostgresModelControlRepository
@@ -59,13 +60,20 @@ def list_profiles(role: str | None = Query(default=None)) -> dict[str, Any]:
 
 
 @router.post("/profiles", response_model=None)
-def create_profile(request: ModelProfileCreate) -> dict[str, Any]:
+def create_profile(request: dict[str, Any]) -> dict[str, Any]:
+    try:
+        validated = ModelProfileCreate.model_validate(request)
+    except ValidationError as error:
+        raise HTTPException(status_code=422, detail=_safe_validation_detail(error)) from error
     with _connection() as connection:
         try:
-            profile = _repository(connection).create_profile(request)
+            profile = _repository(connection).create_profile(validated)
             return public_profile(profile)
         except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
+            raise HTTPException(
+                status_code=400,
+                detail=sanitize_error_message(str(error)),
+            ) from error
 
 
 @router.get("/profiles/{model_profile_uuid}", response_model=None)
@@ -78,13 +86,20 @@ def get_profile(model_profile_uuid: str) -> dict[str, Any]:
 
 
 @router.patch("/profiles/{model_profile_uuid}", response_model=None)
-def patch_profile(model_profile_uuid: str, request: ModelProfilePatch) -> dict[str, Any]:
+def patch_profile(model_profile_uuid: str, request: dict[str, Any]) -> dict[str, Any]:
+    try:
+        validated = ModelProfilePatch.model_validate(request)
+    except ValidationError as error:
+        raise HTTPException(status_code=422, detail=_safe_validation_detail(error)) from error
     with _connection() as connection:
         try:
-            profile = _repository(connection).patch_profile(model_profile_uuid, request)
+            profile = _repository(connection).patch_profile(model_profile_uuid, validated)
             return public_profile(profile)
         except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
+            raise HTTPException(
+                status_code=400,
+                detail=sanitize_error_message(str(error)),
+            ) from error
 
 
 @router.post("/profiles/{model_profile_uuid}/test", response_model=None)
@@ -187,6 +202,16 @@ def estimate_cost(request: CostEstimateRequest) -> dict[str, Any]:
         except ValueError as error:
             detail = sanitize_error_message(str(error))
             raise HTTPException(status_code=400, detail=detail) from error
+
+
+
+def _safe_validation_detail(error: ValidationError) -> str:
+    details: list[str] = []
+    for item in error.errors(include_input=False, include_url=False):
+        location = ".".join(str(part) for part in item.get("loc", ())) or "profile"
+        message = sanitize_error_message(str(item.get("msg", "invalid value")))
+        details.append(f"{location}: {message}")
+    return "; ".join(details)[:500] or "invalid model profile configuration"
 
 
 def _is_full_postgres(settings: Settings) -> bool:
