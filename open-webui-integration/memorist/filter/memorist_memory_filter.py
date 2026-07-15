@@ -15,8 +15,8 @@ from shared.logging import warn  # noqa: E402
 from shared.payload_parser import (  # noqa: E402
     insert_memory_attachment,
     parse_inlet_body,
-    remove_memory_attachments,
     parse_outlet_body,
+    remove_memory_attachments,
     response_key,
     safe_payload,
 )
