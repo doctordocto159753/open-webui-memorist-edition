@@ -77,11 +77,16 @@ def resolve_policy(request: PolicyResolveRequest) -> dict[str, Any]:
         if request.workspace_uuid not in {None, actor.workspace_uuid}:
             raise HTTPException(status_code=403, detail="workspace scope mismatch")
         request = request.model_copy(
-            update={"user_uuid": actor.user_uuid, "workspace_uuid": actor.workspace_uuid}
+            update={
+                "user_uuid": actor.user_uuid,
+                "workspace_uuid": actor.workspace_uuid,
+            }
         )
     reject_runtime_override(request.model_dump(mode="json").get("memorist"))
     with memory_control_connection(settings) as connection:
-        resolved = MemoryControlRepository(connection, settings.runtime_profile).resolve_policy(
+        resolved = MemoryControlRepository(
+            connection, settings.runtime_profile
+        ).resolve_policy(
             system_default=settings.default_turn_policy,
             workspace_uuid=request.workspace_uuid,
             user_uuid=request.user_uuid,
@@ -107,11 +112,15 @@ def set_policy_default(
 ) -> dict[str, Any]:
     actor_user, actor_workspace = _actor(x_memorist_user_id, x_memorist_workspace_id)
     if request.scope_type == "user" and request.scope_uuid != actor_user:
-        raise HTTPException(status_code=403, detail="cannot update another user's default")
+        raise HTTPException(
+            status_code=403, detail="cannot update another user's default"
+        )
     if request.workspace_uuid != actor_workspace:
         raise HTTPException(status_code=403, detail="workspace scope mismatch")
     if request.scope_type == "system":
-        raise HTTPException(status_code=403, detail="system default is server-controlled")
+        raise HTTPException(
+            status_code=403, detail="system default is server-controlled"
+        )
     settings = get_settings()
     with memory_control_connection(settings) as connection:
         if request.scope_type == "chat":
@@ -127,9 +136,13 @@ def set_policy_default(
                 (request.scope_uuid, actor_user, actor_workspace),
             ).fetchone()
             if owned_chat is None:
-                raise HTTPException(status_code=403, detail="chat scope is not owned by actor")
+                raise HTTPException(
+                    status_code=403, detail="chat scope is not owned by actor"
+                )
         try:
-            return MemoryControlRepository(connection, settings.runtime_profile).set_default(
+            return MemoryControlRepository(
+                connection, settings.runtime_profile
+            ).set_default(
                 scope_type=request.scope_type,
                 scope_uuid=request.scope_uuid,
                 workspace_uuid=request.workspace_uuid,
@@ -203,7 +216,10 @@ def fetch_attachment_sources(
             """,
             (attachment_uuid, actor_workspace),
         ).fetchall()
-        return {"attachment_uuid": attachment_uuid, "sources": [dict(row) for row in rows]}
+        return {
+            "attachment_uuid": attachment_uuid,
+            "sources": [dict(row) for row in rows],
+        }
 
 
 def _transition(
@@ -241,7 +257,11 @@ def approve_attachment(
     x_memorist_workspace_id: str | None = Header(default=None),
 ) -> dict[str, Any]:
     return _transition(
-        attachment_uuid, "approved", request, x_memorist_user_id, x_memorist_workspace_id
+        attachment_uuid,
+        "approved",
+        request,
+        x_memorist_user_id,
+        x_memorist_workspace_id,
     )
 
 
@@ -253,7 +273,11 @@ def suppress_attachment(
     x_memorist_workspace_id: str | None = Header(default=None),
 ) -> dict[str, Any]:
     return _transition(
-        attachment_uuid, "suppressed", request, x_memorist_user_id, x_memorist_workspace_id
+        attachment_uuid,
+        "suppressed",
+        request,
+        x_memorist_user_id,
+        x_memorist_workspace_id,
     )
 
 
@@ -281,7 +305,11 @@ def record_attachment_delivery(
     x_memorist_workspace_id: str | None = Header(default=None),
 ) -> dict[str, Any]:
     return _transition(
-        attachment_uuid, "delivered", request, x_memorist_user_id, x_memorist_workspace_id
+        attachment_uuid,
+        "delivered",
+        request,
+        x_memorist_user_id,
+        x_memorist_workspace_id,
     )
 
 
@@ -293,11 +321,17 @@ def record_attachment_rejection(
     x_memorist_workspace_id: str | None = Header(default=None),
 ) -> dict[str, Any]:
     return _transition(
-        attachment_uuid, "user_rejected", request, x_memorist_user_id, x_memorist_workspace_id
+        attachment_uuid,
+        "user_rejected",
+        request,
+        x_memorist_user_id,
+        x_memorist_workspace_id,
     )
 
 
-@router.post("/attachments/{attachment_uuid}/regenerate-without-recall", response_model=None)
+@router.post(
+    "/attachments/{attachment_uuid}/regenerate-without-recall", response_model=None
+)
 def regenerate_without_recall(
     attachment_uuid: str,
     request: AttachmentActionRequest,
@@ -315,19 +349,33 @@ def regenerate_without_recall(
             raise HTTPException(status_code=404, detail="attachment not found")
         delivery_state = str(attachment.get("lifecycle_status") or "prepared")
         if delivery_state not in {"delivered", "used_for_response"}:
-            raise HTTPException(status_code=409, detail="attachment was not used in a response")
-        if attachment.get("stale_reason") or str(attachment.get("status") or "active") != "active":
-            raise HTTPException(status_code=409, detail="stale attachment cannot be regenerated")
+            raise HTTPException(
+                status_code=409, detail="attachment was not used in a response"
+            )
+        if (
+            attachment.get("stale_reason")
+            or str(attachment.get("status") or "active") != "active"
+        ):
+            raise HTTPException(
+                status_code=409, detail="stale attachment cannot be regenerated"
+            )
         if _attachment_expired(attachment.get("expires_at")):
-            raise HTTPException(status_code=409, detail="expired attachment cannot be regenerated")
+            raise HTTPException(
+                status_code=409, detail="expired attachment cannot be regenerated"
+            )
         input_message_uuid = str(attachment["input_message_uuid"])
         message = connection.execute(
-            "SELECT raw_text FROM messages WHERE message_uuid = ?", (input_message_uuid,)
+            "SELECT raw_text FROM messages WHERE message_uuid = ?",
+            (input_message_uuid,),
         ).fetchone()
         if message is None:
-            raise HTTPException(status_code=409, detail="original input message is unavailable")
+            raise HTTPException(
+                status_code=409, detail="original input message is unavailable"
+            )
         if not request.response_message_uuid:
-            raise HTTPException(status_code=400, detail="source response_message_uuid is required")
+            raise HTTPException(
+                status_code=400, detail="source response_message_uuid is required"
+            )
         response_link = connection.execute(
             """
             SELECT link.* FROM assistant_response_links link
@@ -338,7 +386,9 @@ def regenerate_without_recall(
             (input_message_uuid, attachment_uuid, request.response_message_uuid),
         ).fetchone()
         if response_link is None:
-            raise HTTPException(status_code=409, detail="delivered response link is unavailable")
+            raise HTTPException(
+                status_code=409, detail="delivered response link is unavailable"
+            )
         existing = connection.execute(
             "SELECT * FROM memorist_regenerations WHERE idempotency_key = ?",
             (request.idempotency_key,),
@@ -435,12 +485,15 @@ def _display_attachment(connection: Any, attachment: dict[str, Any]) -> dict[str
         "created_at": attachment.get("created_at"),
     }
 
+
 def _attachment_expired(value: Any) -> bool:
     if value is None:
         return False
     from datetime import UTC, datetime
 
-    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    parsed = (
+        value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    )
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed <= datetime.now(UTC)
