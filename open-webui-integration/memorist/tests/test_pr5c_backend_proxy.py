@@ -66,7 +66,7 @@ def test_setup_proxy_requires_authenticated_openwebui_admin() -> None:
     assert admin.status_code == 200
 
 
-def test_setup_status_and_defaults_are_scoped_to_trusted_workspace() -> None:
+def test_setup_status_is_actor_scoped_and_admin_default_rejects_browser_scope() -> None:
     FakeCoreClient.calls = []
     client = _app(authenticated=True, admin=True)
 
@@ -88,7 +88,7 @@ def test_setup_status_and_defaults_are_scoped_to_trusted_workspace() -> None:
     )
     assert selected.status_code == 200
     default_call = FakeCoreClient.calls[-1]
-    assert default_call["payload"]["workspace_uuid"] == "trusted-workspace"
+    assert "workspace_uuid" not in default_call["payload"]
     assert "project_uuid" not in default_call["payload"]
 
 
