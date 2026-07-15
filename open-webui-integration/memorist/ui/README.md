@@ -41,3 +41,12 @@ boundaries, and raw memory JSON/evidence is never rendered. Attachment previews 
 actor-scoped through Open WebUI's authenticated Memorist proxy; the component does not
 accept browser-supplied identity headers.
 
+
+## Memory control beside the composer
+
+The host chat integration mounts `memorist-memory-workflow-toggle` with the
+authenticated chat ID. **Memory On** permits both capture/processing and
+retrieval/attachment. **Memory Off** disables both for that chat and explains
+the privacy effect before send. The state is persisted per actor and chat,
+rolls back visually when a save fails, and regeneration helpers preserve the
+original turn's setting. See [Memory workflow toggle](../../../docs/memory-workflow-toggle.md).
