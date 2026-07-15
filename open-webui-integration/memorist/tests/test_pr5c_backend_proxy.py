@@ -50,9 +50,7 @@ def _app(*, authenticated: bool, admin: bool = False) -> TestClient:
 
 
 def test_setup_proxy_requires_authenticated_openwebui_admin() -> None:
-    unauthenticated = _app(authenticated=False).get(
-        "/api/v1/memorist/model-control/setup/status"
-    )
+    unauthenticated = _app(authenticated=False).get("/api/v1/memorist/model-control/setup/status")
     assert unauthenticated.status_code == 401
 
     non_admin = _app(authenticated=True, admin=False).get(
@@ -60,9 +58,7 @@ def test_setup_proxy_requires_authenticated_openwebui_admin() -> None:
     )
     assert non_admin.status_code == 403
 
-    admin = _app(authenticated=True, admin=True).get(
-        "/api/v1/memorist/model-control/setup/status"
-    )
+    admin = _app(authenticated=True, admin=True).get("/api/v1/memorist/model-control/setup/status")
     assert admin.status_code == 200
 
 
@@ -111,9 +107,7 @@ def test_profile_proxy_forwards_env_reference_but_never_echoes_secret() -> None:
     assert response.json()["secret_configured"] is True
     assert secret_value not in response.text
     call = FakeCoreClient.calls[-1]
-    assert (
-        call["payload"]["secret_env_var_name"] == "MEMORIST_MEMORY_EXTRACTION_API_KEY"
-    )
+    assert call["payload"]["secret_env_var_name"] == "MEMORIST_MEMORY_EXTRACTION_API_KEY"
 
 
 def test_profile_proxy_rejects_raw_or_nested_secret_fields_before_forwarding() -> None:
