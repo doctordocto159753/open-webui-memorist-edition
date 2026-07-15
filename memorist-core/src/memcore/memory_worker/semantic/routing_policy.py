@@ -5,7 +5,8 @@ from typing import Any
 
 from memcore.memory_worker.routing.models import RouteDecision
 from memcore.memory_worker.semantic.factors import (
-    HIGH_PRIORITY_INSTRUCTION,
+    FORGET_DIRECTIVE,
+    METALINGUAL_CONTEXT,
     PRIVACY_CONTEXT,
     ContextKind,
     ReceiverKind,
@@ -54,6 +55,17 @@ def decide_semantic_routes(
 
     if dominant is JakobsonFunction.PHATIC and not secondary:
         return [_ignore_route()]
+
+    if FORGET_DIRECTIVE.search(text):
+        return [
+            RouteDecision(
+                route_type=MemorySignalRouteType.PRIVACY_REVIEW,
+                extractor_id="privacy_review_extractor.v1",
+                priority=100,
+                confidence=JakobsonConfidence.HIGH,
+                reason="Forget/delete requests require an authorized privacy workflow.",
+            )
+        ]
 
     if context_kind == ContextKind.PRIVACY.value or PRIVACY_CONTEXT.search(text):
         return [
@@ -122,18 +134,25 @@ def _conative_routes(*, text: str, receiver_kind: str) -> list[RouteDecision]:
             ),
         ]
     if receiver_kind == ReceiverKind.AI.value:
+        prompt_specific = bool(METALINGUAL_CONTEXT.search(text)) and (
+            "prompt" in text.lower() or PERSIAN_PROMPT_WORD in text
+        )
         route_type = (
             MemorySignalRouteType.PROMPT_INSTRUCTION
-            if HIGH_PRIORITY_INSTRUCTION.search(text)
+            if prompt_specific
             else MemorySignalRouteType.TASK_CONSTRAINT
         )
         return [
             RouteDecision(
                 route_type=route_type,
                 extractor_id=f"{route_type.value}_extractor.v1",
-                priority=90 if HIGH_PRIORITY_INSTRUCTION.search(text) else 75,
+                priority=90 if prompt_specific else 75,
                 confidence=JakobsonConfidence.HIGH,
-                reason="Conative sentence instructs the AI/assistant.",
+                reason=(
+                    "Conative sentence changes prompt policy."
+                    if prompt_specific
+                    else "Conative sentence constrains future assistant behavior."
+                ),
             )
         ]
     return [
