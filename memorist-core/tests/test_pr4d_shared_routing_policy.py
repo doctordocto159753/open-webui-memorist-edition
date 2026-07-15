@@ -5,7 +5,11 @@ from typing import Any
 
 from memcore.memory_worker.postgres import PostgresMemoryWorkerPipeline
 from memcore.memory_worker.routing.signal_router import SignalRouter
-from memcore.memory_worker.semantic import decide_semantic_routes, route_status_for_type
+from memcore.memory_worker.semantic import (
+    classify_deterministic_function,
+    decide_semantic_routes,
+    route_status_for_type,
+)
 from memcore.models import (
     JakobsonConfidence,
     JakobsonFunction,
@@ -109,6 +113,45 @@ def test_secondary_metalingual_function_can_drive_prompt_instruction_route() -> 
 
     assert [decision.route_type for decision in decisions] == [
         MemorySignalRouteType.PROMPT_INSTRUCTION
+    ]
+
+
+def test_ai_directive_without_prompt_language_remains_task_constraint() -> None:
+    decisions = decide_semantic_routes(
+        text="Do not use cloud storage.",
+        dominant_function=JakobsonFunction.CONATIVE,
+        receiver_hint="AI",
+    )
+
+    assert [decision.route_type for decision in decisions] == [
+        MemorySignalRouteType.TASK_CONSTRAINT
+    ]
+
+
+def test_i_mean_definition_is_metalingual_and_routes_to_terminology() -> None:
+    text = "By FOOBAR-123 I mean local auth gateway."
+    dominant, secondary, _reason = classify_deterministic_function(text)
+    decisions = decide_semantic_routes(
+        text=text,
+        dominant_function=dominant,
+        secondary_functions=secondary,
+    )
+
+    assert dominant is JakobsonFunction.METALINGUAL
+    assert [decision.route_type for decision in decisions] == [
+        MemorySignalRouteType.TERMINOLOGY_RULE
+    ]
+
+
+def test_forget_directive_routes_to_privacy_review_before_normal_memory_routes() -> None:
+    decisions = decide_semantic_routes(
+        text="Please forget everything you remember about me.",
+        dominant_function=JakobsonFunction.CONATIVE,
+        receiver_hint="AI",
+    )
+
+    assert [decision.route_type for decision in decisions] == [
+        MemorySignalRouteType.PRIVACY_REVIEW
     ]
 
 
