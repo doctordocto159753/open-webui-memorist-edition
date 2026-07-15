@@ -97,6 +97,21 @@ def test_proxy_overrides_browser_identity_and_signs_as_server_actor() -> None:
     assert call["payload"]["workspace_uuid"] == "trusted-workspace"
 
 
+
+def test_attachment_display_proxy_uses_trusted_actor_and_safe_endpoint() -> None:
+    FakeCoreClient.calls = []
+    response = _app(authenticated=True).get(
+        "/api/v1/memorist/memory-control/attachments/attachment-1/display"
+    )
+
+    assert response.status_code == 200
+    call = FakeCoreClient.calls[-1]
+    assert call["method"] == "GET"
+    assert call["path"] == "/memcore/memory-control/attachments/attachment-1/display"
+    assert call["user_id"] == "trusted-user"
+    assert call["workspace_uuid"] == "trusted-workspace"
+
+
 def test_review_prepare_uses_trusted_actor_and_preserves_message_identity() -> None:
     FakeCoreClient.calls = []
     response = _app(authenticated=True).post(
