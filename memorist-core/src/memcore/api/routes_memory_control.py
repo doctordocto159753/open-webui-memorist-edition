@@ -156,7 +156,26 @@ def preview_attachment(
         )
         if attachment is None:
             raise HTTPException(status_code=404, detail="attachment not found")
-        return _public_attachment(connection, attachment)
+        return _public_attachment(attachment)
+
+
+@router.get("/attachments/{attachment_uuid}/display", response_model=None)
+def display_attachment(
+    attachment_uuid: str,
+    x_memorist_user_id: str | None = Header(default=None),
+    x_memorist_workspace_id: str | None = Header(default=None),
+) -> dict[str, Any]:
+    actor_user, actor_workspace = _actor(x_memorist_user_id, x_memorist_workspace_id)
+    settings = get_settings()
+    with memory_control_connection(settings) as connection:
+        attachment = MemoryControlRepository(
+            connection, settings.runtime_profile
+        ).attachment_for_actor(
+            attachment_uuid, user_uuid=actor_user, workspace_uuid=actor_workspace
+        )
+        if attachment is None:
+            raise HTTPException(status_code=404, detail="attachment not found")
+        return _display_attachment(connection, attachment)
 
 
 @router.get("/attachments/{attachment_uuid}/sources", response_model=None)
@@ -383,10 +402,8 @@ def regenerate_without_recall(
         }
 
 
-def _public_attachment(connection: Any, attachment: dict[str, Any]) -> dict[str, Any]:
-    display = build_attachment_display(connection, attachment)
+def _public_attachment(attachment: dict[str, Any]) -> dict[str, Any]:
     return {
-        **display,
         "attachment_uuid": attachment["attachment_uuid"],
         "session_uuid": attachment["session_uuid"],
         "input_message_uuid": attachment["input_message_uuid"],
@@ -401,6 +418,22 @@ def _public_attachment(connection: Any, attachment: dict[str, Any]) -> dict[str,
         "created_at": attachment.get("created_at"),
     }
 
+
+def _display_attachment(connection: Any, attachment: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **build_attachment_display(connection, attachment),
+        "attachment_uuid": attachment["attachment_uuid"],
+        "session_uuid": attachment["session_uuid"],
+        "input_message_uuid": attachment["input_message_uuid"],
+        "retrieval_run_uuid": attachment.get("retrieval_run_uuid"),
+        "token_count": attachment.get("token_count", 0),
+        "lifecycle_status": attachment.get("lifecycle_status", "prepared"),
+        "delivery_state": attachment.get("lifecycle_status", "prepared"),
+        "user_disposition": attachment.get("user_disposition", "none"),
+        "attachment_review": bool(attachment.get("attachment_review", False)),
+        "generation": attachment.get("generation", 1),
+        "created_at": attachment.get("created_at"),
+    }
 
 def _attachment_expired(value: Any) -> bool:
     if value is None:
