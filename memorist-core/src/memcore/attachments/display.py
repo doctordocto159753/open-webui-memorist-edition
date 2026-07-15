@@ -171,7 +171,12 @@ def _is_sensitive(packet_item: Mapping[str, Any], audit: Mapping[str, Any]) -> b
         or packet_item.get("status")
         or ""
     ).lower()
-    return sensitivity in _SENSITIVE_CLASSES or status in _REVIEW_STATUSES
+    confidence_label = str(packet_item.get("confidence_label") or "").lower()
+    return (
+        sensitivity in _SENSITIVE_CLASSES
+        or status in _REVIEW_STATUSES
+        or confidence_label in _REVIEW_STATUSES
+    )
 
 
 def _display_item(
