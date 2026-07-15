@@ -47,6 +47,10 @@ jobs:
         with:
           clean: false
           show-progress: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
       - name: Component tests
