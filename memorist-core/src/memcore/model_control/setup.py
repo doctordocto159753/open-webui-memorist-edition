@@ -13,7 +13,8 @@ class SetupRepository(Protocol):
         role: ModelRole | str,
         workspace_uuid: str | None = None,
         project_uuid: str | None = None,
-    ) -> dict[str, Any] | None: ...
+    ) -> dict[str, Any] | None:
+        ...
 
 
 SETUP_ROLES = (
