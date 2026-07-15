@@ -117,6 +117,24 @@ Full Mode certification requires external evidence. Unit tests and mock tests ar
 
 The project is tested through `uv`. Bare system Python versions below 3.12 are not supported.
 
+## Quick start: Windows one-click (non-developer)
+
+For end users who just want to run Memorist locally — **no Git, Python, or `uv`
+needed**, only Docker Desktop:
+
+1. Download and unzip the release package (`memorist-openwebui-<version>.zip`).
+2. Double-click **`Memorist.cmd`** (or run `.\Install-Memorist.ps1`).
+3. Follow the short wizard: it checks Docker, generates a private `.env`,
+   optionally captures a provider API key locally, starts the services, and
+   opens <http://localhost:3000>.
+
+Lifecycle scripts ship in the package: `Start-Memorist.ps1`, `Stop-Memorist.ps1`,
+`Restart-Memorist.ps1`, `Show-Memorist-Logs.ps1`, `Reset-Memorist-Data.ps1`,
+`Uninstall-Memorist.ps1`. The same scripts run under PowerShell 7 on macOS/Linux.
+Provider keys are written only to the local, git-ignored `.env` and referenced by
+**name** in the Memory Setup UI — see [`docs/windows-local-install.md`](docs/windows-local-install.md)
+and [`docs/local-release.md`](docs/local-release.md).
+
 ## Quick start: Lite Mode
 
 Lite Mode is the supported local development path.

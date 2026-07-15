@@ -1,0 +1,118 @@
+name: PR5-D One-Click Installer
+
+"on":
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pr5d-one-click-installer-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-validation:
+    name: Installer Package — Static Validation
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
+      - name: Static installer validation (no PowerShell required)
+        run: python3 installer/scripts/validate_installer.py --dry-run
+      - name: PowerShell syntax parse (best effort)
+        run: |
+          if command -v pwsh >/dev/null 2>&1; then
+            pwsh -NoProfile -Command '
+              $ErrorActionPreference = "Stop"
+              $root = "release/memorist-openwebui"
+              $files = Get-ChildItem -Path $root -Recurse -Include *.ps1,*.psm1
+              $failed = $false
+              foreach ($f in $files) {
+                $tokens = $null; $errors = $null
+                [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+                if ($errors.Count -gt 0) {
+                  $failed = $true
+                  Write-Host "PARSE ERRORS in $($f.Name):"
+                  $errors | ForEach-Object { Write-Host "  $($_.Message)" }
+                } else {
+                  Write-Host "OK $($f.Name)"
+                }
+              }
+              if ($failed) { exit 1 }
+            '
+          else
+            echo "pwsh not available on this runner — PowerShell parse skipped (covered by static validator). See docs/local-release.md."
+          fi
+      - name: Pester tests (best effort)
+        run: |
+          if command -v pwsh >/dev/null 2>&1; then
+            pwsh -NoProfile -Command '
+              if (Get-Module -ListAvailable -Name Pester) {
+                Invoke-Pester -Path release/memorist-openwebui/tests -CI
+              } else {
+                Write-Host "Pester not installed — skipping module unit tests."
+              }
+            '
+          else
+            echo "pwsh not available — Pester tests skipped."
+          fi
+
+  compose-config:
+    name: Installer Package — Compose Config
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    env:
+      MEMORIST_ACTOR_ASSERTION_SECRET: ci-validation-secret
+      MEMORIST_ACTOR_SERVICE_TOKEN: ci-validation-token
+      MEMORIST_OPENWEBUI_WORKSPACE_UUID: 00000000-0000-0000-0000-000000000001
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
+      - name: Validate release compose (root, lite + full)
+        run: |
+          docker compose -f docker-compose.release.yml --profile lite config -q
+          docker compose -f docker-compose.release.yml --profile full config -q
+      - name: Validate packaged compose (lite + full)
+        run: |
+          docker compose -f release/memorist-openwebui/compose.yml --profile lite config -q
+          docker compose -f release/memorist-openwebui/compose.yml --profile full config -q
+      - name: Assert PR5-C API-key roles reach memorist-core
+        run: |
+          docker compose -f docker-compose.release.yml --profile lite config \
+            | grep -q 'MEMORIST_MEMORY_EXTRACTION_API_KEY' \
+            && echo "OK: extraction key passthrough present" \
+            || (echo "FAIL: PR5-C key passthrough missing" && exit 1)
+
+  dry-run:
+    name: Installer Package — Dry Run
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
+      - name: Installer dry run (no containers, no secrets)
+        run: |
+          if command -v pwsh >/dev/null 2>&1; then
+            pwsh -NoProfile -File release/memorist-openwebui/Install-Memorist.ps1 -DryRun -NonInteractive
+            if [ -f release/memorist-openwebui/.env ]; then
+              echo "FAIL: dry run wrote an .env file"; exit 1
+            fi
+            echo "OK: dry run wrote no .env"
+          else
+            echo "pwsh not available — validating dry-run guards statically instead."
+            python3 installer/scripts/validate_installer.py --dry-run
+          fi
+
+  package-manifest:
+    name: Installer Package — Release Manifest
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
+      - name: Verify package checksums include installer entry points
+        run: python3 release/memorist-openwebui/scripts/gen_checksums.py --check

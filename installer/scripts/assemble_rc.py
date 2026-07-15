@@ -67,6 +67,7 @@ def assemble() -> dict[str, str]:
         "docker-compose.lite.yml",
         "docker-compose.full.yml",
         "docker-compose.openwebui-smoke.yml",
+        "docker-compose.release.yml",
     ]:
         source = ROOT / name
         if source.exists():

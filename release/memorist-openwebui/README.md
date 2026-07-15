@@ -17,6 +17,15 @@ This package runs Open WebUI as the parent chat UI and Memorist Core as a comple
 - doctor, backup, restore, logs, and reset scripts
 - install/security/import/privacy/upgrade docs
 
+## Windows one-click
+
+Windows users should start with **`README-LOCAL.md`**: double-click
+`Memorist.cmd` (or run `.\Install-Memorist.ps1`) for a guided setup that detects
+Docker, generates a private `.env`, optionally captures a provider API key
+locally, starts the services, and opens the browser. Lifecycle scripts
+(`Start-`, `Stop-`, `Restart-`, `Show-…-Logs`, `Reset-…-Data`, `Uninstall-`)
+ship alongside. The bash flow below remains available for macOS/Linux and CI.
+
 ## Start Lite
 
 ```bash

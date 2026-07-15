@@ -25,6 +25,13 @@ data/
 memorist-core/data/
 memorist-core/eval-runs/
 memorist-core/perf-runs/
+
+# Installer runtime folders (created on the user's machine at install time).
+/release/memorist-openwebui/objects/
+/release/memorist-openwebui/imports/
+/release/memorist-openwebui/exports/
+/release/memorist-openwebui/logs/
+/release/memorist-openwebui/data/
 *.sqlite
 *.sqlite-*
 *.log
