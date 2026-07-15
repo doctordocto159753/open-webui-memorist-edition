@@ -128,7 +128,6 @@ async def set_model_control_default(
     payload = await _object_body(request)
     payload.pop("workspace_uuid", None)
     payload.pop("project_uuid", None)
-    payload["workspace_uuid"] = actor.workspace_uuid
     return _call(actor, "POST", "/model-control/defaults", payload)
 
 
