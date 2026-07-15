@@ -25,6 +25,60 @@ export const MEMORY_CONTROL_LABELS = {
   openWebUINativeMemory: "Open WebUI Native Memory",
 } as const;
 
+export type MemoristAttachmentTechnicalIds = {
+  memory_uuid?: string;
+  memory_version_uuid?: string;
+  source_candidate_uuid?: string;
+  route_uuid?: string;
+  annotation_uuid?: string;
+  analysis_run_uuid?: string;
+  prompt_execution_uuid?: string;
+};
+
+export type MemoristAttachmentDisplayItem = {
+  id: string;
+  title: string;
+  summary: string;
+  memory_type?: string | null;
+  scope_type?: string | null;
+  scope_uuid?: string | null;
+  source_authority?: string | null;
+  explicitness?: string | null;
+  status?: string | null;
+  confidence?: number | string | null;
+  importance?: number | null;
+  retrieval_score?: number | null;
+  reason?: string | null;
+  current?: boolean;
+  sensitive?: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+  semantic_authority?: string | null;
+  gate_decision?: string | null;
+  route_type?: string | null;
+  route_status?: string | null;
+  metadata_versions?: Record<string, string>;
+  technical_ids?: MemoristAttachmentTechnicalIds;
+};
+
+export type MemoristAttachmentPreview = {
+  attachment_uuid: string;
+  session_uuid: string;
+  input_message_uuid: string;
+  retrieval_run_uuid?: string | null;
+  rendered_attachment?: string | null;
+  token_count: number;
+  lifecycle_status: string;
+  delivery_state: string;
+  user_disposition: string;
+  attachment_review: boolean;
+  generation: number;
+  created_at?: string | null;
+  display_version: string;
+  memory_count: number;
+  items: MemoristAttachmentDisplayItem[];
+};
+
 export type MemoristPolicyResolution = {
   policy: {
     mode: MemoristTurnPolicy;
@@ -234,7 +288,7 @@ export class MemoristClient {
   }): Promise<unknown> {
     return this.controlPut("/memory-control/policy/defaults", payload);
   }
-  async previewAttachment(attachmentUuid: string): Promise<unknown> {
+  async previewAttachment(attachmentUuid: string): Promise<MemoristAttachmentPreview> {
     return this.controlGet(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/preview`);
   }
   async fetchAttachmentSources(attachmentUuid: string): Promise<unknown> {
