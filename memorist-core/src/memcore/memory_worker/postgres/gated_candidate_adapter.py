@@ -10,6 +10,7 @@ from memcore.memory_worker.semantic.authority import (
 )
 from memcore.memory_worker.semantic.candidate_service import (
     CandidateServiceInput,
+    LinguisticCandidateComplements,
     build_candidate_draft,
 )
 from memcore.models import (
@@ -74,12 +75,18 @@ def record_candidates(
     provider_type: str,
     import_run_uuid: str | None = None,
     model_name: str | None = None,
+    analyses: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Persist shared candidate drafts; Full owns SQL, not candidate semantics."""
 
     gate_by_unit = _gate_by_unit(self, processing_run_uuid)
     routes_by_unit = _routes_by_unit(routes)
     annotation_by_unit = {str(item["unit_uuid"]): item for item in annotations}
+    analysis_by_unit = {
+        str(item["text_unit_uuid"]): item
+        for item in (analyses or [])
+        if item.get("text_unit_uuid") is not None
+    }
     for unit in units:
         unit_uuid = str(unit["text_unit_uuid"])
         annotation = annotation_by_unit.get(unit_uuid)
@@ -113,6 +120,7 @@ def record_candidates(
                 imported_record=import_run_uuid is not None,
                 provider_type=provider_type,
                 model_name=model_name,
+                complements=_linguistic_complements(analysis_by_unit.get(unit_uuid)),
             )
         )
         if draft is None:
@@ -171,6 +179,41 @@ def record_candidates(
             (processing_run_uuid,),
         ).fetchall()
     ]
+
+
+def _linguistic_complements(
+    analysis: dict[str, Any] | None,
+) -> LinguisticCandidateComplements:
+    if analysis is None:
+        return LinguisticCandidateComplements(abstained=True)
+    modality = _mapping(_json_value(analysis.get("modality_jsonb")))
+    temporal = _json_value(analysis.get("temporal_expressions_jsonb"))
+    first_temporal = temporal[0] if isinstance(temporal, list) and temporal else {}
+    abstention = _mapping(_json_value(analysis.get("abstention_jsonb")))
+    return LinguisticCandidateComplements(
+        analysis_uuid=_optional_string(analysis.get("analysis_uuid")),
+        negated=bool(modality.get("negated")),
+        valid_from=_optional_string(_mapping(first_temporal).get("normalized")),
+        temporal_precision=_optional_string(_mapping(first_temporal).get("precision")),
+        abstained=bool(abstention.get("abstained")),
+    )
+
+
+def _json_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return None
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _optional_string(value: Any) -> str | None:
+    return None if value is None else str(value)
 
 
 def _postgres_status(status: CandidateStatus) -> str:
