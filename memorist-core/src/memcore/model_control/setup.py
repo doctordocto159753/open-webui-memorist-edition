@@ -64,12 +64,9 @@ def build_setup_status(
                 "recommended": role in RECOMMENDED_FIRST_RUN_ROLES,
                 "configured": configured is not None,
                 "available": available,
-                "source": "configured_default"
-                if configured is not None
-                else "built_in_fallback",
+                "source": "configured_default" if configured is not None else "built_in_fallback",
                 "provider_type": effective.get("provider_type"),
-                "provider_name": effective.get("provider_name")
-                or effective.get("provider_type"),
+                "provider_name": effective.get("provider_name") or effective.get("provider_type"),
                 "model_name": effective.get("model_name"),
                 "model_profile_uuid": effective.get("model_profile_uuid"),
                 "endpoint_is_local": bool(effective.get("endpoint_is_local", True)),
@@ -77,18 +74,14 @@ def build_setup_status(
                 "supports_structured_output": bool(
                     effective.get("supports_structured_output", False)
                 ),
-                "supports_embeddings": bool(
-                    effective.get("supports_embeddings", False)
-                ),
+                "supports_embeddings": bool(effective.get("supports_embeddings", False)),
                 "description": spec.description,
                 "safe_fallback": spec.safe_beta_default,
             }
         )
 
     recommended_missing = [
-        role.value
-        for role in RECOMMENDED_FIRST_RUN_ROLES
-        if role.value not in configured_roles
+        role.value for role in RECOMMENDED_FIRST_RUN_ROLES if role.value not in configured_roles
     ]
     return {
         "memory_setup_required": bool(missing_roles),
