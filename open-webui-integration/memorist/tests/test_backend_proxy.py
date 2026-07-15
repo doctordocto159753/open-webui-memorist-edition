@@ -97,7 +97,6 @@ def test_proxy_overrides_browser_identity_and_signs_as_server_actor() -> None:
     assert call["payload"]["workspace_uuid"] == "trusted-workspace"
 
 
-
 def test_attachment_display_proxy_uses_trusted_actor_and_safe_endpoint() -> None:
     FakeCoreClient.calls = []
     response = _app(authenticated=True).get(
@@ -127,7 +126,9 @@ def test_review_prepare_uses_trusted_actor_and_preserves_message_identity() -> N
     assert response.status_code == 200, response.text
     assert response.json()["attachment_uuid"] == "attachment-1"
     assert response.json()["input_message_uuid"] == "message-1"
-    capture = next(call for call in FakeCoreClient.calls if call.get("operation") == "capture")
+    capture = next(
+        call for call in FakeCoreClient.calls if call.get("operation") == "capture"
+    )
     assert capture["user_id"] == "trusted-user"
     assert capture["workspace_uuid"] == "trusted-workspace"
     assert capture["openwebui_message_id"] == "browser-message-1"
@@ -171,7 +172,9 @@ def test_review_prepare_forwards_only_explicit_turn_policy() -> None:
         },
     )
     assert response.status_code == 200
-    policy_call = next(call for call in FakeCoreClient.calls if call.get("operation") == "policy")
+    policy_call = next(
+        call for call in FakeCoreClient.calls if call.get("operation") == "policy"
+    )
     assert policy_call["request_control"] == {
         "attachment_review": True,
         "turn_policy": "full",
@@ -198,7 +201,9 @@ def test_shipped_entrypoint_mounts_router_with_verified_openwebui_user(
     monkeypatch.setitem(sys.modules, "open_webui.main", main)
     monkeypatch.setitem(sys.modules, "open_webui.utils", utils)
     monkeypatch.setitem(sys.modules, "open_webui.utils.auth", auth)
-    monkeypatch.setenv("MEMORIST_OPENWEBUI_WORKSPACE_UUID", "00000000-0000-0000-0000-000000000001")
+    monkeypatch.setenv(
+        "MEMORIST_OPENWEBUI_WORKSPACE_UUID", "00000000-0000-0000-0000-000000000001"
+    )
     entrypoint = importlib.import_module("memorist.backend.openwebui_entrypoint")
     mounted = entrypoint.create_app()
 
@@ -209,7 +214,9 @@ def test_shipped_entrypoint_mounts_router_with_verified_openwebui_user(
     assert response.json()["memorist_core"] == "connected"
 
 
-def test_release_compose_keeps_core_command_and_mounts_authenticated_ui_router() -> None:
+def test_release_compose_keeps_core_command_and_mounts_authenticated_ui_router() -> (
+    None
+):
     compose_path = ROOT.parents[1] / "release" / "memorist-openwebui" / "compose.yml"
     compose = yaml.safe_load(compose_path.read_text(encoding="utf-8-sig"))
     core = compose["services"]["memorist-core"]
@@ -221,5 +228,6 @@ def test_release_compose_keeps_core_command_and_mounts_authenticated_ui_router()
     assert webui["environment"]["PYTHONPATH"] == "/memorist-integration"
     assert "MEMORIST_OPENWEBUI_WORKSPACE_UUID" in webui["environment"]
     assert any(
-        str(volume).endswith(":/memorist-integration/memorist:ro") for volume in webui["volumes"]
+        str(volume).endswith(":/memorist-integration/memorist:ro")
+        for volume in webui["volumes"]
     )
