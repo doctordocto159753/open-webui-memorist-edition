@@ -4,13 +4,14 @@ from hashlib import sha256
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
+
 from memcore.attachments.display import build_attachment_display
 from memcore.config import get_settings
 from memcore.memory_control import MemoryControlRepository, memory_control_connection
 from memcore.memory_control.policy import normalize_turn_policy, reject_runtime_override
 from memcore.models import new_uuid, utc_now
 from memcore.security import current_memorist_actor, optional_memorist_actor
-from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 router = APIRouter(prefix="/memcore/memory-control", tags=["memory-control"])
 
