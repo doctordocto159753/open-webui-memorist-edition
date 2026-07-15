@@ -58,8 +58,17 @@ PROCESS_CONTEXT = re.compile(
     re.I,
 )
 METALINGUAL_CONTEXT = re.compile(
-    r"\b(term|terminology|wording|definition|translation|meaning|prompt wording|prompt)\b|"
+    r"\b(term|terminology|wording|definition|translation|meaning|i mean|means?|"
+    r"defined as|prompt wording|prompt)\b|"
     r"اصطلاح|واژه|تعریف|ترجمه|معنی|منظور|عبارت|متن پرامپت|پرامپت",
+    re.I,
+)
+FORGET_DIRECTIVE = re.compile(
+    r"^\s*(?:please\s+)?(?:forget|delete|erase|remove)\b|"
+    r"\b(?:please|can you|could you|would you|want you to|need you to)\s+"
+    r"(?:forget|delete|erase|remove)\b|"
+    r"\b(?:delete|erase|remove)\b.{0,80}\b(?:memory|memories|data|records?)\b|"
+    r"فراموش کن|حذف کن|پاک کن|حافظه.{0,40}(?:حذف|پاک)",
     re.I,
 )
 EMOTIVE_CONTEXT = re.compile(
