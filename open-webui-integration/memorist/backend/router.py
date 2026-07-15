@@ -13,6 +13,7 @@ from ..shared.client import MemoristClient
 class OpenWebUIActor:
     user_uuid: str
     workspace_uuid: str
+    is_admin: bool = False
 
 
 def require_openwebui_actor(request: Request) -> OpenWebUIActor:
@@ -27,11 +28,24 @@ def require_openwebui_actor(request: Request) -> OpenWebUIActor:
     workspace_uuid = getattr(value, "workspace_uuid", None)
     if not user_uuid or not workspace_uuid:
         raise HTTPException(status_code=401, detail="authenticated Open WebUI actor required")
-    return OpenWebUIActor(str(user_uuid), str(workspace_uuid))
+    return OpenWebUIActor(
+        str(user_uuid),
+        str(workspace_uuid),
+        bool(getattr(value, "is_admin", False)),
+    )
 
 
 router = APIRouter(prefix="/api/v1/memorist", tags=["memorist-authenticated-proxy"])
 AuthenticatedActor = Annotated[OpenWebUIActor, Depends(require_openwebui_actor)]
+
+
+def require_openwebui_admin(actor: AuthenticatedActor) -> OpenWebUIActor:
+    if not actor.is_admin:
+        raise HTTPException(status_code=403, detail="Open WebUI admin access required")
+    return actor
+
+
+AuthenticatedAdmin = Annotated[OpenWebUIActor, Depends(require_openwebui_admin)]
 
 
 def _call(
@@ -46,6 +60,98 @@ def _call(
         user_id=actor.user_uuid,
         workspace_uuid=actor.workspace_uuid,
         payload=payload,
+    )
+
+
+@router.get("/model-control/setup/status")
+def model_setup_status(actor: AuthenticatedAdmin) -> dict[str, Any]:
+    workspace = quote(actor.workspace_uuid, safe="")
+    return _call(actor, "GET", f"/model-control/setup/status?workspace_uuid={workspace}")
+
+
+@router.get("/model-control/roles")
+def model_control_roles(actor: AuthenticatedAdmin) -> dict[str, Any]:
+    return _call(actor, "GET", "/model-control/roles")
+
+
+@router.get("/model-control/profiles")
+def model_control_profiles(actor: AuthenticatedAdmin) -> dict[str, Any]:
+    return _call(actor, "GET", "/model-control/profiles")
+
+
+@router.post("/model-control/profiles")
+async def create_model_control_profile(
+    request: Request,
+    actor: AuthenticatedAdmin,
+) -> dict[str, Any]:
+    return _call(actor, "POST", "/model-control/profiles", await _object_body(request))
+
+
+@router.patch("/model-control/profiles/{model_profile_uuid}")
+async def patch_model_control_profile(
+    model_profile_uuid: str,
+    request: Request,
+    actor: AuthenticatedAdmin,
+) -> dict[str, Any]:
+    return _call(
+        actor,
+        "PATCH",
+        f"/model-control/profiles/{quote(model_profile_uuid, safe='')}",
+        await _object_body(request),
+    )
+
+
+@router.post("/model-control/profiles/{model_profile_uuid}/test")
+async def test_model_control_profile(
+    model_profile_uuid: str,
+    request: Request,
+    actor: AuthenticatedAdmin,
+) -> dict[str, Any]:
+    return _call(
+        actor,
+        "POST",
+        f"/model-control/profiles/{quote(model_profile_uuid, safe='')}/test",
+        await _object_body(request),
+    )
+
+
+@router.get("/model-control/defaults")
+def model_control_defaults(actor: AuthenticatedAdmin) -> dict[str, Any]:
+    return _call(actor, "GET", "/model-control/defaults")
+
+
+@router.post("/model-control/defaults")
+async def set_model_control_default(
+    request: Request,
+    actor: AuthenticatedAdmin,
+) -> dict[str, Any]:
+    payload = await _object_body(request)
+    payload.pop("workspace_uuid", None)
+    payload.pop("project_uuid", None)
+    payload["workspace_uuid"] = actor.workspace_uuid
+    return _call(actor, "POST", "/model-control/defaults", payload)
+
+
+@router.get("/model-control/health")
+def model_control_health(actor: AuthenticatedAdmin) -> dict[str, Any]:
+    return _call(actor, "GET", "/model-control/health")
+
+
+@router.get("/model-control/privacy")
+def model_control_privacy(actor: AuthenticatedAdmin) -> dict[str, Any]:
+    return _call(actor, "GET", "/model-control/privacy")
+
+
+@router.post("/model-control/privacy/acknowledge")
+async def acknowledge_model_control_privacy(
+    request: Request,
+    actor: AuthenticatedAdmin,
+) -> dict[str, Any]:
+    return _call(
+        actor,
+        "POST",
+        "/model-control/privacy/acknowledge",
+        await _object_body(request),
     )
 
 
