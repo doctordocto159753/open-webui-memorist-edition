@@ -25,3 +25,19 @@ intended to be mounted at `/settings/memorist/processing-nodes`. It calls the
 live `/memcore/model-control/profiles`, `/memcore/model-control/defaults`,
 `/memcore/model-control/health`, and `/memcore/model-control/privacy/acknowledge`
 endpoints so backend validation and operational errors remain visible inline.
+
+## Memory used in chat
+
+When Memorist supplies context for an assistant turn, the chat integration mounts the
+`memorist-memory-attachment` component from the delivered attachment UUID in message
+metadata. Its compact **Memory used** indicator shows how many memories were attached.
+Expanding it shows readable memory type, scope, relevance, source, confidence, and
+freshness labels. A second disclosure contains allowlisted route, gate, version, and
+technical IDs for provenance and audit work.
+
+No indicator is shown when a turn has no attached memory. Sensitive or review-bound
+items use a safe summary, common credential formats are redacted at both API and UI
+boundaries, and raw memory JSON/evidence is never rendered. Attachment previews remain
+actor-scoped through Open WebUI's authenticated Memorist proxy; the component does not
+accept browser-supplied identity headers.
+
