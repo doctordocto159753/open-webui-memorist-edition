@@ -8,6 +8,15 @@ from typing import Any
 
 _CLOSING_DELIMITER = "</memory_context_attachment>"
 _ESCAPED_CLOSING_DELIMITER = "&lt;/memory_context_attachment&gt;"
+_ATTACHMENT_METADATA_KEYS = (
+    "memorist_pending_attachment_uuid",
+    "memorist_delivered_attachment_uuid",
+    "memorist_attachment_uuid",
+    "memorist_retrieval_run_uuid",
+    "memorist_attachment_pending_review",
+    "memorist_attachment_warning",
+    "memorist_context_untrusted",
+)
 
 
 @dataclass(frozen=True)
@@ -132,6 +141,26 @@ def insert_memory_attachment(
     if attachment_uuid:
         metadata["memorist_delivered_attachment_uuid"] = attachment_uuid
     metadata["memorist_context_untrusted"] = True
+    return body
+
+
+def remove_memory_attachments(body: dict[str, Any]) -> dict[str, Any]:
+    """Remove context delivered for an earlier turn without touching review intent."""
+    messages = body.get("messages")
+    if isinstance(messages, list):
+        body["messages"] = [
+            message
+            for message in messages
+            if not (
+                isinstance(message, dict)
+                and message.get("role") in {"system", "developer"}
+                and message.get("name") == "memorist_context"
+            )
+        ]
+    metadata = body.get("metadata")
+    if isinstance(metadata, dict):
+        for key in _ATTACHMENT_METADATA_KEYS:
+            metadata.pop(key, None)
     return body
 
 
