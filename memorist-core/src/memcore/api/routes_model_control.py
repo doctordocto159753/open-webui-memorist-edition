@@ -254,3 +254,4 @@ def _connection() -> Iterator[Any]:
         yield connection
     finally:
         connection.close()
+
