@@ -54,6 +54,11 @@ _SECRET_PATTERNS = (
 def _as_mapping(value: Any) -> Mapping[str, Any]:
     if isinstance(value, Mapping):
         return value
+    if hasattr(value, "keys"):
+        try:
+            return {str(key): value[key] for key in value.keys()}
+        except (KeyError, TypeError):
+            return {}
     return {}
 
 
@@ -209,13 +214,17 @@ def _display_item(
         if metadata.get(key) is not None
     }
 
+    scope = _as_mapping(packet_item.get("scope"))
+    scope_type = audit.get("scope_type") or scope.get("scope_type") or packet_item.get("scope_type")
+    scope_uuid = audit.get("scope_uuid") or scope.get("scope_uuid") or packet_item.get("scope_uuid")
+
     return {
         "id": version_uuid or memory_uuid,
         "title": summary,
         "summary": summary,
         "memory_type": audit.get("memory_type") or packet_item.get("memory_type"),
-        "scope_type": audit.get("scope_type") or packet_item.get("scope"),
-        "scope_uuid": audit.get("scope_uuid"),
+        "scope_type": scope_type,
+        "scope_uuid": scope_uuid,
         "source_authority": (
             audit.get("source_authority")
             or packet_item.get("source_authority_label")
