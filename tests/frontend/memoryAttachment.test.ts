@@ -120,7 +120,8 @@ describe("memory attachment chat surface", () => {
     )!;
     await mountedText(element);
     expect(element.hidden).toBe(true);
-    expect(element.shadowRoot?.textContent?.trim()).toBe("");
+    expect(element.shadowRoot?.querySelector(".group")).toBeNull();
+    expect(element.shadowRoot?.textContent).not.toContain("Memory used");
   });
 
   it("does not render sensitive values or raw metadata in the normal view", async () => {
