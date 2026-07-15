@@ -118,7 +118,9 @@ describe("first-run memory node setup", () => {
     const root = document.createElement("div");
     document.body.append(root);
     const element = mountMemoryNodeSetup(root, mock);
-    await vi.waitFor(() => expect(element.shadowRoot?.querySelector("form")).toBeTruthy());
+    await vi.waitFor(() => {
+      expect(element.shadowRoot?.textContent).toContain("Local fallback available");
+    });
 
     (element.shadowRoot?.querySelector("form") as HTMLFormElement).requestSubmit();
     await vi.waitFor(() => {
@@ -139,7 +141,9 @@ describe("first-run memory node setup", () => {
     const root = document.createElement("div");
     document.body.append(root);
     const element = mountMemoryNodeSetup(root, mock);
-    await vi.waitFor(() => expect(element.shadowRoot?.querySelector("form")).toBeTruthy());
+    await vi.waitFor(() => {
+      expect(element.shadowRoot?.textContent).toContain("Local fallback available");
+    });
 
     const mode = element.shadowRoot?.querySelector(
       '[name="provider_mode"]',
@@ -165,7 +169,9 @@ describe("first-run memory node setup", () => {
     const root = document.createElement("div");
     document.body.append(root);
     const element = mountMemoryNodeSetup(root, mock);
-    await vi.waitFor(() => expect(element.shadowRoot?.querySelector("form")).toBeTruthy());
+    await vi.waitFor(() => {
+      expect(element.shadowRoot?.textContent).toContain("Local fallback available");
+    });
 
     const mode = element.shadowRoot?.querySelector(
       '[name="provider_mode"]',
@@ -223,7 +229,9 @@ describe("first-run memory node setup", () => {
     const root = document.createElement("div");
     document.body.append(root);
     const element = mountMemoryNodeSetup(root, mock);
-    await vi.waitFor(() => expect(element.shadowRoot?.querySelector("form")).toBeTruthy());
+    await vi.waitFor(() => {
+      expect(element.shadowRoot?.textContent).toContain("Local fallback available");
+    });
 
     (element.shadowRoot?.querySelector("form") as HTMLFormElement).requestSubmit();
     await vi.waitFor(() => {
