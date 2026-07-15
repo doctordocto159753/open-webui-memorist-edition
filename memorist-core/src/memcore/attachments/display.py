@@ -56,7 +56,7 @@ def _as_mapping(value: Any) -> Mapping[str, Any]:
         return value
     if hasattr(value, "keys"):
         try:
-            return {str(key): value[key] for key in value.keys()}
+            return {str(key): value[key] for key in value}
         except (KeyError, TypeError):
             return {}
     return {}
