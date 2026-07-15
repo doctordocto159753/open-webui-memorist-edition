@@ -57,7 +57,7 @@ export class MemoristMemoryNodeSetup extends HTMLElement {
   private saving = false;
   private message = "";
   private messageKind: "notice" | "error" | "success" = "notice";
-  private role: SetupRole = "memory_extraction";
+  private selectedRole: SetupRole = "memory_extraction";
   private providerMode: ProviderMode = "deterministic";
 
   connectedCallback(): void {
@@ -110,13 +110,13 @@ export class MemoristMemoryNodeSetup extends HTMLElement {
       }
     }
 
-    const deterministicModel = this.role === "memory_extraction"
+    const deterministicModel = this.selectedRole === "memory_extraction"
       ? "deterministic_extraction"
       : "deterministic_high_confidence";
     const payload: ModelControlProfileCreate = this.providerMode === "deterministic"
       ? {
-          profile_name: `${ROLE_LABELS[this.role]} — local deterministic`,
-          role: this.role,
+          profile_name: `${ROLE_LABELS[this.selectedRole]} — local deterministic`,
+          role: this.selectedRole,
           provider_type: "deterministic",
           provider_name: "Local deterministic",
           model_name: deterministicModel,
@@ -128,8 +128,8 @@ export class MemoristMemoryNodeSetup extends HTMLElement {
           privacy_acknowledged: true,
         }
       : {
-          profile_name: `${ROLE_LABELS[this.role]} — ${providerName || "OpenAI-compatible"}`,
-          role: this.role,
+          profile_name: `${ROLE_LABELS[this.selectedRole]} — ${providerName || "OpenAI-compatible"}`,
+          role: this.selectedRole,
           provider_type: "openai_compatible_llm",
           provider_name: providerName || "Custom OpenAI-compatible endpoint",
           model_name: modelName,
@@ -159,13 +159,13 @@ export class MemoristMemoryNodeSetup extends HTMLElement {
         return;
       }
       await this.client.setModelControlDefault({
-        role: this.role,
+        role: this.selectedRole,
         model_profile_uuid: profile.model_profile_uuid,
       });
       (event.target as HTMLFormElement).reset();
       this.providerMode = "deterministic";
       this.show(
-        `${ROLE_LABELS[this.role]} is configured. Secret values were not stored or returned.`,
+        `${ROLE_LABELS[this.selectedRole]} is configured. Secret values were not stored or returned.`,
         "success",
       );
       this.status = await this.client.memoryNodeSetupStatus();
@@ -224,7 +224,7 @@ export class MemoristMemoryNodeSetup extends HTMLElement {
               <label>Memory role
                 <select name="role">
                   ${(["memory_extraction", "high_confidence_extraction"] as SetupRole[]).map((role) =>
-                    `<option value="${role}" ${this.role === role ? "selected" : ""}>${ROLE_LABELS[role]}</option>`
+                    `<option value="${role}" ${this.selectedRole === role ? "selected" : ""}>${ROLE_LABELS[role]}</option>`
                   ).join("")}
                 </select>
               </label>
@@ -271,7 +271,7 @@ export class MemoristMemoryNodeSetup extends HTMLElement {
       </main>`;
 
     this.shadowRoot!.querySelector('[name="role"]')?.addEventListener("change", (event) => {
-      this.role = (event.target as HTMLSelectElement).value as SetupRole;
+      this.selectedRole = (event.target as HTMLSelectElement).value as SetupRole;
     });
     this.shadowRoot!.querySelector('[name="provider_mode"]')?.addEventListener("change", (event) => {
       this.providerMode = (event.target as HTMLSelectElement).value as ProviderMode;
