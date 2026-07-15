@@ -18,7 +18,9 @@ class ResolvedTurnPolicy:
 
 
 class MemoryControlRepository:
-    def __init__(self, connection: Any, runtime_profile: str, *, autocommit: bool = True) -> None:
+    def __init__(
+        self, connection: Any, runtime_profile: str, *, autocommit: bool = True
+    ) -> None:
         self.connection = connection
         self.runtime_profile = runtime_profile
         self.autocommit = autocommit
@@ -179,7 +181,12 @@ class MemoryControlRepository:
                 SET turn_policy = ?, attachment_review = ?, updated_at = ?
                 WHERE policy_default_uuid = ?
                 """,
-                (normalized.mode.value, attachment_review, now, existing["policy_default_uuid"]),
+                (
+                    normalized.mode.value,
+                    attachment_review,
+                    now,
+                    existing["policy_default_uuid"],
+                ),
             )
             row = {
                 **dict(existing),
@@ -314,7 +321,12 @@ class MemoryControlRepository:
                 "cancelled_before_send",
                 "user_rejected",
             },
-            "approved": {"delivered", "suppressed", "cancelled_before_send", "user_rejected"},
+            "approved": {
+                "delivered",
+                "suppressed",
+                "cancelled_before_send",
+                "user_rejected",
+            },
             "delivered": {"used_for_response"},
             "suppressed": set(),
             "cancelled_before_send": set(),
@@ -402,7 +414,9 @@ class MemoryControlRepository:
             if canonical is not None:
                 return dict(canonical)
         if lifecycle_status not in allowed.get(current, set()):
-            raise ValueError(f"invalid attachment transition: {current} -> {lifecycle_status}")
+            raise ValueError(
+                f"invalid attachment transition: {current} -> {lifecycle_status}"
+            )
         now = utc_now()
         timestamp_column = {
             "approved": "approved_at",
@@ -493,7 +507,9 @@ class MemoryControlRepository:
 def _is_expired(value: Any) -> bool:
     if value is None:
         return False
-    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    parsed = (
+        value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    )
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed <= datetime.now(UTC)
