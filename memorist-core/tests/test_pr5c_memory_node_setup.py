@@ -71,7 +71,6 @@ def test_role_profile_can_be_configured_and_resolved_separately(
         json={
             "role": role,
             "model_profile_uuid": profile_uuid,
-            "workspace_uuid": "workspace-1",
         },
     )
     assert selected.status_code == 200, selected.text
