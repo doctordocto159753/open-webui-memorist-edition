@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from memcore.attachments.display import build_attachment_display
 from memcore.config import get_settings
 from memcore.memory_control import MemoryControlRepository, memory_control_connection
 from memcore.memory_control.policy import normalize_turn_policy, reject_runtime_override
@@ -155,7 +156,7 @@ def preview_attachment(
         )
         if attachment is None:
             raise HTTPException(status_code=404, detail="attachment not found")
-        return _public_attachment(attachment)
+        return _public_attachment(connection, attachment)
 
 
 @router.get("/attachments/{attachment_uuid}/sources", response_model=None)
@@ -382,8 +383,10 @@ def regenerate_without_recall(
         }
 
 
-def _public_attachment(attachment: dict[str, Any]) -> dict[str, Any]:
+def _public_attachment(connection: Any, attachment: dict[str, Any]) -> dict[str, Any]:
+    display = build_attachment_display(connection, attachment)
     return {
+        **display,
         "attachment_uuid": attachment["attachment_uuid"],
         "session_uuid": attachment["session_uuid"],
         "input_message_uuid": attachment["input_message_uuid"],
