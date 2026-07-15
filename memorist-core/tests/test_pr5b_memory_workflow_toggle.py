@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+
 from memcore.main import create_app
 from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
