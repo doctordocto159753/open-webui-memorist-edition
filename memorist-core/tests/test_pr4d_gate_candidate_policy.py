@@ -99,6 +99,22 @@ def test_gate_policy_blocks_ignore_route_even_when_gate_allows_analysis() -> Non
     assert "route_ignored" in policy.reason_codes
 
 
+def test_gate_policy_blocks_pending_failed_and_missing_route_statuses() -> None:
+    for status in (
+        MemorySignalRouteStatus.PENDING,
+        MemorySignalRouteStatus.FAILED,
+        None,
+    ):
+        policy = candidate_policy_for_gate_and_route(
+            gate_decision=GateDecisionValue.ANALYZE,
+            route_type=MemorySignalRouteType.PROCESS_FACT,
+            route_status=status,
+        )
+        assert not policy.allows_candidate_creation
+        assert not policy.allows_automatic_memory_creation
+        assert "route_not_ready" in policy.reason_codes
+
+
 def test_full_candidate_adapter_blocks_discarded_units_before_insert() -> None:
     pipeline = _FakePipeline(
         [
