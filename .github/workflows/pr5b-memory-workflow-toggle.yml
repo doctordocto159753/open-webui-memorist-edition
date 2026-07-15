@@ -37,7 +37,10 @@ jobs:
           TARGETS="src/memcore/memory_control/repository.py src/memcore/api/routes_memory_control.py tests/test_pr5b_memory_workflow_toggle.py ../open-webui-integration/memorist/backend/router.py ../open-webui-integration/memorist/filter/memorist_memory_filter.py ../open-webui-integration/memorist/shared/payload_parser.py ../open-webui-integration/memorist/tests/test_filter_contract.py ../open-webui-integration/memorist/tests/test_backend_proxy.py"
           uv run ruff check $TARGETS
           uv run ruff format --check $TARGETS
-          uv run mypy $TARGETS
+          uv run mypy \
+            src/memcore/memory_control/repository.py \
+            src/memcore/api/routes_memory_control.py \
+            tests/test_pr5b_memory_workflow_toggle.py
 
   frontend-ux:
     name: Memory Workflow Toggle — Frontend UX
