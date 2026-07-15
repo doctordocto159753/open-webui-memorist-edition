@@ -4,8 +4,6 @@ import {
   type ModelControlProfileCreate,
   type ModelControlProfileTestResponse,
 } from "./memoristClient";
-import type { MemoristModelRole, ModelControlProfile } from "./modelControl";
-
 export const MEMORIST_MEMORY_NODE_SETUP_ROUTE = "/settings/memorist/memory-setup";
 
 type SetupClient = Pick<
