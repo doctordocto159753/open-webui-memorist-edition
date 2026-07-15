@@ -40,6 +40,7 @@ class MemoryControlRepository:
         selected = system_default
         source = "system"
         attachment_review = False
+        actor_chat_disabled = False
         system_row = self._policy_row("system", "system", workspace_uuid)
         if system_row is not None:
             selected = str(system_row["turn_policy"])
@@ -66,7 +67,8 @@ class MemoryControlRepository:
                 selected = str(actor_chat_row["turn_policy"])
                 attachment_review = bool(actor_chat_row["attachment_review"])
                 source = "chat"
-        if turn_override is not None:
+                actor_chat_disabled = normalize_turn_policy(selected).private
+        if turn_override is not None and not actor_chat_disabled:
             selected = turn_override
             source = "turn"
         if attachment_review_override is not None:
