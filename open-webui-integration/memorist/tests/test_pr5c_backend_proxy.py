@@ -136,3 +136,4 @@ def test_profile_proxy_rejects_raw_or_nested_secret_fields_before_forwarding() -
         assert response.status_code == 422
         assert "raw-provider-value" not in response.text
         assert FakeCoreClient.calls == []
+
