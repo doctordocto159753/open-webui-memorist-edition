@@ -43,7 +43,7 @@ _METADATA_FIELDS = (
 _SECRET_PATTERNS = (
     re.compile(r"(?i)\b(bearer\s+)[a-z0-9._~+/=-]{8,}"),
     re.compile(
-        r"(?i)\b(api[_-]?key|access[_-]?token|token|password|secret)"
+        r"(?i)\b(api(?:[_ -]?key)|access(?:[_ -]?token)|token|password|secret)"
         r"\s*[:=]\s*([^\s,;]{4,})"
     ),
     re.compile(r"\bsk-[a-zA-Z0-9_-]{8,}\b"),
