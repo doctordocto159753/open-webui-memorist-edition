@@ -169,7 +169,11 @@ class CanonicalSemanticDecision(CanonicalSemanticModel):
     @property
     def candidate_creation_blockers(self) -> tuple[str, ...]:
         blockers: list[str] = []
-        blocked_gate_decisions = {GateDecisionValue.DISCARD, GateDecisionValue.RETAIN_RAW_ONLY}
+        blocked_gate_decisions = {
+            GateDecisionValue.DISCARD,
+            GateDecisionValue.RETAIN_RAW_ONLY,
+            GateDecisionValue.MANUAL_REVIEW,
+        }
         if self.gate.decision in blocked_gate_decisions:
             blockers.append(f"gate:{self.gate.decision.value}")
         if not self.has_ready_memory_route:
