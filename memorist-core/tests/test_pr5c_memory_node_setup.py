@@ -116,9 +116,7 @@ def test_profile_summary_never_returns_secret_value_or_reference(
     assert secret_value not in payload_text
     assert env_name not in payload_text
 
-    fetched = client.get(
-        f"/memcore/model-control/profiles/{created.json()['model_profile_uuid']}"
-    )
+    fetched = client.get(f"/memcore/model-control/profiles/{created.json()['model_profile_uuid']}")
     assert fetched.status_code == 200
     assert secret_value not in fetched.text
     assert env_name not in fetched.text
