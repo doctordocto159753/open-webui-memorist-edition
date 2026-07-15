@@ -338,6 +338,7 @@ class PostgresMemoryWorkerPipeline:
                 provider_type,
                 import_run_uuid,
                 model_name,
+                analyses=analyses,
             )
             memories = self._record_memories(
                 message, candidates, content_hash, prompt_execution_uuid
@@ -902,6 +903,7 @@ class PostgresMemoryWorkerPipeline:
         provider_type: str,
         import_run_uuid: str | None = None,
         model_name: str | None = None,
+        analyses: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         return record_candidates(
             self,
@@ -914,6 +916,7 @@ class PostgresMemoryWorkerPipeline:
             provider_type,
             import_run_uuid,
             model_name,
+            analyses,
         )
 
     def _record_memories(
