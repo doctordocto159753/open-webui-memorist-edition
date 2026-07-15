@@ -1,10 +1,25 @@
-﻿services:
+# Release-oriented Compose file for the Memorist local package.
+#
+# This is the canonical one-click release orchestration. It is intentionally
+# separate from the developer compose files (docker-compose.lite.yml /
+# docker-compose.full.yml) so improving the release path never degrades the
+# developer workflow. The shipped package under release/memorist-openwebui/
+# carries an equivalent compose.yml with package-relative paths.
+#
+# Profiles:
+#   lite  -> Open WebUI + Memorist Core (SQLite, no graph)  [recommended]
+#   full  -> adds FalkorDB graph service                    [advanced preview]
+#
+# All secrets/keys are read from .env; none are passed on the command line.
+services:
   memorist-core:
     profiles: ["lite", "full", "dev"]
     build:
-      context: ../../memorist-core
+      context: ./memorist-core
     environment:
       MEMORIST_LOCAL_ONLY: ${MEMORIST_LOCAL_ONLY:-true}
+      MEMORIST_RUNTIME_PROFILE: ${MEMORIST_RUNTIME_PROFILE:-lite}
+      MEMORIST_CANONICAL_STORE: ${MEMORIST_CANONICAL_STORE:-sqlite}
       MEMORIST_DB_PATH: ${MEMORIST_DB_PATH:-/data/memorist.sqlite}
       MEMORIST_OBJECT_STORE_PATH: ${MEMORIST_OBJECT_STORE:-/objects}
       MEMORIST_GRAPH_BACKEND: ${MEMORIST_GRAPH_BACKEND:-disabled}
@@ -20,9 +35,7 @@
       MEMORIST_FAIL_OPEN: ${MEMORIST_FAIL_OPEN:-true}
       MEMORIST_ACTOR_ASSERTION_SECRET: ${MEMORIST_ACTOR_ASSERTION_SECRET:?required}
       MEMORIST_ACTOR_SERVICE_TOKEN: ${MEMORIST_ACTOR_SERVICE_TOKEN:?required}
-      # PR5-C bridge: local installer writes provider keys into .env; the
-      # backend resolves them by name via secret_env_var_name. Empty by default
-      # so local deterministic mode needs no key and Compose still validates.
+      # PR5-C bridge: provider keys resolved by name inside the backend process.
       MEMORIST_MEMORY_EXTRACTION_API_KEY: ${MEMORIST_MEMORY_EXTRACTION_API_KEY:-}
       MEMORIST_HIGH_CONFIDENCE_EXTRACTION_API_KEY: ${MEMORIST_HIGH_CONFIDENCE_EXTRACTION_API_KEY:-}
       MEMORIST_EMBEDDING_API_KEY: ${MEMORIST_EMBEDDING_API_KEY:-}
@@ -63,7 +76,7 @@
       - "${OPEN_WEBUI_PORT:-3000}:8080"
     volumes:
       - openwebui-data:/app/backend/data
-      - ../../open-webui-integration/memorist:/memorist-integration/memorist:ro
+      - ./open-webui-integration/memorist:/memorist-integration/memorist:ro
     depends_on:
       memorist-core:
         condition: service_started
@@ -78,7 +91,7 @@
     profiles: ["full", "graph"]
     image: falkordb/falkordb:v4.18.10
     ports:
-      - "6379:6379"
+      - "127.0.0.1:${MEMORIST_FALKORDB_PORT:-6379}:6379"
     volumes:
       - falkordb-data:/data
     healthcheck:
@@ -91,6 +104,6 @@ volumes:
   openwebui-data:
   memorist-data:
   memorist-objects:
-  falkordb-data:
   memorist-import-staging:
   memorist-exports:
+  falkordb-data:
