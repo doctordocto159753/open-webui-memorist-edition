@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from memcore.memory_worker.semantic import (
+    CANDIDATE_SERVICE_VERSION,
     PROVENANCE_POLICY_VERSION,
     CandidateAuthorityContext,
     CandidateServiceInput,
@@ -61,6 +62,14 @@ def test_system_instruction_has_system_provenance() -> None:
     assert draft.metadata["source_authority"] == "system_instruction"
 
 
+def test_system_instruction_cannot_become_a_user_preference() -> None:
+    draft = build_candidate_draft(
+        _input(role="system", route_type=MemorySignalRouteType.USER_PREFERENCE)
+    )
+
+    assert draft is None
+
+
 def test_imported_record_is_not_relabelled_as_user_explicit() -> None:
     value = _input(role="user", route_type=MemorySignalRouteType.PROJECT_CONTEXT)
     draft = build_candidate_draft(replace(value, imported_record=True))
@@ -85,6 +94,7 @@ def test_lite_full_shared_metadata_has_versioned_provenance() -> None:
     )
 
     assert draft is not None
+    assert draft.metadata["candidate_service_version"] == CANDIDATE_SERVICE_VERSION
     assert draft.metadata["provenance_policy_version"] == PROVENANCE_POLICY_VERSION
     assert draft.metadata["source_authority"] == SourceAuthority.USER_EXPLICIT.value
     assert draft.metadata["semantic_authority"] == "jakobson"
