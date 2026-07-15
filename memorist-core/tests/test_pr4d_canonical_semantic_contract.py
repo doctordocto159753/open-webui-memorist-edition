@@ -148,6 +148,17 @@ def test_raw_only_referential_decision_preserves_route_but_blocks_candidate_crea
     assert decision.allows_candidate_creation is False
 
 
+def test_manual_review_gate_blocks_automatic_candidate_creation() -> None:
+    decision = _decision(
+        gate=GateDecisionValue.MANUAL_REVIEW,
+        routes=(_route(MemorySignalRouteType.MANUAL_REVIEW),),
+    )
+
+    assert decision.gate.allows_analysis is True
+    assert decision.candidate_creation_blockers == ("gate:manual_review",)
+    assert decision.allows_candidate_creation is False
+
+
 def test_contract_is_frozen_extra_forbidden_and_json_round_trippable() -> None:
     decision = _decision()
     round_tripped = CanonicalSemanticDecision.model_validate_json(decision.model_dump_json())
