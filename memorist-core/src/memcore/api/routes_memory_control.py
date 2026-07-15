@@ -4,7 +4,7 @@ from hashlib import sha256
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from memcore.attachments.display import build_attachment_display
 from memcore.config import get_settings
@@ -45,7 +45,7 @@ class PolicyDefaultRequest(BaseModel):
 class MemoryWorkflowUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    memory_enabled: bool
+    memory_enabled: StrictBool
 
 
 class AttachmentActionRequest(BaseModel):
