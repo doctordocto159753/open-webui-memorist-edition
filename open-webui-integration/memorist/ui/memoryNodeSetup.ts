@@ -83,7 +83,8 @@ export class MemoristMemoryNodeSetup extends HTMLElement {
   private async save(event: Event): Promise<void> {
     event.preventDefault();
     if (this.saving) return;
-    const form = new FormData(event.target as HTMLFormElement);
+    const formElement = event.currentTarget as HTMLFormElement;
+    const form = new FormData(formElement);
     const endpoint = text(form.get("endpoint_url"));
     const modelName = text(form.get("model_name"));
     const envName = text(form.get("secret_env_var_name"));
@@ -162,7 +163,7 @@ export class MemoristMemoryNodeSetup extends HTMLElement {
         role: this.selectedRole,
         model_profile_uuid: profile.model_profile_uuid,
       });
-      (event.target as HTMLFormElement).reset();
+      formElement.reset();
       this.providerMode = "deterministic";
       this.show(
         `${ROLE_LABELS[this.selectedRole]} is configured. Secret values were not stored or returned.`,
