@@ -84,7 +84,7 @@ async def create_model_control_profile(
     request: Request,
     actor: AuthenticatedAdmin,
 ) -> dict[str, Any]:
-    return _call(actor, "POST", "/model-control/profiles", await _object_body(request))
+    return _call(actor, "POST", "/model-control/profiles", await _safe_profile_body(request))
 
 
 @router.patch("/model-control/profiles/{model_profile_uuid}")
@@ -97,7 +97,7 @@ async def patch_model_control_profile(
         actor,
         "PATCH",
         f"/model-control/profiles/{quote(model_profile_uuid, safe='')}",
-        await _object_body(request),
+        await _safe_profile_body(request),
     )
 
 
@@ -329,6 +329,36 @@ for _action in (
         _attachment_action(_action),
         methods=["POST"],
     )
+
+
+_ALLOWED_SECRET_REFERENCE_FIELDS = {"secret_strategy", "secret_env_var_name"}
+
+
+async def _safe_profile_body(request: Request) -> dict[str, Any]:
+    payload = await _object_body(request)
+    if _contains_raw_secret_field(payload):
+        raise HTTPException(
+            status_code=422,
+            detail="Raw provider secrets are not accepted; use an environment variable reference.",
+        )
+    return payload
+
+
+def _contains_raw_secret_field(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized = str(key).lower().replace("-", "_")
+            secret_named = any(
+                fragment in normalized
+                for fragment in ("api_key", "apikey", "token", "password", "credential", "secret")
+            )
+            if secret_named and normalized not in _ALLOWED_SECRET_REFERENCE_FIELDS:
+                return True
+            if _contains_raw_secret_field(child):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_raw_secret_field(item) for item in value)
+    return False
 
 
 async def _object_body(request: Request) -> dict[str, Any]:
