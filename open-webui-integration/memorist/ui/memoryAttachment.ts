@@ -72,7 +72,7 @@ const SECRET_PATTERNS = [
   /\bsk-[a-zA-Z0-9_-]{8,}\b/g,
   /\beyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\b/g,
   /\b(bearer\s+)[a-z0-9._~+/=-]{8,}/gi,
-  /\b(api[_-]?key|access[_-]?token|token|password|secret)\s*[:=]\s*[^\s,;]{4,}/gi,
+  /\b(api(?:[_ -]?key)|access(?:[_ -]?token)|token|password|secret)\s*[:=]\s*[^\s,;]{4,}/gi,
 ];
 
 function escapeHtml(value: unknown): string {
