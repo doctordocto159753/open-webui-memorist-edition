@@ -18,7 +18,13 @@ def create_app() -> Any:
     verified_user_dependency = Depends(get_verified_user)
 
     def verified_memorist_actor(user: Any = verified_user_dependency) -> OpenWebUIActor:
-        return OpenWebUIActor(user_uuid=str(user.id), workspace_uuid=workspace_uuid)
+        role = str(getattr(user, "role", "")).lower()
+        is_admin = bool(getattr(user, "is_admin", False)) or role in {"admin", "owner"}
+        return OpenWebUIActor(
+            user_uuid=str(user.id),
+            workspace_uuid=workspace_uuid,
+            is_admin=is_admin,
+        )
 
     app.dependency_overrides[require_openwebui_actor] = verified_memorist_actor
     if not any(route.path.startswith("/api/v1/memorist") for route in app.routes):
