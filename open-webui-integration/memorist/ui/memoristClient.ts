@@ -289,7 +289,7 @@ export class MemoristClient {
     return this.controlPut("/memory-control/policy/defaults", payload);
   }
   async previewAttachment(attachmentUuid: string): Promise<MemoristAttachmentPreview> {
-    return this.controlGet(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/preview`);
+    return this.controlGet(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/display`);
   }
   async fetchAttachmentSources(attachmentUuid: string): Promise<unknown> {
     return this.controlGet(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/sources`);
