@@ -1,0 +1,73 @@
+name: PR5-C Memory Node Configuration
+
+"on":
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pr5c-memory-node-config-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-contract:
+    name: Memory Node Config — Backend Contract
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
+      - uses: astral-sh/setup-uv@v5
+      - name: Install backend dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras --quiet
+      - name: Verify setup, model-control, and Memory Off contracts
+        working-directory: memorist-core
+        run: |
+          uv run pytest             tests/test_pr5c_memory_node_setup.py             tests/test_pr5b_memory_workflow_toggle.py             ../open-webui-integration/memorist/tests/test_pr5c_backend_proxy.py             -q --tb=short
+      - name: Python lint, format, and typed-core checks
+        working-directory: memorist-core
+        run: |
+          TARGETS="src/memcore/api/routes_model_control.py src/memcore/model_control/setup.py tests/test_pr5c_memory_node_setup.py ../open-webui-integration/memorist/backend/router.py ../open-webui-integration/memorist/backend/openwebui_entrypoint.py ../open-webui-integration/memorist/tests/test_pr5c_backend_proxy.py"
+          uv run ruff check $TARGETS
+          uv run ruff format --check $TARGETS
+          uv run mypy             src/memcore/api/routes_model_control.py             src/memcore/model_control/setup.py             tests/test_pr5c_memory_node_setup.py
+
+  frontend-ux:
+    name: Memory Node Config — Frontend UX
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Setup wizard component contract
+        run: npm test -- tests/frontend/memoryNodeSetup.test.ts
+      - name: Type and lint checks
+        run: |
+          npm run typecheck
+          npm run lint
+      - run: git diff --check
+
+  secret-redaction:
+    name: Memory Node Config — Secret Redaction
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
+      - uses: astral-sh/setup-uv@v5
+      - name: Install backend dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras --quiet
+      - name: Verify provider and profile redaction boundaries
+        working-directory: memorist-core
+        run: |
+          uv run pytest             tests/test_model_control_plane.py             tests/test_pr5c_memory_node_setup.py             -k "secret or redact or auth_failure or profile_summary or raw_secret"             -q --tb=short
