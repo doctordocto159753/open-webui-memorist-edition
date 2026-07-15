@@ -10,6 +10,7 @@ from memcore.memory_worker.semantic.candidate_mapping import (
     candidate_mapping_for_route,
 )
 from memcore.memory_worker.semantic.candidate_service import (
+    CANDIDATE_SERVICE_VERSION,
     CandidateDraft,
     CandidateServiceInput,
     LinguisticCandidateComplements,
@@ -52,6 +53,7 @@ from memcore.memory_worker.semantic.routing_policy import (
 )
 
 __all__ = [
+    "CANDIDATE_SERVICE_VERSION",
     "CandidateAuthorityContext",
     "CandidateDraft",
     "CandidateProvenanceDecision",
