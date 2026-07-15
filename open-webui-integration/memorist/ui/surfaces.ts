@@ -1,6 +1,7 @@
 import "./processingNodes";
 import "./importWorkflow";
 import "./memoryAttachment";
+import "./memoryWorkflowToggle";
 
 import { MEMORIST_PROCESSING_NODES_ROUTE } from "./processingNodes";
 
@@ -18,6 +19,7 @@ export const MEMORIST_UI_SURFACES = [
   "SettingsTab",
   "MemoristProcessingNodesSettings",
   "MemoryAttachment",
+  "MemoryWorkflowToggle",
 ] as const;
 
 export type MemoristSurface = typeof MEMORIST_UI_SURFACES[number];
@@ -89,3 +91,8 @@ export function renderMemoristSettingsPanel(path: string): HTMLElement | undefin
 }
 
 export { mountMemoryAttachmentForMessage } from "./memoryAttachment";
+export {
+  applyMemoryWorkflowToRequest,
+  applyOriginalMemoryWorkflowToRegeneration,
+  mountMemoryWorkflowToggleNearComposer,
+} from "./memoryWorkflowToggle";

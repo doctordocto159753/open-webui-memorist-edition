@@ -1,0 +1,66 @@
+name: PR5-B Memory Workflow Toggle
+
+"on":
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pr5b-memory-workflow-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-contract:
+    name: Memory Workflow Toggle — Backend Contract
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
+      - uses: astral-sh/setup-uv@v5
+      - name: Install backend dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras --quiet
+      - name: Verify workflow, filter, and proxy contracts
+        working-directory: memorist-core
+        run: |
+          uv run pytest \
+            tests/test_pr5b_memory_workflow_toggle.py \
+            tests/test_memory_control_contract_lite.py \
+            ../open-webui-integration/memorist/tests/test_filter_contract.py \
+            ../open-webui-integration/memorist/tests/test_backend_proxy.py \
+            -q --tb=short
+      - name: Python lint, format, and type checks
+        working-directory: memorist-core
+        run: |
+          TARGETS="src/memcore/memory_control/repository.py src/memcore/api/routes_memory_control.py tests/test_pr5b_memory_workflow_toggle.py ../open-webui-integration/memorist/backend/router.py ../open-webui-integration/memorist/filter/memorist_memory_filter.py ../open-webui-integration/memorist/shared/payload_parser.py ../open-webui-integration/memorist/tests/test_filter_contract.py ../open-webui-integration/memorist/tests/test_backend_proxy.py"
+          uv run ruff check $TARGETS
+          uv run ruff format --check $TARGETS
+          uv run mypy \
+            src/memcore/memory_control/repository.py \
+            src/memcore/api/routes_memory_control.py \
+            tests/test_pr5b_memory_workflow_toggle.py
+
+  frontend-ux:
+    name: Memory Workflow Toggle — Frontend UX
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install frontend dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Component tests
+        run: npm test -- tests/frontend/memoryWorkflowToggle.test.ts
+      - name: Type and lint checks
+        run: |
+          npm run typecheck
+          npm run lint
+      - name: Diff check
+        run: git diff --check

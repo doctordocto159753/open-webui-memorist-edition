@@ -16,6 +16,7 @@ from shared.payload_parser import (  # noqa: E402
     insert_memory_attachment,
     parse_inlet_body,
     parse_outlet_body,
+    remove_memory_attachments,
     response_key,
     safe_payload,
 )
@@ -38,6 +39,7 @@ class Filter:
 
     def inlet(self, body: dict[str, Any], __user__: dict[str, Any] | None = None) -> dict[str, Any]:
         config = _config_from_valves(self.valves)
+        remove_memory_attachments(body)
         if not config.enabled:
             return body
         parsed = parse_inlet_body(body, __user__)
@@ -65,9 +67,26 @@ class Filter:
             metadata["memorist_policy_source"] = policy.source
             metadata["memorist_runtime_profile"] = policy.runtime_profile
             metadata["memorist_attachment_review"] = policy.attachment_review
+            metadata["memorist_capture_enabled"] = policy.capture_enabled
             metadata["memorist_recall_enabled"] = policy.recall_enabled
+            metadata["memorist_attachment_enabled"] = policy.attachment_enabled
+            workflow_on = bool(
+                policy.capture_enabled and policy.recall_enabled and policy.attachment_enabled
+            )
+            metadata["memorist_memory_workflow"] = (
+                "on" if workflow_on else ("off" if policy.private else "limited")
+            )
             metadata["openwebui_native_memory_independent"] = True
             if policy.private:
+                for key in (
+                    "memorist_approved_attachment_uuid",
+                    "memorist_input_message_uuid",
+                    "memorist_session_uuid",
+                    "memorist_regeneration_uuid",
+                    "memorist_review_disposition",
+                    "memorist_review_ui_active",
+                ):
+                    metadata.pop(key, None)
                 metadata["memorist_private"] = True
                 return body
             if policy.mode == "no_recall":
@@ -79,6 +98,7 @@ class Filter:
                 metadata.pop("memorist_attachment_uuid", None)
                 metadata.pop("memorist_retrieval_run_uuid", None)
                 metadata.pop("memorist_attachment_pending_review", None)
+                metadata.pop("memorist_approved_attachment_uuid", None)
             if (
                 policy.mode == "no_recall"
                 and metadata.get("memorist_regeneration_uuid")

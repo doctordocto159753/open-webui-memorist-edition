@@ -79,6 +79,21 @@ export type MemoristAttachmentPreview = {
   items: MemoristAttachmentDisplayItem[];
 };
 
+export type MemoryWorkflowState = {
+  chat_uuid: string;
+  session_uuid?: string | null;
+  memory_enabled: boolean;
+  capture_enabled: boolean;
+  recall_enabled: boolean;
+  attachment_enabled: boolean;
+  state: "on" | "off" | "limited";
+  scope: "chat";
+  source: "chat" | "user" | "system";
+  persisted: boolean;
+  updated_at?: string | null;
+  regeneration_policy: "original_turn";
+};
+
 export type MemoristPolicyResolution = {
   policy: {
     mode: MemoristTurnPolicy;
@@ -288,6 +303,20 @@ export class MemoristClient {
   }): Promise<unknown> {
     return this.controlPut("/memory-control/policy/defaults", payload);
   }
+  async getMemoryWorkflowState(chatUuid: string): Promise<MemoryWorkflowState> {
+    return this.controlGet(
+      `/memory-control/workflow/chats/${encodeURIComponent(chatUuid)}`,
+    );
+  }
+  async setMemoryWorkflowState(
+    chatUuid: string,
+    memoryEnabled: boolean,
+  ): Promise<MemoryWorkflowState> {
+    return this.controlPatch(
+      `/memory-control/workflow/chats/${encodeURIComponent(chatUuid)}`,
+      { memory_enabled: memoryEnabled },
+    );
+  }
   async previewAttachment(attachmentUuid: string): Promise<MemoristAttachmentPreview> {
     return this.controlGet(`/memory-control/attachments/${encodeURIComponent(attachmentUuid)}/display`);
   }
@@ -409,6 +438,17 @@ export class MemoristClient {
   private async controlPost<T = unknown>(path: string, body: unknown): Promise<T> {
     const response = await fetch(`${this.controlBaseUrl}${path}`, {
       method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error(await this.errorDetail(response));
+    return response.json() as Promise<T>;
+  }
+
+  private async controlPatch<T = unknown>(path: string, body: unknown): Promise<T> {
+    const response = await fetch(`${this.controlBaseUrl}${path}`, {
+      method: "PATCH",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

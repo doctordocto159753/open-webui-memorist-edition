@@ -222,3 +222,46 @@ def test_release_compose_keeps_core_command_and_mounts_authenticated_ui_router()
     assert any(
         str(volume).endswith(":/memorist-integration/memorist:ro") for volume in webui["volumes"]
     )
+
+
+def test_memory_workflow_proxy_is_authenticated_and_actor_signed() -> None:
+    FakeCoreClient.calls = []
+    unauthenticated = _app(authenticated=False).get(
+        "/api/v1/memorist/memory-control/workflow/chats/chat-1"
+    )
+    assert unauthenticated.status_code == 401
+
+    client = _app(authenticated=True)
+    fetched = client.get("/api/v1/memorist/memory-control/workflow/chats/chat-1")
+    assert fetched.status_code == 200
+    read_call = FakeCoreClient.calls[-1]
+    assert read_call["method"] == "GET"
+    assert read_call["path"] == "/memcore/memory-control/workflow/chats/chat-1"
+    assert read_call["user_id"] == "trusted-user"
+    assert read_call["workspace_uuid"] == "trusted-workspace"
+
+    updated = client.patch(
+        "/api/v1/memorist/memory-control/workflow/chats/chat-1",
+        json={"memory_enabled": False},
+    )
+    assert updated.status_code == 200
+    write_call = FakeCoreClient.calls[-1]
+    assert write_call["method"] == "PATCH"
+    assert write_call["path"] == "/memcore/memory-control/workflow/chats/chat-1"
+    assert write_call["payload"] == {"memory_enabled": False}
+    assert write_call["user_id"] == "trusted-user"
+    assert write_call["workspace_uuid"] == "trusted-workspace"
+
+
+def test_memory_workflow_proxy_rejects_identity_and_invalid_state_fields() -> None:
+    response = _app(authenticated=True).patch(
+        "/api/v1/memorist/memory-control/workflow/chats/chat-1",
+        json={"memory_enabled": False, "user_uuid": "victim"},
+    )
+    assert response.status_code == 422
+
+    response = _app(authenticated=True).patch(
+        "/api/v1/memorist/memory-control/workflow/chats/chat-1",
+        json={"memory_enabled": "false"},
+    )
+    assert response.status_code == 422

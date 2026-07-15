@@ -126,7 +126,9 @@ def _module():
     return module
 
 
-def test_preflight_attached_preserves_user_and_inserts_separate_context(monkeypatch) -> None:
+def test_preflight_attached_preserves_user_and_inserts_separate_context(
+    monkeypatch,
+) -> None:
     monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
     monkeypatch.setenv("FAKE_PREFLIGHT_STATUS", "attached")
     body = {
@@ -189,7 +191,9 @@ def test_review_capable_frontend_keeps_prepared_generation_pending(monkeypatch) 
     assert result["metadata"]["memorist_attachment_pending_review"] is True
 
 
-def test_review_capable_frontend_delivers_exact_server_approved_generation(monkeypatch) -> None:
+def test_review_capable_frontend_delivers_exact_server_approved_generation(
+    monkeypatch,
+) -> None:
     monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
     FakeClient.delivery_calls = 0
     body = {
@@ -208,7 +212,9 @@ def test_review_capable_frontend_delivers_exact_server_approved_generation(monke
     assert FakeClient.last_assistant_attachment == "attachment-1"
 
 
-def test_review_removed_then_send_without_memorist_clears_stale_attribution(monkeypatch) -> None:
+def test_review_removed_then_send_without_memorist_clears_stale_attribution(
+    monkeypatch,
+) -> None:
     monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
     FakeClient.last_assistant_attachment = "stale"
     body = {
@@ -232,7 +238,9 @@ def test_review_removed_then_send_without_memorist_clears_stale_attribution(monk
     assert FakeClient.last_assistant_turn_policy == "full"
 
 
-def test_review_cancelled_then_send_without_memorist_captures_assistant(monkeypatch) -> None:
+def test_review_cancelled_then_send_without_memorist_captures_assistant(
+    monkeypatch,
+) -> None:
     monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
     FakeClient.assistant_calls = 0
     body = {
@@ -253,7 +261,9 @@ def test_review_cancelled_then_send_without_memorist_captures_assistant(monkeypa
     assert FakeClient.last_capture_idempotency_key == "review-prepare:user-1:review-message"
 
 
-def test_private_resolves_no_session_and_creates_no_capture_or_preflight(monkeypatch) -> None:
+def test_private_resolves_no_session_and_creates_no_capture_or_preflight(
+    monkeypatch,
+) -> None:
     monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
     FakeClient.session_calls = FakeClient.capture_calls = FakeClient.preflight_calls = 0
     body = {
@@ -267,7 +277,9 @@ def test_private_resolves_no_session_and_creates_no_capture_or_preflight(monkeyp
     assert FakeClient.session_calls == FakeClient.capture_calls == FakeClient.preflight_calls == 0
 
 
-def test_missing_trusted_user_skips_all_memorist_work_for_every_policy(monkeypatch) -> None:
+def test_missing_trusted_user_skips_all_memorist_work_for_every_policy(
+    monkeypatch,
+) -> None:
     monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
     for mode in ("full", "no_recall", "private"):
         FakeClient.session_calls = FakeClient.capture_calls = FakeClient.preflight_calls = 0
@@ -352,7 +364,10 @@ def test_valves_override_runtime_config(monkeypatch) -> None:
     filter_instance.valves.token_budget = 777
     filter_instance.valves.timeout_ms = 2500
     filter_instance.valves.retrieval_mode = "high_precision"
-    body = {"conversation_id": "chat-1", "messages": [{"role": "user", "content": "hello"}]}
+    body = {
+        "conversation_id": "chat-1",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
 
     filter_instance.inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
 
@@ -444,3 +459,88 @@ def test_contract_payload_fixtures_parse() -> None:
     assert parsed_inlet.temporary_chat_id == "tmp-chat-1"
     assert parsed_inlet.first_message_hash is not None
     assert parsed_outlet.assistant_text == "assistant answer"
+
+
+def test_private_workflow_clears_stale_context_and_skips_all_memory_calls(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
+    FakeClient.session_calls = FakeClient.capture_calls = FakeClient.preflight_calls = 0
+    body = {
+        "conversation_id": "chat-off",
+        "memorist": {"turn_policy": "private"},
+        "metadata": {
+            "memorist_delivered_attachment_uuid": "stale-attachment",
+            "memorist_approved_attachment_uuid": "stale-approved",
+            "memorist_input_message_uuid": "stale-input",
+            "memorist_session_uuid": "stale-session",
+        },
+        "messages": [
+            {
+                "role": "system",
+                "name": "memorist_context",
+                "content": "stale private memory",
+            },
+            {"role": "user", "id": "user-off", "content": "do not remember this"},
+        ],
+    }
+
+    result = (
+        _module()
+        .Filter()
+        .inlet(
+            body,
+            {"id": "user-1", "workspace_id": "workspace-1"},
+        )
+    )
+
+    assert result["messages"] == [
+        {"role": "user", "id": "user-off", "content": "do not remember this"}
+    ]
+    assert FakeClient.session_calls == 0
+    assert FakeClient.capture_calls == 0
+    assert FakeClient.preflight_calls == 0
+    assert result["metadata"]["memorist_memory_workflow"] == "off"
+    assert result["metadata"]["memorist_capture_enabled"] is False
+    assert result["metadata"]["memorist_recall_enabled"] is False
+    assert result["metadata"]["memorist_attachment_enabled"] is False
+    assert result["metadata"]["memorist_private"] is True
+    for key in (
+        "memorist_delivered_attachment_uuid",
+        "memorist_approved_attachment_uuid",
+        "memorist_input_message_uuid",
+        "memorist_session_uuid",
+    ):
+        assert key not in result["metadata"]
+
+
+def test_stale_context_is_replaced_once_when_memory_is_on(monkeypatch) -> None:
+    monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
+    monkeypatch.setenv("FAKE_PREFLIGHT_STATUS", "attached")
+    body = {
+        "conversation_id": "chat-on",
+        "metadata": {"memorist_delivered_attachment_uuid": "stale"},
+        "messages": [
+            {"role": "system", "name": "memorist_context", "content": "stale"},
+            {"role": "user", "id": "fresh-user", "content": "fresh turn"},
+        ],
+    }
+
+    result = (
+        _module()
+        .Filter()
+        .inlet(
+            body,
+            {"id": "user-1", "workspace_id": "workspace-1"},
+        )
+    )
+
+    contexts = [
+        message
+        for message in result["messages"]
+        if isinstance(message, dict) and message.get("name") == "memorist_context"
+    ]
+    assert len(contexts) == 1
+    assert "safe memory" in contexts[0]["content"]
+    assert result["metadata"]["memorist_memory_workflow"] == "on"
+    assert result["metadata"]["memorist_delivered_attachment_uuid"] == "attachment-1"

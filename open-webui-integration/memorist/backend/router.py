@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Annotated, Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -150,6 +151,32 @@ async def set_policy_default(request: Request, actor: AuthenticatedActor) -> dic
         payload["scope_uuid"] = actor.user_uuid
     payload["workspace_uuid"] = actor.workspace_uuid
     return _call(actor, "PUT", "/memory-control/policy/defaults", payload)
+
+
+@router.get("/memory-control/workflow/chats/{chat_uuid}")
+def get_memory_workflow(chat_uuid: str, actor: AuthenticatedActor) -> dict[str, Any]:
+    return _call(
+        actor,
+        "GET",
+        f"/memory-control/workflow/chats/{quote(chat_uuid, safe='')}",
+    )
+
+
+@router.patch("/memory-control/workflow/chats/{chat_uuid}")
+async def update_memory_workflow(
+    chat_uuid: str,
+    request: Request,
+    actor: AuthenticatedActor,
+) -> dict[str, Any]:
+    payload = await _object_body(request)
+    if set(payload) != {"memory_enabled"} or not isinstance(payload.get("memory_enabled"), bool):
+        raise HTTPException(status_code=422, detail="memory_enabled boolean required")
+    return _call(
+        actor,
+        "PATCH",
+        f"/memory-control/workflow/chats/{quote(chat_uuid, safe='')}",
+        {"memory_enabled": payload["memory_enabled"]},
+    )
 
 
 @router.get("/memory-control/attachments/{attachment_uuid}/preview")
