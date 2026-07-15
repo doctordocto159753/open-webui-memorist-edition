@@ -26,7 +26,9 @@ def require_openwebui_actor(request: Request) -> OpenWebUIActor:
     user_uuid = getattr(value, "user_uuid", None)
     workspace_uuid = getattr(value, "workspace_uuid", None)
     if not user_uuid or not workspace_uuid:
-        raise HTTPException(status_code=401, detail="authenticated Open WebUI actor required")
+        raise HTTPException(
+            status_code=401, detail="authenticated Open WebUI actor required"
+        )
     return OpenWebUIActor(str(user_uuid), str(workspace_uuid))
 
 
@@ -54,7 +56,9 @@ async def resolve_policy(request: Request, actor: AuthenticatedActor) -> dict[st
     payload = await _object_body(request)
     payload.pop("user_uuid", None)
     payload.pop("workspace_uuid", None)
-    payload.update({"user_uuid": actor.user_uuid, "workspace_uuid": actor.workspace_uuid})
+    payload.update(
+        {"user_uuid": actor.user_uuid, "workspace_uuid": actor.workspace_uuid}
+    )
     return _call(actor, "POST", "/memory-control/policy/resolve", payload)
 
 
@@ -67,7 +71,9 @@ def openwebui_status(actor: AuthenticatedActor) -> dict[str, Any]:
 
 
 @router.post("/memory-control/review/prepare")
-async def prepare_attachment_review(request: Request, actor: AuthenticatedActor) -> dict[str, Any]:
+async def prepare_attachment_review(
+    request: Request, actor: AuthenticatedActor
+) -> dict[str, Any]:
     payload = await _object_body(request)
     content = str(payload.get("content") or "").strip()
     message_id = str(payload.get("message_id") or "").strip()
@@ -126,7 +132,9 @@ async def prepare_attachment_review(request: Request, actor: AuthenticatedActor)
         target_model=_optional_text(payload.get("target_model")),
         model_provider=_optional_text(payload.get("model_provider")),
         model_context_window=_optional_int(payload.get("model_context_window")),
-        recent_conversation_text=_optional_text(payload.get("recent_conversation_text")),
+        recent_conversation_text=_optional_text(
+            payload.get("recent_conversation_text")
+        ),
         turn_policy=policy.mode,
         user_id=actor.user_uuid,
         workspace_uuid=actor.workspace_uuid,
@@ -144,7 +152,9 @@ async def prepare_attachment_review(request: Request, actor: AuthenticatedActor)
 
 
 @router.put("/memory-control/policy/defaults")
-async def set_policy_default(request: Request, actor: AuthenticatedActor) -> dict[str, Any]:
+async def set_policy_default(
+    request: Request, actor: AuthenticatedActor
+) -> dict[str, Any]:
     payload = await _object_body(request)
     payload.pop("workspace_uuid", None)
     if payload.get("scope_type") == "user":
@@ -182,17 +192,23 @@ async def update_memory_workflow(
 
 
 @router.get("/memory-control/attachments/{attachment_uuid}/preview")
-def preview_attachment(attachment_uuid: str, actor: AuthenticatedActor) -> dict[str, Any]:
+def preview_attachment(
+    attachment_uuid: str, actor: AuthenticatedActor
+) -> dict[str, Any]:
     return _call(actor, "GET", f"/memory-control/attachments/{attachment_uuid}/preview")
 
 
 @router.get("/memory-control/attachments/{attachment_uuid}/display")
-def display_attachment(attachment_uuid: str, actor: AuthenticatedActor) -> dict[str, Any]:
+def display_attachment(
+    attachment_uuid: str, actor: AuthenticatedActor
+) -> dict[str, Any]:
     return _call(actor, "GET", f"/memory-control/attachments/{attachment_uuid}/display")
 
 
 @router.get("/memory-control/attachments/{attachment_uuid}/sources")
-def attachment_sources(attachment_uuid: str, actor: AuthenticatedActor) -> dict[str, Any]:
+def attachment_sources(
+    attachment_uuid: str, actor: AuthenticatedActor
+) -> dict[str, Any]:
     return _call(actor, "GET", f"/memory-control/attachments/{attachment_uuid}/sources")
 
 
