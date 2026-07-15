@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
 from typing import Any
 
 from memcore.memory_control.policy import MemoristTurnPolicy, normalize_turn_policy
@@ -55,6 +56,16 @@ class MemoryControlRepository:
                 selected = str(chat_row["turn_policy"])
                 attachment_review = bool(chat_row["attachment_review"])
                 source = "chat"
+        if chat_uuid and user_uuid:
+            actor_chat_row = self._policy_row(
+                "chat",
+                self.actor_chat_scope_uuid(user_uuid, chat_uuid),
+                workspace_uuid,
+            )
+            if actor_chat_row is not None:
+                selected = str(actor_chat_row["turn_policy"])
+                attachment_review = bool(actor_chat_row["attachment_review"])
+                source = "chat"
         if turn_override is not None:
             selected = turn_override
             source = "turn"
@@ -63,6 +74,72 @@ class MemoryControlRepository:
         return ResolvedTurnPolicy(
             policy=normalize_turn_policy(selected),
             source=source,
+            attachment_review=attachment_review,
+        )
+
+    @staticmethod
+    def actor_chat_scope_uuid(user_uuid: str, chat_uuid: str) -> str:
+        """Return an opaque, actor-scoped policy key without persisting raw identity pairs."""
+        digest = sha256(f"{user_uuid}\0{chat_uuid}".encode()).hexdigest()
+        return f"pr5b:{digest}"
+
+    def resolve_actor_chat_policy(
+        self,
+        *,
+        system_default: str,
+        workspace_uuid: str | None,
+        user_uuid: str,
+        chat_uuid: str,
+    ) -> ResolvedTurnPolicy:
+        """Resolve system/user defaults plus this actor's persisted chat toggle only."""
+        resolved = self.resolve_policy(
+            system_default=system_default,
+            workspace_uuid=workspace_uuid,
+            user_uuid=user_uuid,
+            chat_uuid=None,
+            turn_override=None,
+        )
+        row = self._policy_row(
+            "chat",
+            self.actor_chat_scope_uuid(user_uuid, chat_uuid),
+            workspace_uuid,
+        )
+        if row is None:
+            return resolved
+        return ResolvedTurnPolicy(
+            policy=normalize_turn_policy(str(row["turn_policy"])),
+            source="chat",
+            attachment_review=bool(row["attachment_review"]),
+        )
+
+    def actor_chat_default(
+        self,
+        *,
+        user_uuid: str,
+        chat_uuid: str,
+        workspace_uuid: str | None,
+    ) -> dict[str, Any] | None:
+        row = self._policy_row(
+            "chat",
+            self.actor_chat_scope_uuid(user_uuid, chat_uuid),
+            workspace_uuid,
+        )
+        return dict(row) if row is not None else None
+
+    def set_actor_chat_default(
+        self,
+        *,
+        user_uuid: str,
+        chat_uuid: str,
+        workspace_uuid: str | None,
+        turn_policy: str,
+        attachment_review: bool,
+    ) -> dict[str, Any]:
+        return self.set_default(
+            scope_type="chat",
+            scope_uuid=self.actor_chat_scope_uuid(user_uuid, chat_uuid),
+            workspace_uuid=workspace_uuid,
+            turn_policy=turn_policy,
             attachment_review=attachment_review,
         )
 
