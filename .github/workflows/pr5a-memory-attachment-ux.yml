@@ -1,0 +1,57 @@
+name: PR5-A Memory Attachment UX
+
+"on":
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pr5a-memory-attachment-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  attachment-display-backend:
+    name: Memory Attachment — Backend Contract
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras --quiet
+      - name: Test safe display shaping
+        working-directory: memorist-core
+        run: uv run pytest tests/test_pr5a_attachment_display.py ../open-webui-integration/memorist/tests/test_backend_proxy.py -q --tb=short
+      - name: Python lint, format, and type checks
+        working-directory: memorist-core
+        run: |
+          TARGETS="src/memcore/attachments/display.py src/memcore/attachments/builder.py src/memcore/api/routes_memory_control.py tests/test_pr5a_attachment_display.py ../open-webui-integration/memorist/backend/router.py ../open-webui-integration/memorist/tests/test_backend_proxy.py"
+          uv run ruff check $TARGETS
+          uv run ruff format --check $TARGETS
+          uv run mypy src/memcore/attachments/display.py tests/test_pr5a_attachment_display.py
+
+  attachment-display-frontend:
+    name: Memory Attachment — Frontend UX
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          show-progress: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Test attachment component
+        run: npm test -- tests/frontend/memoryAttachment.test.ts
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Diff check
+        run: git diff --check

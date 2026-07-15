@@ -129,4 +129,5 @@ def _item_to_packet(item: ScoredMemoryItem) -> dict[str, Any]:
         "source_authority_label": item.source_authority_label,
         "evidence_text": item.evidence_text,
         "conflict_status": item.conflict_status,
+        "retrieval_score": round(item.final_score, 6),
     }

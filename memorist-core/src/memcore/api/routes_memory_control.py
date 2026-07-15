@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from memcore.attachments.display import build_attachment_display
 from memcore.config import get_settings
 from memcore.memory_control import MemoryControlRepository, memory_control_connection
 from memcore.memory_control.policy import normalize_turn_policy, reject_runtime_override
@@ -76,7 +77,10 @@ def resolve_policy(request: PolicyResolveRequest) -> dict[str, Any]:
         if request.workspace_uuid not in {None, actor.workspace_uuid}:
             raise HTTPException(status_code=403, detail="workspace scope mismatch")
         request = request.model_copy(
-            update={"user_uuid": actor.user_uuid, "workspace_uuid": actor.workspace_uuid}
+            update={
+                "user_uuid": actor.user_uuid,
+                "workspace_uuid": actor.workspace_uuid,
+            }
         )
     reject_runtime_override(request.model_dump(mode="json").get("memorist"))
     with memory_control_connection(settings) as connection:
@@ -158,6 +162,25 @@ def preview_attachment(
         return _public_attachment(attachment)
 
 
+@router.get("/attachments/{attachment_uuid}/display", response_model=None)
+def display_attachment(
+    attachment_uuid: str,
+    x_memorist_user_id: str | None = Header(default=None),
+    x_memorist_workspace_id: str | None = Header(default=None),
+) -> dict[str, Any]:
+    actor_user, actor_workspace = _actor(x_memorist_user_id, x_memorist_workspace_id)
+    settings = get_settings()
+    with memory_control_connection(settings) as connection:
+        attachment = MemoryControlRepository(
+            connection, settings.runtime_profile
+        ).attachment_for_actor(
+            attachment_uuid, user_uuid=actor_user, workspace_uuid=actor_workspace
+        )
+        if attachment is None:
+            raise HTTPException(status_code=404, detail="attachment not found")
+        return _display_attachment(connection, attachment)
+
+
 @router.get("/attachments/{attachment_uuid}/sources", response_model=None)
 def fetch_attachment_sources(
     attachment_uuid: str,
@@ -183,7 +206,10 @@ def fetch_attachment_sources(
             """,
             (attachment_uuid, actor_workspace),
         ).fetchall()
-        return {"attachment_uuid": attachment_uuid, "sources": [dict(row) for row in rows]}
+        return {
+            "attachment_uuid": attachment_uuid,
+            "sources": [dict(row) for row in rows],
+        }
 
 
 def _transition(
@@ -221,7 +247,11 @@ def approve_attachment(
     x_memorist_workspace_id: str | None = Header(default=None),
 ) -> dict[str, Any]:
     return _transition(
-        attachment_uuid, "approved", request, x_memorist_user_id, x_memorist_workspace_id
+        attachment_uuid,
+        "approved",
+        request,
+        x_memorist_user_id,
+        x_memorist_workspace_id,
     )
 
 
@@ -233,7 +263,11 @@ def suppress_attachment(
     x_memorist_workspace_id: str | None = Header(default=None),
 ) -> dict[str, Any]:
     return _transition(
-        attachment_uuid, "suppressed", request, x_memorist_user_id, x_memorist_workspace_id
+        attachment_uuid,
+        "suppressed",
+        request,
+        x_memorist_user_id,
+        x_memorist_workspace_id,
     )
 
 
@@ -261,7 +295,11 @@ def record_attachment_delivery(
     x_memorist_workspace_id: str | None = Header(default=None),
 ) -> dict[str, Any]:
     return _transition(
-        attachment_uuid, "delivered", request, x_memorist_user_id, x_memorist_workspace_id
+        attachment_uuid,
+        "delivered",
+        request,
+        x_memorist_user_id,
+        x_memorist_workspace_id,
     )
 
 
@@ -273,7 +311,11 @@ def record_attachment_rejection(
     x_memorist_workspace_id: str | None = Header(default=None),
 ) -> dict[str, Any]:
     return _transition(
-        attachment_uuid, "user_rejected", request, x_memorist_user_id, x_memorist_workspace_id
+        attachment_uuid,
+        "user_rejected",
+        request,
+        x_memorist_user_id,
+        x_memorist_workspace_id,
     )
 
 
@@ -302,7 +344,8 @@ def regenerate_without_recall(
             raise HTTPException(status_code=409, detail="expired attachment cannot be regenerated")
         input_message_uuid = str(attachment["input_message_uuid"])
         message = connection.execute(
-            "SELECT raw_text FROM messages WHERE message_uuid = ?", (input_message_uuid,)
+            "SELECT raw_text FROM messages WHERE message_uuid = ?",
+            (input_message_uuid,),
         ).fetchone()
         if message is None:
             raise HTTPException(status_code=409, detail="original input message is unavailable")
@@ -389,6 +432,23 @@ def _public_attachment(attachment: dict[str, Any]) -> dict[str, Any]:
         "input_message_uuid": attachment["input_message_uuid"],
         "retrieval_run_uuid": attachment.get("retrieval_run_uuid"),
         "rendered_attachment": attachment.get("rendered_attachment"),
+        "token_count": attachment.get("token_count", 0),
+        "lifecycle_status": attachment.get("lifecycle_status", "prepared"),
+        "delivery_state": attachment.get("lifecycle_status", "prepared"),
+        "user_disposition": attachment.get("user_disposition", "none"),
+        "attachment_review": bool(attachment.get("attachment_review", False)),
+        "generation": attachment.get("generation", 1),
+        "created_at": attachment.get("created_at"),
+    }
+
+
+def _display_attachment(connection: Any, attachment: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **build_attachment_display(connection, attachment),
+        "attachment_uuid": attachment["attachment_uuid"],
+        "session_uuid": attachment["session_uuid"],
+        "input_message_uuid": attachment["input_message_uuid"],
+        "retrieval_run_uuid": attachment.get("retrieval_run_uuid"),
         "token_count": attachment.get("token_count", 0),
         "lifecycle_status": attachment.get("lifecycle_status", "prepared"),
         "delivery_state": attachment.get("lifecycle_status", "prepared"),
