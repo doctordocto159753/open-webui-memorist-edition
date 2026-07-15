@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import ValidationError
 
 from memcore.config import Settings, get_settings
 from memcore.model_control.postgres_repository import PostgresModelControlRepository
@@ -25,6 +26,7 @@ from memcore.model_control.schemas import (
     ProfileTestRequest,
 )
 from memcore.model_control.security import sanitize_error_message
+from memcore.model_control.setup import build_setup_status
 from memcore.storage.postgres.migrations import apply_postgres_migrations
 from memcore.storage.sqlite import connect
 
@@ -34,6 +36,17 @@ router = APIRouter(prefix="/memcore/model-control", tags=["Model Control Plane"]
 @router.get("/roles", response_model=None)
 def list_roles() -> dict[str, Any]:
     return {"items": list_role_specs()}
+
+
+@router.get("/setup/status", response_model=None)
+def setup_status(workspace_uuid: str | None = None) -> dict[str, Any]:
+    settings = get_settings()
+    with _connection() as connection:
+        return build_setup_status(
+            _repository(connection),
+            runtime_profile=settings.runtime_profile,
+            workspace_uuid=workspace_uuid,
+        )
 
 
 @router.get("/profiles", response_model=None)
@@ -47,13 +60,20 @@ def list_profiles(role: str | None = Query(default=None)) -> dict[str, Any]:
 
 
 @router.post("/profiles", response_model=None)
-def create_profile(request: ModelProfileCreate) -> dict[str, Any]:
+def create_profile(request: dict[str, Any]) -> dict[str, Any]:
+    try:
+        validated = ModelProfileCreate.model_validate(request)
+    except ValidationError as error:
+        raise HTTPException(status_code=422, detail=_safe_validation_detail(error)) from error
     with _connection() as connection:
         try:
-            profile = _repository(connection).create_profile(request)
+            profile = _repository(connection).create_profile(validated)
             return public_profile(profile)
         except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
+            raise HTTPException(
+                status_code=400,
+                detail=sanitize_error_message(str(error)),
+            ) from error
 
 
 @router.get("/profiles/{model_profile_uuid}", response_model=None)
@@ -66,13 +86,20 @@ def get_profile(model_profile_uuid: str) -> dict[str, Any]:
 
 
 @router.patch("/profiles/{model_profile_uuid}", response_model=None)
-def patch_profile(model_profile_uuid: str, request: ModelProfilePatch) -> dict[str, Any]:
+def patch_profile(model_profile_uuid: str, request: dict[str, Any]) -> dict[str, Any]:
+    try:
+        validated = ModelProfilePatch.model_validate(request)
+    except ValidationError as error:
+        raise HTTPException(status_code=422, detail=_safe_validation_detail(error)) from error
     with _connection() as connection:
         try:
-            profile = _repository(connection).patch_profile(model_profile_uuid, request)
+            profile = _repository(connection).patch_profile(model_profile_uuid, validated)
             return public_profile(profile)
         except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
+            raise HTTPException(
+                status_code=400,
+                detail=sanitize_error_message(str(error)),
+            ) from error
 
 
 @router.post("/profiles/{model_profile_uuid}/test", response_model=None)
@@ -177,11 +204,22 @@ def estimate_cost(request: CostEstimateRequest) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail=detail) from error
 
 
+def _safe_validation_detail(error: ValidationError) -> str:
+    details: list[str] = []
+    for item in error.errors(include_input=False, include_url=False):
+        location = ".".join(str(part) for part in item.get("loc", ())) or "profile"
+        message = sanitize_error_message(str(item.get("msg", "invalid value")))
+        details.append(f"{location}: {message}")
+    return "; ".join(details)[:500] or "invalid model profile configuration"
+
+
 def _is_full_postgres(settings: Settings) -> bool:
     return settings.runtime_profile == "full" and settings.canonical_store == "postgres"
 
 
-def _repository(connection: Any) -> ModelControlRepository | PostgresModelControlRepository:
+def _repository(
+    connection: Any,
+) -> ModelControlRepository | PostgresModelControlRepository:
     settings = get_settings()
     if _is_full_postgres(settings):
         return PostgresModelControlRepository(connection)

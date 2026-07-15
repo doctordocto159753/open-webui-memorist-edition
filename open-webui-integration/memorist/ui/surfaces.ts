@@ -1,8 +1,10 @@
 import "./processingNodes";
+import "./memoryNodeSetup";
 import "./importWorkflow";
 import "./memoryAttachment";
 import "./memoryWorkflowToggle";
 
+import { MEMORIST_MEMORY_NODE_SETUP_ROUTE } from "./memoryNodeSetup";
 import { MEMORIST_PROCESSING_NODES_ROUTE } from "./processingNodes";
 
 export const MEMORIST_UI_SURFACES = [
@@ -18,6 +20,7 @@ export const MEMORIST_UI_SURFACES = [
   "DiagnosticsTab",
   "SettingsTab",
   "MemoristProcessingNodesSettings",
+  "MemoryNodeSetup",
   "MemoryAttachment",
   "MemoryWorkflowToggle",
 ] as const;
@@ -58,11 +61,18 @@ export function sanitizeUiText(value: string): string {
 }
 
 export const MEMORIST_SETTINGS_ROUTES = {
+  memorySetup: MEMORIST_MEMORY_NODE_SETUP_ROUTE,
   processingNodes: MEMORIST_PROCESSING_NODES_ROUTE,
   importWorkflow: "/settings/memorist/import",
 } as const;
 
 export const MEMORIST_SETTINGS_NAVIGATION: readonly MemoristSettingsNavigationItem[] = [
+  {
+    label: "Memory Setup",
+    href: MEMORIST_SETTINGS_ROUTES.memorySetup,
+    surface: "MemoryNodeSetup",
+    adminOnly: true,
+  },
   {
     label: "Processing Nodes",
     href: MEMORIST_SETTINGS_ROUTES.processingNodes,
@@ -72,6 +82,11 @@ export const MEMORIST_SETTINGS_NAVIGATION: readonly MemoristSettingsNavigationIt
 ] as const;
 
 export const MEMORIST_SETTINGS_ROUTE_MOUNTS: readonly MemoristSettingsRoute[] = [
+  {
+    path: MEMORIST_SETTINGS_ROUTES.memorySetup,
+    surface: "MemoryNodeSetup",
+    element: "memorist-memory-node-setup",
+  },
   {
     path: MEMORIST_SETTINGS_ROUTES.processingNodes,
     surface: "MemoristProcessingNodesSettings",
@@ -96,3 +111,5 @@ export {
   applyOriginalMemoryWorkflowToRegeneration,
   mountMemoryWorkflowToggleNearComposer,
 } from "./memoryWorkflowToggle";
+
+export { mountMemoryNodeSetup } from "./memoryNodeSetup";

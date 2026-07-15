@@ -220,6 +220,43 @@ export type ModelControlHealthResponse = {
   latest_health_events: ModelControlHealthEvent[];
 };
 
+export type MemoryNodeSetupRole = {
+  role: MemoristModelRole;
+  title: string;
+  required: boolean;
+  recommended: boolean;
+  configured: boolean;
+  available: boolean;
+  source: "configured_default" | "built_in_fallback";
+  provider_type: string | null;
+  provider_name: string | null;
+  model_name: string | null;
+  model_profile_uuid: string | null;
+  endpoint_is_local: boolean;
+  secret_configured: boolean;
+  supports_structured_output: boolean;
+  supports_embeddings: boolean;
+  description: string;
+  safe_fallback: string;
+};
+
+export type MemoryNodeSetupStatus = {
+  memory_setup_required: boolean;
+  ready_for_memory_processing: boolean;
+  recommended_setup: boolean;
+  configured_roles: MemoristModelRole[];
+  fallback_roles: MemoristModelRole[];
+  missing_roles: MemoristModelRole[];
+  recommended_missing_roles: MemoristModelRole[];
+  local_fallback_available: boolean;
+  runtime_profile: "lite" | "full" | "dev";
+  scope: "workspace" | "global";
+  roles: MemoryNodeSetupRole[];
+  secret_strategy: "env_var_reference";
+  secret_values_returned: false;
+  full_mode_note?: string | null;
+};
+
 export type ModelControlProviderHealth = {
   status: string;
   provider_type: string;
@@ -273,17 +310,18 @@ export class MemoristClient {
   async exports(): Promise<unknown> { return this.get("/heritage/inspect"); }
   async privacy(): Promise<unknown> { return this.get("/privacy/requests/latest"); }
   async costs(): Promise<unknown> { return this.get("/costs/model-roles"); }
-  async modelControlRoles(): Promise<unknown> { return this.get("/model-control/roles"); }
-  async modelControlProfiles(): Promise<ModelControlProfileList> { return this.get("/model-control/profiles"); }
-  async modelControlDefaults(): Promise<ModelControlDefaultsResponse> { return this.get("/model-control/defaults"); }
+  async memoryNodeSetupStatus(): Promise<MemoryNodeSetupStatus> { return this.controlGet("/model-control/setup/status"); }
+  async modelControlRoles(): Promise<unknown> { return this.controlGet("/model-control/roles"); }
+  async modelControlProfiles(): Promise<ModelControlProfileList> { return this.controlGet("/model-control/profiles"); }
+  async modelControlDefaults(): Promise<ModelControlDefaultsResponse> { return this.controlGet("/model-control/defaults"); }
   async modelControlUsage(): Promise<unknown> { return this.get("/model-control/usage"); }
-  async modelControlPrivacy(): Promise<unknown> { return this.get("/model-control/privacy"); }
-  async modelControlHealth(): Promise<ModelControlHealthResponse> { return this.get("/model-control/health"); }
-  async createModelControlProfile(payload: ModelControlProfileCreate): Promise<ModelControlProfile> { return this.post("/model-control/profiles", payload); }
-  async patchModelControlProfile(modelProfileUuid: string, payload: ModelControlProfilePatch): Promise<ModelControlProfile> { return this.patch(`/model-control/profiles/${encodeURIComponent(modelProfileUuid)}`, payload); }
-  async testModelControlProfile(modelProfileUuid: string, payload: ModelControlProfileTestRequest = {}): Promise<ModelControlProfileTestResponse> { return this.post(`/model-control/profiles/${encodeURIComponent(modelProfileUuid)}/test`, payload); }
-  async setModelControlDefault(payload: ModelControlRoleDefaultSet): Promise<ModelControlRoleDefaultSetResponse> { return this.post("/model-control/defaults", payload); }
-  async acknowledgeModelControlPrivacy(payload: PrivacyAcknowledgementRequest): Promise<PrivacyAcknowledgementResponse> { return this.post("/model-control/privacy/acknowledge", payload); }
+  async modelControlPrivacy(): Promise<unknown> { return this.controlGet("/model-control/privacy"); }
+  async modelControlHealth(): Promise<ModelControlHealthResponse> { return this.controlGet("/model-control/health"); }
+  async createModelControlProfile(payload: ModelControlProfileCreate): Promise<ModelControlProfile> { return this.controlPost("/model-control/profiles", payload); }
+  async patchModelControlProfile(modelProfileUuid: string, payload: ModelControlProfilePatch): Promise<ModelControlProfile> { return this.controlPatch(`/model-control/profiles/${encodeURIComponent(modelProfileUuid)}`, payload); }
+  async testModelControlProfile(modelProfileUuid: string, payload: ModelControlProfileTestRequest = {}): Promise<ModelControlProfileTestResponse> { return this.controlPost(`/model-control/profiles/${encodeURIComponent(modelProfileUuid)}/test`, payload); }
+  async setModelControlDefault(payload: ModelControlRoleDefaultSet): Promise<ModelControlRoleDefaultSetResponse> { return this.controlPost("/model-control/defaults", payload); }
+  async acknowledgeModelControlPrivacy(payload: PrivacyAcknowledgementRequest): Promise<PrivacyAcknowledgementResponse> { return this.controlPost("/model-control/privacy/acknowledge", payload); }
   async modelRoleCosts(): Promise<unknown> { return this.get("/costs/model-roles"); }
   async diagnostics(): Promise<unknown> { return this.controlGet("/openwebui/status"); }
   async resolveMemoristPolicy(payload: {
