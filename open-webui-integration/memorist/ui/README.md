@@ -50,3 +50,13 @@ retrieval/attachment. **Memory Off** disables both for that chat and explains
 the privacy effect before send. The state is persisted per actor and chat,
 rolls back visually when a save fails, and regeneration helpers preserve the
 original turn's setting. See [Memory workflow toggle](../../../docs/memory-workflow-toggle.md).
+
+
+## First-run memory node setup
+
+Mount `memorist-memory-node-setup` at
+`/settings/memorist/memory-setup` for verified Open WebUI administrators. It
+reports the real local fallback state and configures the existing role-based
+Model Control profiles through the authenticated proxy. Remote providers use an
+environment-variable secret reference; raw API keys are never accepted or
+returned. See [Memory processing node setup](../../../docs/memory-node-configuration.md).
