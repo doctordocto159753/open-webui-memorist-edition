@@ -118,17 +118,23 @@ def test_workflow_update_requires_boolean_and_can_restore_full(
 ) -> None:
     client, _ = _client(monkeypatch, tmp_path)
     path = "/memcore/memory-control/workflow/chats/chat-restore"
-    assert client.patch(
-        path,
-        headers=_headers("actor-a"),
-        json={"memory_enabled": "false"},
-    ).status_code == 422
+    assert (
+        client.patch(
+            path,
+            headers=_headers("actor-a"),
+            json={"memory_enabled": "false"},
+        ).status_code
+        == 422
+    )
 
-    assert client.patch(
-        path,
-        headers=_headers("actor-a"),
-        json={"memory_enabled": False},
-    ).json()["state"] == "off"
+    assert (
+        client.patch(
+            path,
+            headers=_headers("actor-a"),
+            json={"memory_enabled": False},
+        ).json()["state"]
+        == "off"
+    )
     restored = client.patch(
         path,
         headers=_headers("actor-a"),
