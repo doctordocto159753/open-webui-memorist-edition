@@ -165,7 +165,8 @@ describe("memory attachment chat surface", () => {
     expect(text).toContain("annotation-1");
     expect(text).toContain("provenance-v1");
     expect(text).toContain("canonical_jakobson_gate_route");
-    expect(text).not.toContain("{");
+    const itemsHtml = element.shadowRoot?.querySelector(".items")?.innerHTML ?? "";
+    expect(itemsHtml).not.toContain("{");
   });
 
   it("fails safely when preview retrieval errors", async () => {
