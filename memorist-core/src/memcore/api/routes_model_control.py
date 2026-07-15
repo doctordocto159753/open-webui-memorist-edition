@@ -64,7 +64,9 @@ def create_profile(request: dict[str, Any]) -> dict[str, Any]:
     try:
         validated = ModelProfileCreate.model_validate(request)
     except ValidationError as error:
-        raise HTTPException(status_code=422, detail=_safe_validation_detail(error)) from error
+        raise HTTPException(
+            status_code=422, detail=_safe_validation_detail(error)
+        ) from error
     with _connection() as connection:
         try:
             profile = _repository(connection).create_profile(validated)
@@ -90,10 +92,14 @@ def patch_profile(model_profile_uuid: str, request: dict[str, Any]) -> dict[str,
     try:
         validated = ModelProfilePatch.model_validate(request)
     except ValidationError as error:
-        raise HTTPException(status_code=422, detail=_safe_validation_detail(error)) from error
+        raise HTTPException(
+            status_code=422, detail=_safe_validation_detail(error)
+        ) from error
     with _connection() as connection:
         try:
-            profile = _repository(connection).patch_profile(model_profile_uuid, validated)
+            profile = _repository(connection).patch_profile(
+                model_profile_uuid, validated
+            )
             return public_profile(profile)
         except ValueError as error:
             raise HTTPException(
@@ -103,7 +109,9 @@ def patch_profile(model_profile_uuid: str, request: dict[str, Any]) -> dict[str,
 
 
 @router.post("/profiles/{model_profile_uuid}/test", response_model=None)
-def test_profile(model_profile_uuid: str, request: ProfileTestRequest) -> dict[str, Any]:
+def test_profile(
+    model_profile_uuid: str, request: ProfileTestRequest
+) -> dict[str, Any]:
     with _connection() as connection:
         repository = _repository(connection)
         profile = repository.get_profile(model_profile_uuid)
@@ -127,7 +135,9 @@ def get_defaults(
         repository = _repository(connection)
         if role is not None:
             try:
-                resolved = repository.resolve_default(role, workspace_uuid, project_uuid)
+                resolved = repository.resolve_default(
+                    role, workspace_uuid, project_uuid
+                )
             except ValueError as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error
             return {"item": resolved or built_in_default(role)}
@@ -204,7 +214,6 @@ def estimate_cost(request: CostEstimateRequest) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail=detail) from error
 
 
-
 def _safe_validation_detail(error: ValidationError) -> str:
     details: list[str] = []
     for item in error.errors(include_input=False, include_url=False):
@@ -218,7 +227,9 @@ def _is_full_postgres(settings: Settings) -> bool:
     return settings.runtime_profile == "full" and settings.canonical_store == "postgres"
 
 
-def _repository(connection: Any) -> ModelControlRepository | PostgresModelControlRepository:
+def _repository(
+    connection: Any,
+) -> ModelControlRepository | PostgresModelControlRepository:
     settings = get_settings()
     if _is_full_postgres(settings):
         return PostgresModelControlRepository(connection)
@@ -230,7 +241,9 @@ def _connection() -> Iterator[Any]:
     settings = get_settings()
     if _is_full_postgres(settings):
         if not settings.postgres_dsn:
-            raise RuntimeError("postgres_dsn is required for Full Mode model-control routes")
+            raise RuntimeError(
+                "postgres_dsn is required for Full Mode model-control routes"
+            )
         psycopg = __import__("psycopg")
         rows = __import__("psycopg.rows").rows
         migration_connection = psycopg.connect(settings.postgres_dsn)
@@ -254,4 +267,3 @@ def _connection() -> Iterator[Any]:
         yield connection
     finally:
         connection.close()
-
