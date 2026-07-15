@@ -54,9 +54,7 @@ class FakeClient:
     def capture_message(self, *_args: object, **_kwargs: object) -> CapturedMessage:
         FakeClient.capture_calls += 1
         value = _kwargs.get("idempotency_key")
-        FakeClient.last_capture_idempotency_key = (
-            str(value) if value is not None else None
-        )
+        FakeClient.last_capture_idempotency_key = str(value) if value is not None else None
         return CapturedMessage("session-1", "message-1", False)
 
     def resolve_turn_policy(
@@ -101,20 +99,14 @@ class FakeClient:
             str(_args[2]) if len(_args) > 2 and _args[2] is not None else None
         )
         value = kwargs.get("turn_policy")
-        FakeClient.last_assistant_turn_policy = (
-            str(value) if value is not None else None
-        )
+        FakeClient.last_assistant_turn_policy = str(value) if value is not None else None
         return {"duplicate": FakeClient.assistant_calls > 1}
 
-    def record_attachment_delivery(
-        self, *_args: object, **_kwargs: object
-    ) -> dict[str, Any]:
+    def record_attachment_delivery(self, *_args: object, **_kwargs: object) -> dict[str, Any]:
         FakeClient.delivery_calls += 1
         return {"status": "delivered"}
 
-    def cancel_attachment_before_send(
-        self, *_args: object, **_kwargs: object
-    ) -> dict[str, Any]:
+    def cancel_attachment_before_send(self, *_args: object, **_kwargs: object) -> dict[str, Any]:
         FakeClient.cancel_calls += 1
         return {"status": "cancelled_before_send"}
 
@@ -148,9 +140,7 @@ def test_preflight_attached_preserves_user_and_inserts_separate_context(
         ],
     }
     original = body["messages"][-1]["content"]
-    result = (
-        _module().Filter().inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
-    )
+    result = _module().Filter().inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
     assert result["messages"][-1]["content"] == original
     assert result["messages"][1]["name"] == "memorist_context"
     assert "safe memory" in result["messages"][1]["content"]
@@ -161,9 +151,7 @@ def test_preflight_attached_preserves_user_and_inserts_separate_context(
 def test_preflight_unavailable_fails_open_and_sanitizes_error(monkeypatch) -> None:
     monkeypatch.setenv("FAKE_MEMORIST_FAIL", "1")
     body = {"messages": [{"role": "user", "content": "hello"}]}
-    result = (
-        _module().Filter().inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
-    )
+    result = _module().Filter().inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
     assert result["messages"][-1]["content"] == "hello"
     assert result["metadata"]["memorist_last_error"] == "[redacted]"
 
@@ -178,9 +166,7 @@ def test_review_without_frontend_cancels_and_outlet_captures_without_attribution
         "messages": [{"role": "user", "content": "review first"}],
     }
     filter_instance = _module().Filter()
-    result = filter_instance.inlet(
-        body, {"id": "user-1", "workspace_id": "workspace-1"}
-    )
+    result = filter_instance.inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
     assert FakeClient.cancel_calls == 1
     assert "memorist_delivered_attachment_uuid" not in result["metadata"]
     assert "memorist_pending_attachment_uuid" not in result["metadata"]
@@ -198,9 +184,7 @@ def test_review_capable_frontend_keeps_prepared_generation_pending(monkeypatch) 
         "messages": [{"role": "user", "id": "review-message", "content": "review me"}],
     }
 
-    result = (
-        _module().Filter().inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
-    )
+    result = _module().Filter().inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
 
     assert FakeClient.cancel_calls == 0
     assert result["metadata"]["memorist_pending_attachment_uuid"] == "attachment-1"
@@ -215,19 +199,12 @@ def test_review_capable_frontend_delivers_exact_server_approved_generation(
     body = {
         "memorist": {"turn_policy": "full", "attachment_review": True},
         "metadata": {"memorist_approved_attachment_uuid": "attachment-1"},
-        "messages": [
-            {"role": "user", "id": "review-message", "content": "approved send"}
-        ],
+        "messages": [{"role": "user", "id": "review-message", "content": "approved send"}],
     }
     filter_instance = _module().Filter()
-    result = filter_instance.inlet(
-        body, {"id": "user-1", "workspace_id": "workspace-1"}
-    )
+    result = filter_instance.inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
     assert FakeClient.delivery_calls == 1
-    assert (
-        FakeClient.last_capture_idempotency_key
-        == "review-prepare:user-1:review-message"
-    )
+    assert FakeClient.last_capture_idempotency_key == "review-prepare:user-1:review-message"
     assert result["metadata"]["memorist_delivered_attachment_uuid"] == "attachment-1"
     assert "server-rendered approved context" in result["messages"][0]["content"]
     result["messages"] = [{"role": "assistant", "content": "approved answer"}]
@@ -247,20 +224,13 @@ def test_review_removed_then_send_without_memorist_clears_stale_attribution(
             "memorist_attachment_pending_review": True,
             "memorist_review_disposition": "suppressed",
         },
-        "messages": [
-            {"role": "user", "id": "review-message", "content": "send without"}
-        ],
+        "messages": [{"role": "user", "id": "review-message", "content": "send without"}],
     }
     filter_instance = _module().Filter()
     FakeClient.preflight_calls = 0
-    result = filter_instance.inlet(
-        body, {"id": "user-1", "workspace_id": "workspace-1"}
-    )
+    result = filter_instance.inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
     assert "memorist_pending_attachment_uuid" not in result["metadata"]
-    assert (
-        FakeClient.last_capture_idempotency_key
-        == "review-prepare:user-1:review-message"
-    )
+    assert FakeClient.last_capture_idempotency_key == "review-prepare:user-1:review-message"
     assert FakeClient.preflight_calls == 0
     result["messages"] = [{"role": "assistant", "content": "answer without context"}]
     filter_instance.outlet(result, {"id": "user-1", "workspace_id": "workspace-1"})
@@ -279,23 +249,16 @@ def test_review_cancelled_then_send_without_memorist_captures_assistant(
             "memorist_pending_attachment_uuid": "cancelled-attachment",
             "memorist_review_disposition": "cancelled_before_send",
         },
-        "messages": [
-            {"role": "user", "id": "review-message", "content": "cancel preview"}
-        ],
+        "messages": [{"role": "user", "id": "review-message", "content": "cancel preview"}],
     }
     filter_instance = _module().Filter()
-    result = filter_instance.inlet(
-        body, {"id": "user-1", "workspace_id": "workspace-1"}
-    )
+    result = filter_instance.inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
     result["messages"] = [{"role": "assistant", "content": "captured answer"}]
     filter_instance.outlet(result, {"id": "user-1", "workspace_id": "workspace-1"})
     assert FakeClient.assistant_calls == 1
     assert FakeClient.last_assistant_attachment is None
     assert FakeClient.last_assistant_turn_policy == "full"
-    assert (
-        FakeClient.last_capture_idempotency_key
-        == "review-prepare:user-1:review-message"
-    )
+    assert FakeClient.last_capture_idempotency_key == "review-prepare:user-1:review-message"
 
 
 def test_private_resolves_no_session_and_creates_no_capture_or_preflight(
@@ -308,17 +271,10 @@ def test_private_resolves_no_session_and_creates_no_capture_or_preflight(
         "messages": [{"role": "user", "content": "secret"}],
     }
 
-    result = (
-        _module().Filter().inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
-    )
+    result = _module().Filter().inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
 
     assert result["metadata"]["memorist_private"] is True
-    assert (
-        FakeClient.session_calls
-        == FakeClient.capture_calls
-        == FakeClient.preflight_calls
-        == 0
-    )
+    assert FakeClient.session_calls == FakeClient.capture_calls == FakeClient.preflight_calls == 0
 
 
 def test_missing_trusted_user_skips_all_memorist_work_for_every_policy(
@@ -326,9 +282,7 @@ def test_missing_trusted_user_skips_all_memorist_work_for_every_policy(
 ) -> None:
     monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
     for mode in ("full", "no_recall", "private"):
-        FakeClient.session_calls = FakeClient.capture_calls = (
-            FakeClient.preflight_calls
-        ) = 0
+        FakeClient.session_calls = FakeClient.capture_calls = FakeClient.preflight_calls = 0
         body = {
             "memorist": {"turn_policy": mode},
             "messages": [{"role": "user", "content": f"unidentified {mode}"}],
@@ -373,21 +327,14 @@ def test_regeneration_no_recall_reuses_input_without_session_capture_or_prefligh
         "messages": [{"role": "user", "content": "original prompt"}],
     }
 
-    result = (
-        _module().Filter().inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
-    )
+    result = _module().Filter().inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
 
     assert result["messages"][-1]["content"] == "original prompt"
     assert result["metadata"]["memorist_regeneration_uuid"] == "regen-1"
     assert result["metadata"]["memorist_input_message_uuid"] == "original-message-1"
     assert result["metadata"]["memorist_workspace_uuid"] == "workspace-1"
     assert "memorist_attachment_uuid" not in result["metadata"]
-    assert (
-        FakeClient.session_calls
-        == FakeClient.capture_calls
-        == FakeClient.preflight_calls
-        == 0
-    )
+    assert FakeClient.session_calls == FakeClient.capture_calls == FakeClient.preflight_calls == 0
 
 
 def test_assistant_response_captured_and_duplicate_deduped(monkeypatch) -> None:
@@ -501,9 +448,7 @@ def test_unsupported_body_shape_fail_opens_attachment_insert() -> None:
 def test_contract_payload_fixtures_parse() -> None:
     parser = importlib.import_module("shared.payload_parser")
     fixture_root = ROOT.parent / "compatibility" / "payload_fixtures"
-    inlet = json.loads(
-        (fixture_root / "inlet_new_chat_temp_id.ijson").read_text(encoding="utf-8")
-    )
+    inlet = json.loads((fixture_root / "inlet_new_chat_temp_id.ijson").read_text(encoding="utf-8"))
     outlet = json.loads(
         (fixture_root / "outlet_assistant_completed.ijson").read_text(encoding="utf-8")
     )
