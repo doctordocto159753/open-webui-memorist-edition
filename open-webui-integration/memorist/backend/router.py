@@ -157,6 +157,11 @@ def preview_attachment(attachment_uuid: str, actor: AuthenticatedActor) -> dict[
     return _call(actor, "GET", f"/memory-control/attachments/{attachment_uuid}/preview")
 
 
+@router.get("/memory-control/attachments/{attachment_uuid}/display")
+def display_attachment(attachment_uuid: str, actor: AuthenticatedActor) -> dict[str, Any]:
+    return _call(actor, "GET", f"/memory-control/attachments/{attachment_uuid}/display")
+
+
 @router.get("/memory-control/attachments/{attachment_uuid}/sources")
 def attachment_sources(attachment_uuid: str, actor: AuthenticatedActor) -> dict[str, Any]:
     return _call(actor, "GET", f"/memory-control/attachments/{attachment_uuid}/sources")
