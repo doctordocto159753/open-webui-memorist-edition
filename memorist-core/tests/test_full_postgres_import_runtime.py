@@ -90,7 +90,7 @@ def _pg_archive(path: Path, messages: int = 4, first_message_text: str | None = 
                     "parts": [
                         first_message_text
                         if index == 0 and first_message_text is not None
-                        else f"Durable PostgreSQL fact {unique} {index}."
+                        else f"I prefer durable PostgreSQL setting {unique} {index}."
                     ],
                 },
             },
@@ -146,7 +146,7 @@ def test_full_postgres_import_runtime_end_to_end(
                         "create_time": 1700000001,
                         "content": {
                             "content_type": "text",
-                            "parts": ["Remember that Ada likes graph databases."],
+                            "parts": ["I prefer graph databases."],
                         },
                     },
                 },
@@ -878,7 +878,7 @@ def test_full_postgres_cancel_during_inference_discards_late_result(
         tmp_path,
         monkeypatch,
         messages=2,
-        first_message_text="Remember that PostgreSQL is preferred.",
+        first_message_text="I prefer PostgreSQL.",
     )
     worker = ImportReconstructionWorkerService(settings)
     assert worker.process_one_claimed_item(worker_id="pg-first-success", import_run_uuid=run_uuid)
