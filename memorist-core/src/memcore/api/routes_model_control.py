@@ -25,6 +25,7 @@ from memcore.model_control.schemas import (
     ProfileTestRequest,
 )
 from memcore.model_control.security import sanitize_error_message
+from memcore.model_control.setup import build_setup_status
 from memcore.storage.postgres.migrations import apply_postgres_migrations
 from memcore.storage.sqlite import connect
 
@@ -34,6 +35,17 @@ router = APIRouter(prefix="/memcore/model-control", tags=["Model Control Plane"]
 @router.get("/roles", response_model=None)
 def list_roles() -> dict[str, Any]:
     return {"items": list_role_specs()}
+
+
+@router.get("/setup/status", response_model=None)
+def setup_status(workspace_uuid: str | None = None) -> dict[str, Any]:
+    settings = get_settings()
+    with _connection() as connection:
+        return build_setup_status(
+            _repository(connection),
+            runtime_profile=settings.runtime_profile,
+            workspace_uuid=workspace_uuid,
+        )
 
 
 @router.get("/profiles", response_model=None)
