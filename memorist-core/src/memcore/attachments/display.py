@@ -220,8 +220,12 @@ def _display_item(
     }
 
     scope = _as_mapping(packet_item.get("scope"))
-    scope_type = audit.get("scope_type") or scope.get("scope_type") or packet_item.get("scope_type")
-    scope_uuid = audit.get("scope_uuid") or scope.get("scope_uuid") or packet_item.get("scope_uuid")
+    scope_type = (
+        audit.get("scope_type") or scope.get("scope_type") or packet_item.get("scope_type")
+    )
+    scope_uuid = (
+        audit.get("scope_uuid") or scope.get("scope_uuid") or packet_item.get("scope_uuid")
+    )
 
     return {
         "id": version_uuid or memory_uuid,
