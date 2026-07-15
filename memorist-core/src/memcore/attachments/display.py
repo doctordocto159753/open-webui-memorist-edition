@@ -96,7 +96,9 @@ def redact_display_text(value: Any, *, sensitive: bool = False) -> str:
     return text
 
 
-def _iter_packet_items(packet: Mapping[str, Any]) -> list[tuple[str, Mapping[str, Any]]]:
+def _iter_packet_items(
+    packet: Mapping[str, Any],
+) -> list[tuple[str, Mapping[str, Any]]]:
     seen: set[tuple[str, str]] = set()
     result: list[tuple[str, Mapping[str, Any]]] = []
     for section in _PACKET_SECTIONS:
@@ -105,7 +107,9 @@ def _iter_packet_items(packet: Mapping[str, Any]) -> list[tuple[str, Mapping[str
             continue
         for raw_item in values:
             item = _as_mapping(raw_item)
-            memory_uuid = str(item.get("memory_uuid") or item.get("active_block_uuid") or "")
+            memory_uuid = str(
+                item.get("memory_uuid") or item.get("active_block_uuid") or ""
+            )
             version_uuid = str(item.get("memory_version_uuid") or "")
             key = (memory_uuid, version_uuid)
             if not memory_uuid or key in seen:
@@ -192,7 +196,9 @@ def _display_item(
     version_uuid = str(
         audit.get("memory_version_uuid") or packet_item.get("memory_version_uuid") or ""
     )
-    source_candidate_uuid = audit.get("source_candidate_uuid") or audit.get("candidate_uuid")
+    source_candidate_uuid = audit.get("source_candidate_uuid") or audit.get(
+        "candidate_uuid"
+    )
     status = (
         audit.get("candidate_status")
         or audit.get("memory_status")
@@ -221,10 +227,14 @@ def _display_item(
 
     scope = _as_mapping(packet_item.get("scope"))
     scope_type = (
-        audit.get("scope_type") or scope.get("scope_type") or packet_item.get("scope_type")
+        audit.get("scope_type")
+        or scope.get("scope_type")
+        or packet_item.get("scope_type")
     )
     scope_uuid = (
-        audit.get("scope_uuid") or scope.get("scope_uuid") or packet_item.get("scope_uuid")
+        audit.get("scope_uuid")
+        or scope.get("scope_uuid")
+        or packet_item.get("scope_uuid")
     )
 
     return {
@@ -258,7 +268,9 @@ def _display_item(
     }
 
 
-def build_attachment_display(connection: Any, attachment: Mapping[str, Any]) -> dict[str, Any]:
+def build_attachment_display(
+    connection: Any, attachment: Mapping[str, Any]
+) -> dict[str, Any]:
     """Build an allowlisted UI model from a stored attachment and canonical audit rows."""
     packet = _parse_json_mapping(attachment.get("ijson_attachment"))
     items: list[dict[str, Any]] = []
