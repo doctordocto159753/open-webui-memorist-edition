@@ -61,7 +61,8 @@ local machine.
 `GET /api/v1/memorist/model-control/setup/status` is exposed through the
 authenticated Open WebUI integration. Model setup reads and writes require a
 verified Open WebUI administrator; browser-supplied actor/workspace headers are
-ignored. Default assignments are forced to the trusted workspace.
+ignored. Setup assigns a deployment-wide default, and the backend—not browser
+scope fields—owns that authorization boundary.
 
 A fresh Lite installation normally reports **Ready — local fallback available**
 and recommends optional configuration rather than forcing a remote provider.
