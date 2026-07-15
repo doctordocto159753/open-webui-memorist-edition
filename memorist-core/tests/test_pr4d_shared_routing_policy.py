@@ -143,7 +143,8 @@ def test_i_mean_definition_is_metalingual_and_routes_to_terminology() -> None:
     ]
 
 
-def test_forget_directive_routes_to_privacy_review_before_normal_memory_routes(\n) -> None:
+def test_forget_directive_routes_to_privacy_review_before_normal_memory_routes(
+) -> None:
     decisions = decide_semantic_routes(
         text="Please forget everything you remember about me.",
         dominant_function=JakobsonFunction.CONATIVE,
