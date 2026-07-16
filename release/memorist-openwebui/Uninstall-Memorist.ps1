@@ -51,7 +51,11 @@ if ($PurgeData) { $downArgs += '-v' }
 if ($RemoveImages) { $downArgs += @('--rmi', 'local') }
 Write-MemoristLog 'Removing containers...' 'STEP'
 $downArgs += '--remove-orphans'
-Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments $downArgs | Out-Null
+$rc = Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments $downArgs
+if ($rc -ne 0) {
+    Write-MemoristLog 'Docker removal failed; data folders were not modified.' 'FAIL'
+    exit 1
+}
 
 if ($PurgeData) {
     foreach ($dir in @('data', 'objects', 'imports', 'exports', 'logs')) {
