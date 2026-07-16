@@ -7,6 +7,9 @@ name: Public Release Readiness
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: public-release-readiness-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -16,9 +19,10 @@ jobs:
     name: Docs and Links
     runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          clean: false
+          clean: true
+          persist-credentials: false
           show-progress: false
       - name: Canonical documentation set exists
         run: |
@@ -30,7 +34,6 @@ jobs:
       - name: Relative Markdown links resolve
         run: python3 scripts/check_doc_links.py
       - name: README/docs keep CI-pinned contract strings
-        # Mirrors memorist-core/tests/test_model_control_plane.py::test_docs_include_model_roles
         run: |
           grep -q "Model Control Plane" README.md
           grep -q "main_chat_observed" README.md
@@ -44,9 +47,10 @@ jobs:
     name: Repo Hygiene
     runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          clean: false
+          clean: true
+          persist-credentials: false
           show-progress: false
       - name: No committed env files, archives, databases, or logs
         run: |
@@ -68,15 +72,16 @@ jobs:
     name: Installer Static Validation
     runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          clean: false
+          clean: true
+          persist-credentials: false
           show-progress: false
       - name: Require an authoritative Compose CLI
         run: bash .github/scripts/ensure-compose.sh
-      - name: Installer static checks (files, functions, secret redaction, dry-run guards)
+      - name: Installer static checks
         run: python3 installer/scripts/validate_installer.py --dry-run
-      - name: Release compose validation (lite + full)
+      - name: Release Compose validation
         run: python3 installer/scripts/validate_compose.py
       - name: Package checksums are current
         run: python3 release/memorist-openwebui/scripts/gen_checksums.py --check
@@ -85,11 +90,12 @@ jobs:
     name: Core Smoke / Type / Lint
     runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          clean: false
+          clean: true
+          persist-credentials: false
           show-progress: false
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
       - name: Install backend dependencies
         working-directory: memorist-core
         run: uv sync --all-extras --quiet
@@ -104,11 +110,12 @@ jobs:
     name: Frontend Integration Smoke
     runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          clean: false
+          clean: true
+          persist-credentials: false
           show-progress: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
           cache: npm
