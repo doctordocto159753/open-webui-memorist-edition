@@ -393,3 +393,23 @@ def test_full_profile_loads_with_explicit_postgres_and_falkordb(
     assert settings.graph_backend == "falkordb"
     assert settings.hot_scheduler == "in_memory"
     assert get_effective_config(settings)["postgres_dsn_configured"] is True
+
+
+def test_production_full_profile_rejects_disabled_runtime_features(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    clear_memorist_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MEMORIST_ENV", "production")
+    monkeypatch.setenv("MEMORIST_ACTOR_ASSERTION_SECRET", "assertion-secret")
+    monkeypatch.setenv("MEMORIST_ACTOR_SERVICE_TOKEN", "service-token")
+    monkeypatch.setenv("MEMORIST_RUNTIME_PROFILE", "full")
+    monkeypatch.setenv("MEMORIST_CANONICAL_STORE", "postgres")
+    monkeypatch.setenv("MEMORIST_POSTGRES_DSN", "postgresql://memorist:secret@localhost/memorist")
+    monkeypatch.setenv("MEMORIST_GRAPH_BACKEND", "falkordb")
+    monkeypatch.setenv("MEMORIST_FALKORDB_URL", "redis://localhost:6379")
+    monkeypatch.setenv("MEMORIST_HOT_SCHEDULER", "in_memory")
+
+    with pytest.raises(ValidationError, match="production full runtime requires enabled features"):
+        Settings()

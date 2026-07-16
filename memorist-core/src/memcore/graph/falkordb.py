@@ -88,7 +88,10 @@ class FalkorDBClient:
         with socket.create_connection((host, port), timeout=5.0) as connection:
             connection.sendall(command)
             response = connection.recv(4096)
-        if response.startswith(b"-") and b"does not exist" not in response:
+        if response.startswith(b"-") and not any(
+            marker in response
+            for marker in (b"does not exist", b"Invalid graph operation on empty key")
+        ):
             raise RuntimeError(response.decode("utf-8", errors="replace")[:240])
 
     def _host_port(self) -> tuple[str, int]:

@@ -1,14 +1,17 @@
 # Memorist — Open WebUI Memorist Edition
 
+Package version: `0.2.0-beta.1`<br>
+Storage schema version: `18`
+
 **Remember with consent, recall with provenance.**
 
 Memorist is a local-first memory layer for [Open WebUI](https://github.com/open-webui/open-webui)
 that lets a chat system remember with consent, show what it remembers, and
 keep the memory machine inspectable.
 
-> **Status: early public alpha.** Lite mode (SQLite, fully local) is the
-> validated path. Full mode (PostgreSQL + FalkorDB graph) is an advanced
-> preview. Expect rough edges; don't expect silent data loss — nothing here
+> **Status: early public alpha.** Lite mode uses SQLite. Full mode uses
+> PostgreSQL + FalkorDB and is certified in the tested local Docker environment
+> (11/11 external gates; Windows 11 one-click smoke). Expect rough edges; don't expect silent data loss — nothing here
 > deletes memory without asking.
 
 ## Why memory, and why this way
@@ -92,13 +95,13 @@ Pure-Python development without Docker works too — see
 
 ## Lite vs Full
 
-| | **Lite** (default) | **Full** (advanced preview) |
+| | **Lite** (default) | **Full** |
 | --- | --- | --- |
 | Canonical store | SQLite | PostgreSQL |
 | Graph projection | disabled | FalkorDB (rebuildable, never canonical) |
 | Embeddings | optional | optional |
 | Footprint | low — runs on modest machines | heavier |
-| Status | validated local path | experimental preview |
+| Status | validated local path | certified in tested local Docker environment |
 
 Lite and Full share one canonical semantic pipeline, so both make the same
 memory decisions — Full adds storage scale and graph projection, not different

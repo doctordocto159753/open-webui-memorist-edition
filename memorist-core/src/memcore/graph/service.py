@@ -90,6 +90,20 @@ class GraphProjectionService:
                 "error_sanitized": health.error_sanitized,
             }
 
+        # A rebuild is replacement, not an additive replay. Clearing the
+        # projection first guarantees quarantined/erased PostgreSQL rows cannot
+        # survive as stale FalkorDB nodes. An absent graph is safely idempotent.
+        try:
+            client.delete_graph()
+        except Exception as error:
+            return {
+                "status": "failed",
+                "source": "postgres",
+                "projection_version": FalkorGraphProjector.projection_version,
+                "projected": 0,
+                "error_sanitized": str(error)[:240],
+            }
+
         psycopg = importlib.import_module("psycopg")
         projector = FalkorGraphProjector(client)
         connection = psycopg.connect(self.settings.postgres_dsn)

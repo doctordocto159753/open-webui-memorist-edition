@@ -1,0 +1,107 @@
+name: PR5-F Full One-Click Certification
+
+"on":
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pr5f-full-one-click-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-static:
+    name: Release Package Static Validation
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@v4
+        with: {clean: false, show-progress: false}
+      - name: Require Docker and Compose
+        run: docker info >/dev/null && docker compose version
+      - run: python3 installer/scripts/validate_installer.py --dry-run
+      - run: python3 installer/scripts/validate_compose.py
+      - run: python3 release/memorist-openwebui/scripts/gen_checksums.py --check
+      - name: Shell syntax
+        run: find release/memorist-openwebui/scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
+
+  self-contained-package:
+    name: Self-Contained Package Smoke
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@v4
+        with: {clean: false, show-progress: false}
+      - name: Require Docker and Compose
+        run: docker info >/dev/null && docker compose version
+      - name: Assemble release archive
+        run: python3 installer/scripts/assemble_rc.py
+      - name: Extract outside checkout into a path containing spaces
+        run: |
+          target="${RUNNER_TEMP}/Memorist Full Test"
+          rm -rf "$target" && mkdir -p "$target"
+          unzip -q release/rc/memorist-openwebui-0.2.0-beta.1.zip -d "$target"
+          pkg=$(find "$target" -type f -path '*/release/memorist-openwebui/compose.yml' -printf '%h\n' | head -1)
+          test -n "$pkg"
+          (cd "$pkg" && python3 scripts/gen_checksums.py --check)
+          test -d "$pkg/runtime/memorist-core"
+          test -d "$pkg/runtime/open-webui-integration"
+          ! grep -R -E 'build:[[:space:]]*$|context:[[:space:]]*\.\./' "$pkg"/compose*.yml | grep '\.\./'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr5f-self-contained-package
+          path: |
+            release/rc/*.zip
+            release/rc/*.sha256
+
+  full-live-and-external:
+    name: Full Live PostgreSQL FalkorDB and External Certification
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    timeout-minutes: 90
+    env:
+      MEMORIST_FULL_COMPOSE_SMOKE: "true"
+      MEMORIST_FULL_SMOKE_AUTO_DOCKER: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with: {clean: false, show-progress: false}
+      - uses: astral-sh/setup-uv@v5
+      - name: Require live Docker
+        run: docker info >/dev/null && docker compose version
+      - name: Install test dependencies
+        working-directory: memorist-core
+        run: uv sync --all-extras --quiet
+      - name: Run all eleven authoritative gates
+        run: uv run --project memorist-core python scripts/full_mode_check.py
+      - name: Assert exact certification result
+        run: |
+          python3 - <<'PY'
+          import json
+          r=json.load(open('release/artifacts/full-mode-certification-report.ijson'))
+          assert r['summary'] == {'passed': 11, 'failed': 0, 'skipped_or_manual': 0, 'all_required_passed': True, 'skipped_manual_blocks_certification': False, 'critical_failures': []}
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr5f-full-certification
+          path: |
+            release/artifacts/full-mode-certification-report.ijson
+            release/artifacts/full-mode-certification-report.md
+            release/artifacts/logs/**
+
+  powershell-lifecycle:
+    name: PowerShell Lifecycle Tests
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@v4
+        with: {clean: false, show-progress: false}
+      - name: Require PowerShell for lifecycle validation
+        run: command -v pwsh >/dev/null || { echo 'PowerShell is required; refusing false-green skip'; exit 1; }
+      - name: Parse and test lifecycle scripts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem release/memorist-openwebui -Recurse -Include *.ps1,*.psm1 | ForEach-Object {
+            $tokens=$null; $errors=$null
+            [Management.Automation.Language.Parser]::ParseFile($_.FullName,[ref]$tokens,[ref]$errors) | Out-Null
+            if ($errors.Count) { throw "PowerShell parse failed: $($_.FullName)" }
+          }
+          if (-not (Get-Module -ListAvailable Pester)) { throw 'Pester is required; refusing false-green skip' }
+          Invoke-Pester release/memorist-openwebui/tests -CI

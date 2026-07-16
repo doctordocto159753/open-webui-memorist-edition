@@ -1,4 +1,7 @@
 ﻿#!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
-docker compose -f compose.yml down
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/common.sh"
+ROOT="$(memorist_root)"
+MODE="$(memorist_mode "$ROOT")"
+memorist_compose "$ROOT" "$MODE" down --remove-orphans

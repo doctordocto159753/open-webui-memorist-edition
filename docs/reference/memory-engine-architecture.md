@@ -12,7 +12,7 @@ Defensible current status:
 Version: 0.2.0-beta.1 development baseline
 Schema version: 18
 Lite Mode: beta-candidate
-Full Mode: experimental preview, materially improved
+Full Mode: certified in the tested local Docker environment
 Open WebUI integration: contract-tested; pinned container smoke pending/manual
 Memory Intelligence Core: implemented baseline
 Model Control Plane: implemented backend/runtime baseline
@@ -22,7 +22,7 @@ Prompt Pack v2: implemented contract baseline
 Full Mode is not yet beta-supported. Until all external PostgreSQL, FalkorDB, graph retrieval, graph forget/residue, and `docker-compose.full` gates pass, Full Mode must be described as:
 
 ```text
-Full Mode: experimental preview; external certification incomplete.
+Full Mode: certified in the tested local Docker environment.
 ```
 
 ## The problem the memory engine solves
@@ -597,7 +597,7 @@ FalkorDB projection
 SQLite-to-PostgreSQL migration
 ```
 
-Full remains an experimental preview until external certification passes.
+Full passed external certification in the tested local Docker environment.
 
 ### Critical rule
 
@@ -1082,7 +1082,7 @@ SQLite-to-PostgreSQL migration
 full compose smoke
 ```
 
-Until these gates pass externally, Full Mode remains an experimental preview.
+All listed gates passed externally in the recorded local Docker certification.
 
 ## Implementation Techniques
 
@@ -1322,7 +1322,7 @@ Full Mode is not certified by unit tests alone. It requires external gates. If D
 The architecture is not complete. Current limitations:
 
 ```text
-Full Mode external certification incomplete
+Full Mode external certification passed (11/11)
 Open WebUI pinned container smoke pending/manual
 semantic quality of Prompt Pack v2 needs real-world evaluation
 Jakobson routing needs larger multilingual fixtures

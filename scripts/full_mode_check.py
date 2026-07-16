@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 import json
+import platform
+import subprocess
 import sys
 import time
 from datetime import UTC, datetime
@@ -45,18 +47,20 @@ def main() -> int:
     report = _build_report(results, started)
     _write_reports(report)
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    failures = [item for item in results if item["status"] == "failed"]
-    return 1 if failures else 0
+    return 0 if report["summary"]["all_required_passed"] else 1
 
 
 def _run_gate(name: str) -> dict[str, Any]:
     started = time.perf_counter()
+    started_at = now_z()
     try:
         module = importlib.import_module(f"release.tests.{name}")
         result = module.run()
         if "status" not in result:
             result["status"] = "passed" if result.get("passed") else "failed"
         result["duration_ms"] = int((time.perf_counter() - started) * 1000)
+        result["started_at"] = started_at
+        result["finished_at"] = now_z()
         result["required_for_full_beta"] = True
         result["manual_only"] = result["status"] == "manual-only"
         return result
@@ -69,6 +73,8 @@ def _run_gate(name: str) -> dict[str, Any]:
             "blocks_full_certification": True,
             "required_for_full_beta": True,
             "duration_ms": int((time.perf_counter() - started) * 1000),
+            "started_at": started_at,
+            "finished_at": now_z(),
             "failing_step": "full_mode_check_import_or_run",
             "remediation_hint": str(error)[:240],
         }
@@ -91,6 +97,15 @@ def _build_report(results: list[dict[str, Any]], started: float) -> dict[str, An
         full_mode_status = "experimental-preview"
     return {
         "created_at": now_z(),
+        "commit_sha": _command_output(["git", "rev-parse", "HEAD"]),
+        "platform": platform.platform(),
+        "python_version": platform.python_version(),
+        "service_versions": {
+            "postgres": "postgres:16.9-alpine3.22",
+            "falkordb": "falkordb/falkordb@sha256:2496643cabd67e87fd82458383400c049324daec1fe674ba0db4c5bdaca5d25f",
+            "open_webui": "ghcr.io/open-webui/open-webui:v0.9.6",
+            "docker": _command_output(["docker", "version", "--format", "{{.Server.Version}}"]),
+        },
         "duration_ms": int((time.perf_counter() - started) * 1000),
         "full_mode_status": full_mode_status,
         "certification_recommendation": recommendation,
@@ -139,6 +154,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
         "# Full Mode Certification Report",
         "",
         f"- Created: `{report['created_at']}`",
+        f"- Commit: `{report['commit_sha']}`",
+        f"- Platform: `{report['platform']}`",
+        f"- Service versions: `{json.dumps(report['service_versions'], sort_keys=True)}`",
         f"- Full Mode status: `{report['full_mode_status']}`",
         f"- Recommendation: `{report['certification_recommendation']}`",
         f"- Required wording: {report['required_wording']}",
@@ -168,6 +186,13 @@ def _render_markdown(report: dict[str, Any]) -> str:
 
 def now_z() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _command_output(command: list[str]) -> str:
+    try:
+        return subprocess.run(command, capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+    except Exception:
+        return "unavailable"
 
 
 if __name__ == "__main__":

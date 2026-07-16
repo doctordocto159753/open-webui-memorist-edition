@@ -11,7 +11,7 @@ FalkorDB is the graph memory map.
 Current certification wording:
 
 ```text
-Full Mode: experimental preview; external certification incomplete.
+Full Mode: certified in the tested local Docker environment.
 ```
 
 That wording must remain until every Full gate in `scripts/full_mode_check.py`
@@ -114,8 +114,8 @@ python release/tests/full_compose_smoke.py
 ```
 
 Set `MEMORIST_FULL_COMPOSE_SMOKE=false` only when intentionally skipping the
-gate. If Docker is unavailable or the gate is skipped, Full remains an
-experimental preview.
+gate. The authoritative report passed 11/11 with Docker available and no skips;
+a future report with unavailable/skipped gates must fail certification.
 
 ## Import and reconstruction runtime
 

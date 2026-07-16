@@ -1,40 +1,21 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 set -euo pipefail
-MODE="${1:-lite}"
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
-status() { printf "%s %s\n" "$1" "$2"; }
-command -v docker >/dev/null 2>&1 && status OK "Docker available" || status FAIL "Docker unavailable"
-docker compose version >/dev/null 2>&1 && status OK "Compose available" || status FAIL "Compose unavailable"
-for dir in data objects imports exports; do mkdir -p "$dir" && [[ -w "$dir" ]] && status OK "$dir writable" || status FAIL "$dir not writable"; done
-python - <<'PY'
-import socket
-for port in (8777, 3000):
-    s=socket.socket();
-    try:
-        s.bind(('127.0.0.1', port)); print(f'OK port {port} free')
-    except OSError:
-        print(f'WARN port {port} already in use')
-    finally:
-        s.close()
-PY
-python - <<'PY'
-import json, urllib.request
-checks=[('Memorist Core','http://localhost:8777/memcore/health'),('Open WebUI','http://localhost:3000/health')]
-for name,url in checks:
-    try:
-        print('OK', name, urllib.request.urlopen(url, timeout=2).status)
-    except Exception as exc:
-        print('WARN', name, 'not reachable')
-try:
-    data=json.load(urllib.request.urlopen('http://localhost:8777/memcore/config/effective', timeout=2))
-    print('OK local_only', data.get('local_only'))
-    print('OK schema reachable')
-except Exception:
-    print('WARN Memorist config unavailable')
-PY
-if [[ "$MODE" == "full" ]]; then
-  docker compose -f compose.yml exec -T falkordb redis-cli ping >/dev/null 2>&1 && status OK "FalkorDB healthy" || status WARN "FalkorDB not reachable"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/common.sh"
+ROOT="$(memorist_root)"
+MODE="$(memorist_mode "$ROOT")"
+EXPECTED="${1:-$MODE}"
+[[ "$EXPECTED" == "$MODE" ]] || { echo "FAIL requested $EXPECTED but installed mode is $MODE" >&2; exit 2; }
+
+memorist_compose "$ROOT" "$MODE" config -q
+memorist_compose "$ROOT" "$MODE" exec -T memorist-core python -c \
+  "import json,urllib.request; c=json.load(urllib.request.urlopen('http://localhost:8777/memcore/config/effective')); required=('openwebui_adapter','memory_worker','import_system','memory_context_attachment','active_memory_blocks','user_profile_projection','forgetting_pipeline'); assert c['runtime_profile']=='$MODE'; assert all(c['features'][x] for x in required); print('OK Memorist Core effective runtime verified')"
+
+if [[ "$MODE" == full ]]; then
+  memorist_compose "$ROOT" "$MODE" exec -T postgres pg_isready -U memorist -d memorist >/dev/null
+  memorist_compose "$ROOT" "$MODE" exec -T falkordb redis-cli ping >/dev/null
+  memorist_compose "$ROOT" "$MODE" exec -T memorist-core python -c \
+    "import json,urllib.request; c=json.load(urllib.request.urlopen('http://localhost:8777/memcore/config/effective')); h=json.load(urllib.request.urlopen('http://localhost:8777/memcore/health')); assert c['canonical_store']=='postgres' and c['postgres_dsn_configured'] and c['graph_backend']=='falkordb' and c['hot_scheduler']=='in_memory' and c['features']['graph_projection']; assert h['graph_status']=='ok' and not h['profile_warnings']; print('OK Full PostgreSQL/FalkorDB runtime verified')"
 else
-  status OK "Graph disabled in Lite"
+  echo "OK Lite SQLite runtime verified (PostgreSQL/FalkorDB not required)"
 fi

@@ -115,7 +115,7 @@ jobs:
       - name: Installer dry run (no containers, no secrets)
         run: |
           if command -v pwsh >/dev/null 2>&1; then
-            pwsh -NoProfile -File release/memorist-openwebui/Install-Memorist.ps1 -DryRun -NonInteractive
+            pwsh -NoProfile -File release/memorist-openwebui/Install-Memorist.ps1 -Mode lite -DryRun -NonInteractive
             if [ -f release/memorist-openwebui/.env ]; then
               echo "FAIL: dry run wrote an .env file"; exit 1
             fi

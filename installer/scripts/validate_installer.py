@@ -30,6 +30,7 @@ REQUIRED_SCRIPTS = [
     "Reset-Memorist-Data.ps1",
     "Uninstall-Memorist.ps1",
     "Show-Memorist-Logs.ps1",
+    "Test-Memorist-Full.ps1",
     "Memorist.cmd",
     "README-LOCAL.md",
     "scripts/MemoristCommon.psm1",
@@ -48,6 +49,9 @@ REQUIRED_FUNCTIONS = [
     "Open-MemoristBrowser",
     "Invoke-MemoristCompose",
     "Get-MemoristApiKeyRoles",
+    "Get-MemoristInstalledMode",
+    "Get-MemoristComposeOverlay",
+    "Test-MemoristFullReadiness",
 ]
 
 # PR5-C role -> env var names the installer must write and Compose must pass.
@@ -65,6 +69,12 @@ REQUIRED_ENV_VARS = [
     "WEBUI_SECRET_KEY",
     "OPEN_WEBUI_PORT",
     "MEMORIST_PORT",
+    "COMPOSE_PROJECT_NAME",
+    "MEMORIST_MODE",
+    "MEMORIST_RUNTIME_PROFILE",
+    "MEMORIST_CANONICAL_STORE",
+    "MEMORIST_POSTGRES_PASSWORD",
+    "MEMORIST_POSTGRES_DSN",
     *API_KEY_VARS,
 ]
 
@@ -151,17 +161,21 @@ def check_env_templates(report: Report) -> None:
 
 def check_compose_bridge(report: Report) -> None:
     print("Compose PR5-C bridge:")
-    for label, path in [
-        ("package compose.yml", PKG / "compose.yml"),
-        ("docker-compose.release.yml", ROOT / "docker-compose.release.yml"),
-    ]:
-        if not path.is_file():
-            report.check(False, f"present: {label}")
-            continue
-        text = path.read_text(encoding="utf-8-sig")
+    paths = [PKG / "compose.yml", PKG / "compose.lite.yml", PKG / "compose.full.yml"]
+    for path in paths:
+        report.check(path.is_file(), f"present: {path.relative_to(ROOT)}")
+    text = "\n".join(path.read_text(encoding="utf-8-sig") for path in paths if path.is_file())
+    for label in ["package Compose architecture"]:
         missing = [v for v in API_KEY_VARS if v not in text]
         report.check(not missing, f"{label} passes API-key roles", f"missing: {missing}")
         report.check("WEBUI_SECRET_KEY" in text, f"{label} sets WEBUI_SECRET_KEY")
+    full = (PKG / "compose.full.yml").read_text(encoding="utf-8-sig")
+    lite = (PKG / "compose.lite.yml").read_text(encoding="utf-8-sig")
+    report.check("postgres:" in full and "falkordb:" in full, "Full Compose contains PostgreSQL and FalkorDB")
+    report.check("postgres:" not in lite and "falkordb:" not in lite, "Lite Compose excludes PostgreSQL and FalkorDB")
+    report.check("../../" not in text and "../..\\" not in text, "Compose contexts do not escape package")
+    report.check(":latest" not in text, "Compose images do not use latest tags")
+    report.check("ports:" not in full.split("  postgres:", 1)[1].split("  falkordb:", 1)[0], "PostgreSQL has no host ports")
 
 
 def check_dry_run(report: Report) -> None:
@@ -173,6 +187,8 @@ def check_dry_run(report: Report) -> None:
         "if ($DryRun)" in installer and "Write-MemoristEnvFile" in installer,
         "Install-Memorist guards .env write behind -DryRun",
     )
+    report.check("[switch]$NoBrowser" in installer, "Install-Memorist supports -NoBrowser")
+    report.check("Get-MemoristInstalledMode" in installer, "installer preserves authoritative installed mode")
     for rel in ["Reset-Memorist-Data.ps1", "Uninstall-Memorist.ps1"]:
         text = (PKG / rel).read_text(encoding="utf-8-sig")
         report.check("Read-Host" in text and "$Force" in text, f"{rel} warns before destructive action")

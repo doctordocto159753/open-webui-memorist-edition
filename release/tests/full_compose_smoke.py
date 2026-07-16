@@ -41,6 +41,12 @@ def run() -> dict[str, Any]:
     log_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env.setdefault("MEMORIST_PORT", "8777")
+    env.setdefault("MEMORIST_ACTOR_ASSERTION_SECRET", "compose-smoke-actor-secret")
+    env.setdefault("MEMORIST_ACTOR_SERVICE_TOKEN", "compose-smoke-service-token")
+    env.setdefault(
+        "MEMORIST_OPENWEBUI_WORKSPACE_UUID",
+        "00000000-0000-0000-0000-000000000001",
+    )
     try:
         up = _compose(
             ["up", "-d", "--build", "postgres", "falkordb", "memorist-core"],

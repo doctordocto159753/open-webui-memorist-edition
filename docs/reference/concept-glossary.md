@@ -14,7 +14,7 @@ This glossary freezes baseline terminology before the final four implementation 
 - `Canonical Store`: the authoritative persistence layer. SQLite is canonical in Lite; PostgreSQL is canonical in Full.
 - `Projection`: a derived index or graph view built from canonical state. A projection is never the source of truth.
 - `Lite Mode`: the currently supported local baseline using SQLite and local object paths.
-- `Full Mode`: the PostgreSQL canonical store plus durable PostgreSQL jobs/outboxes, Hot Scheduler runnable references, and FalkorDB projection/runtime profile. Current Full support is experimental and not beta-supported until every `full_mode_check.py` gate passes.
+- `Full Mode`: the PostgreSQL canonical store plus durable PostgreSQL jobs/outboxes, Hot Scheduler runnable references, and FalkorDB projection/runtime profile. All `full_mode_check.py` gates passed in the tested local Docker environment.
 - `Model Control Plane`: the role/profile/default/usage/privacy surface that separates Open WebUI’s main chat model from Memorist memory roles.
 - `Prompt Pack`: a versioned set of system prompts, input schemas, output schemas, validators, evidence rules, rejection rules, role mappings, and timeout metadata for non-chat memory worker nodes. Prompt Pack v2 is current baseline.
 - `Prompt Execution`: a local auditable invocation of a prompt against input data with prompt/model/provider metadata, scope links, input/output hashes, raw/validated output references, warnings, sanitized error, latency, and token counts.

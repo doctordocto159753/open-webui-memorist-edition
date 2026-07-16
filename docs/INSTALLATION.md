@@ -4,9 +4,9 @@ This guide covers running Memorist locally: the Windows-first one-click
 release path, the cross-platform script path, and what to configure on first
 run. Developer setup from source lives in [DEVELOPMENT.md](DEVELOPMENT.md).
 
-> **Status:** early public alpha. **Lite** mode (SQLite, no graph services) is
-> the validated local path. **Full** mode (PostgreSQL + FalkorDB) is an
-> advanced preview.
+> **Status:** early public alpha. **Lite** uses SQLite. **Full** uses PostgreSQL
+> + FalkorDB and is certified in the tested local Docker environment (11/11
+> external gates and Windows 11 one-click/lifecycle smoke).
 
 ## Requirements
 
@@ -14,7 +14,7 @@ run. Developer setup from source lives in [DEVELOPMENT.md](DEVELOPMENT.md).
 | --- | --- |
 | OS | Windows 10/11 first-class; macOS/Linux via PowerShell 7 or the bash scripts |
 | Container engine | **Docker Desktop** (or Docker Engine + Compose on Linux), installed and running |
-| Disk | ~5 GB free for images and data |
+| Disk | Lite: ~4 GB; Full: ~8 GB and 6 GB RAM recommended |
 | Network | Only to pull images — and, optionally, to reach a remote model provider you configure |
 
 **Docker Desktop is currently required for the one-click release path.** The
@@ -36,7 +36,9 @@ memorist-openwebui/
   Start-Memorist.ps1 / Stop-Memorist.ps1 / Restart-Memorist.ps1
   Show-Memorist-Logs.ps1
   Reset-Memorist-Data.ps1 / Uninstall-Memorist.ps1
-  compose.yml                  ← release orchestration (lite/full profiles)
+  compose.yml                  ← common release orchestration
+  compose.lite.yml / compose.full.yml
+  runtime/                     ← self-contained Core + integration build inputs
   .env.example                 ← config template (copied to .env on install)
   README-LOCAL.md
   scripts/                     ← shared PowerShell module + bash equivalents
@@ -49,7 +51,7 @@ memorist-openwebui/
 1. Double-click **`Memorist.cmd`**. It launches the wizard through PowerShell
    using `-ExecutionPolicy Bypass` for that one process only — nothing
    system-wide changes.
-2. The wizard checks Docker, ports (`3000`, `8777`), and disk; creates local
+2. The wizard explicitly asks Lite or Full, then checks Docker, ports (`3000`, `8777`), and disk; creates local
    data folders; generates a private `.env` with strong session secrets; asks
    how memory extraction should run (see below); starts the services; waits
    for health; and opens <http://localhost:3000>.
@@ -57,9 +59,9 @@ memorist-openwebui/
 From a terminal instead:
 
 ```powershell
-.\Install-Memorist.ps1              # Lite (recommended)
-.\Install-Memorist.ps1 -Mode full   # Advanced preview
-.\Install-Memorist.ps1 -DryRun      # Validate only — writes nothing, starts nothing
+.\Install-Memorist.ps1                            # interactive Lite/Full choice
+.\Install-Memorist.ps1 -Mode full -NonInteractive -NoBrowser
+.\Install-Memorist.ps1 -Mode lite -DryRun -NonInteractive
 ```
 
 Re-running the wizard is safe: existing secrets in `.env` are preserved.
@@ -79,7 +81,7 @@ The wizard offers three choices for the memory-extraction role:
 
 ### How key storage works (and why)
 
-The in-app **Memory Setup** page (Settings → Memorist) never accepts, stores,
+The in-app **Processing Nodes** page (Settings → Memorist) never accepts, stores,
 returns, or logs plaintext API keys — it stores an **environment-variable
 reference** (a name), and the backend resolves the value from its own process
 environment. The installer is the local-user bridge for that model:
@@ -89,7 +91,7 @@ environment. The installer is the local-user bridge for that model:
   injected into the `memorist-core` container;
 - in the UI you reference the variable **name**, e.g.
   `MEMORIST_MEMORY_EXTRACTION_API_KEY` — never the value;
-- the key is never echoed back (only a `****last4` mask), never logged, never
+- the key is never echoed back, never logged, never
   stored in the database, never returned by any API.
 
 Role variables the installer manages:
@@ -127,17 +129,19 @@ http://localhost:8777/memcore/diagnostics/daily
 
 ## Lite vs Full
 
-| | Lite (default) | Full (advanced preview) |
+| | Lite (default) | Full |
 | --- | --- | --- |
 | Canonical store | SQLite | PostgreSQL |
 | Graph projection | disabled | FalkorDB |
 | Embeddings | optional/disabled | optional |
 | Services | `memorist-core`, `open-webui` | + `postgres`, `falkordb` |
 | Resource use | low | higher |
-| One-click reliability | ✅ validated | ⚠️ preview — start with Lite |
+| Scheduler | disabled | `in_memory` |
+| Required features | adapter, worker/import/attachment/blocks/profile/forget | same + graph projection |
+| Host ports | loopback UI/Core only | same; PostgreSQL/FalkorDB internal only |
+| One-click reliability | validated | certified in the tested local Docker environment |
 
-Full mode is not beta-supported until every external Full gate passes
-(`python scripts/full_mode_check.py` from a source checkout). Lite and Full
+The Full certification report passed every external gate. Lite and Full
 share the same canonical semantic pipeline, so switching later does not change
 what the memory machine decides.
 
@@ -160,8 +164,9 @@ you pass `-PurgeData`. Nothing deletes memory silently.
 
 - **Config + secrets:** `.env` in the package folder (git-ignored, restricted
   to your user — keep it private).
-- **Memory data:** Docker named volumes plus local `data/`, `objects/`,
-  `imports/`, `exports/` folders.
+- **Lite canonical data:** SQLite in the project-scoped `memorist-data` volume.
+- **Full canonical data:** PostgreSQL in `memorist-postgres-data`; FalkorDB in
+  `falkordb-data` is rebuildable and non-canonical.
 - **Logs:** `Show-Memorist-Logs.ps1` / `scripts/logs.sh`.
 
 ## Backup and upgrade
@@ -172,8 +177,9 @@ files does not delete memories.
 - **Backup:** `scripts/backup.sh` (uses the SQLite backup API — do not copy a
   live WAL database by hand), or Heritage export for a portable, verifiable
   package. See [reference/backup-restore.md](reference/backup-restore.md).
-- **Upgrade:** stop Memorist → replace the package files with the new release
-  (keep `.env` and `data/`) → start again. Volumes are preserved.
+- **Upgrade:** stop Memorist, copy `.env` to the new extracted package, rerun
+  the installer in the persisted mode, then start. Stable volume names retain
+  accounts and data even if the extraction path changes.
 - **Restore:** `scripts/restore.sh path/to/heritage.zip` (dry-run first).
 
 ## Environment configuration
@@ -201,7 +207,8 @@ do not reuse the example placeholders in a shared deployment.
 - CI validates installer static checks, compose configuration, and dry-run —
   not every Windows desktop configuration. Report installer issues with the
   wizard output attached.
-- Full mode is a preview; expect rough edges around graph services.
+- Full certification is environment-specific, not a production-readiness or
+  security-audit claim.
 - There is no signed native `.msi`/`.exe` installer yet; Windows SmartScreen
   may warn about the script package.
 

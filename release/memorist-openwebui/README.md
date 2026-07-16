@@ -47,7 +47,7 @@ cp .env.example .env
 scripts/start-full.sh
 ```
 
-Full mode starts optional graph services, uses more memory, and remains an experimental preview until external PostgreSQL/FalkorDB gates pass.
+Full mode starts PostgreSQL and FalkorDB, uses more memory, and is certified in the tested local Docker environment.
 
 ## Install Memorist Into Open WebUI
 

@@ -49,12 +49,12 @@ FORBIDDEN_NAMES = {
 }
 
 DEFAULT_SECRET_PATTERNS = [
-    r"OPENAI_API_KEY\s*=",
-    r"ANTHROPIC_API_KEY\s*=",
-    r"GOOGLE_API_KEY\s*=",
+    r"OPENAI_API_KEY[ \t]*=[ \t]*\S+",
+    r"ANTHROPIC_API_KEY[ \t]*=[ \t]*\S+",
+    r"GOOGLE_API_KEY[ \t]*=[ \t]*\S+",
     r"\bsk-[A-Za-z0-9_-]{12,}",
     r"BEGIN " r"PRIVATE KEY",
-    r"(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{16,}",
+    r"(?i)(api[_-]?key|secret|token|password)[ \t]*[:=][ \t]*['\"]?[A-Za-z0-9_\-]{16,}",
 ]
 
 

@@ -50,7 +50,7 @@ Memorist has two explicit ledgers and one projection store:
 
 ```text
 SQLite      is the Lite ledger (default, supported local path).
-PostgreSQL  is the Full ledger (advanced preview).
+PostgreSQL  is the Full ledger.
 FalkorDB    is the graph memory map — a rebuildable projection, never canonical.
 ```
 
@@ -213,9 +213,11 @@ The public release path is a self-contained package
   (Docker detection, `.env` generation, optional local API-key capture,
   health checks, browser launch), plus start/stop/restart/logs/reset/uninstall
   scripts and bash equivalents.
-- `compose.yml` with `lite` and `full` profiles, healthchecks, loopback-bound
-  ports, and `.env`-driven configuration; the repo root carries an equivalent
-  `docker-compose.release.yml` for source checkouts and CI validation.
+- `compose.yml` as the common base plus `compose.lite.yml` and
+  `compose.full.yml` overlays, with healthchecks, loopback-bound application
+  ports, internal-only data services, and `.env`-driven configuration. The
+  older root `docker-compose.release.yml` is source compatibility only, not a
+  Full certification target.
 - Checksums (`checksums.sha256`) and packaging scripts under `installer/` and
   `release/`.
 

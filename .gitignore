@@ -42,6 +42,8 @@ release/rc/*.sha256
 release/rc/memorist-openwebui-*/
 release/build/
 release/artifacts/logs/
+release/artifacts/full-mode-certification-report.ijson
+release/artifacts/full-mode-certification-report.md
 release/source/
 
 # Editors and OS files

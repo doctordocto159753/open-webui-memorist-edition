@@ -161,6 +161,23 @@ class Settings(BaseSettings):
                 )
             if self.hot_scheduler != "in_memory":
                 raise ValueError("runtime_profile=full requires hot_scheduler=in_memory")
+            if self.env.lower() == "production":
+                required_full_features = {
+                    "enable_openwebui_adapter": self.enable_openwebui_adapter,
+                    "enable_graph_projection": self.enable_graph_projection,
+                    "enable_memory_worker": self.enable_memory_worker,
+                    "enable_import_system": self.enable_import_system,
+                    "enable_memory_context_attachment": self.enable_memory_context_attachment,
+                    "enable_active_memory_blocks": self.enable_active_memory_blocks,
+                    "enable_user_profile_projection": self.enable_user_profile_projection,
+                    "enable_forgetting_pipeline": self.enable_forgetting_pipeline,
+                }
+                disabled = [name for name, enabled in required_full_features.items() if not enabled]
+                if disabled:
+                    raise ValueError(
+                        "production full runtime requires enabled features: "
+                        + ", ".join(disabled)
+                    )
         if (
             self.runtime_profile == "dev"
             and self.canonical_store == "postgres"

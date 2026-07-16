@@ -42,7 +42,7 @@ python release/tests/full_sqlite_to_postgres_migration_smoke.py
 The current claim remains:
 
 ```text
-Full Mode: experimental preview; external certification incomplete.
+Full Mode: certified in the tested local Docker environment.
 ```
 
 The claim can change only when `python scripts/full_mode_check.py` reports all

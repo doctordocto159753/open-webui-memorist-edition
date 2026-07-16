@@ -21,6 +21,7 @@ $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Import-Module (Join-Path $scriptRoot 'scripts\MemoristCommon.psm1') -Force
 $root = Get-MemoristRoot -ScriptRoot $scriptRoot
 Set-Location $root
+$Mode = Get-MemoristInstalledMode -Root $root
 
 Show-MemoristBanner -Subtitle 'Reset data (DESTRUCTIVE)'
 Write-Host '  This permanently deletes all captured memories, imports, exports,' -ForegroundColor Red
@@ -39,7 +40,7 @@ $docker = Test-MemoristDocker
 if ($docker.Ready) {
     $composeFile = Get-MemoristComposeFile -Root $root
     Write-MemoristLog 'Stopping services and removing named volumes...' 'STEP'
-    Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile 'lite' -Arguments @('down', '-v') | Out-Null
+    Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments @('down', '-v', '--remove-orphans') | Out-Null
 } else {
     Write-MemoristLog 'Docker not reachable; removing local folders only.' 'WARN'
 }

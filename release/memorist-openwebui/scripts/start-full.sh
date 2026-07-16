@@ -2,11 +2,13 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+. "$SCRIPT_DIR/common.sh"
 cd "$ROOT"
-cp -n .env.example .env 2>/dev/null || true
+MODE="$(memorist_mode "$ROOT")"
+[[ "$MODE" == full ]] || { echo "FAIL: installed mode is $MODE, not full" >&2; exit 2; }
 mkdir -p data objects imports exports
-echo "WARN: Full mode uses more memory and starts FalkorDB."
-MEMORIST_GRAPH_BACKEND=${MEMORIST_GRAPH_BACKEND:-falkordb} docker compose --profile full -f compose.yml up -d --build
+echo "Full mode starts PostgreSQL, FalkorDB, Memorist Core, and Open WebUI."
+memorist_compose "$ROOT" "$MODE" up -d --build --remove-orphans
 echo "Memorist Core: http://localhost:${MEMORIST_PORT:-8777}/memcore/health"
 echo "Open WebUI: http://localhost:${OPEN_WEBUI_PORT:-3000}"
-"$SCRIPT_DIR/doctor.sh" full || true
+"$SCRIPT_DIR/doctor.sh" full

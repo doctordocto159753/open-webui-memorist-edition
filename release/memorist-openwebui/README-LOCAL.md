@@ -4,14 +4,14 @@ Memorist is a local-first memory edition of Open WebUI. This package runs
 everything on your own machine with Docker; you do **not** need Git, Python, or
 `uv` to use it.
 
-> Status: alpha/beta. Lite mode is the validated one-click path. Full mode
-> (PostgreSQL + FalkorDB graph) is an advanced, more resource-hungry preview.
+> Status: alpha/beta. Lite uses SQLite. Full uses PostgreSQL + FalkorDB and is
+> certified in the tested local Docker environment; it uses more resources.
 
 ## 1. Requirements
 
 - **Windows 10/11** with **Docker Desktop** installed and running.
   Download: <https://www.docker.com/products/docker-desktop/>
-- ~5 GB free disk for images and data.
+- Lite: ~4 GB free disk. Full: ~8 GB free disk and 6 GB RAM recommended.
 
 That's it. Docker Desktop provides the container engine; the installer detects
 it and tells you exactly what to do if it is missing or not started.
@@ -23,7 +23,8 @@ it and tells you exactly what to do if it is missing or not started.
    - It launches the setup wizard through PowerShell (no system-wide policy
      changes).
 3. Follow the short wizard:
-   - it checks Docker, ports, and disk;
+   - asks explicitly for Lite (SQLite) or Full (PostgreSQL + FalkorDB);
+   - checks Docker, ports, and disk;
    - creates local data folders;
    - generates a private `.env` with strong session secrets;
    - asks how memory extraction should run (see below);
@@ -33,9 +34,9 @@ it and tells you exactly what to do if it is missing or not started.
 Prefer the command line? From this folder:
 
 ```powershell
-.\Install-Memorist.ps1            # Lite (recommended)
-.\Install-Memorist.ps1 -Mode full # Advanced
-.\Install-Memorist.ps1 -DryRun    # Validate only; writes nothing, starts nothing
+.\Install-Memorist.ps1                            # interactive Lite/Full choice
+.\Install-Memorist.ps1 -Mode full -NonInteractive -NoBrowser
+.\Install-Memorist.ps1 -Mode lite -DryRun -NonInteractive
 ```
 
 ## 3. Memory processing options
@@ -50,8 +51,9 @@ If you choose a remote provider, the wizard stores your key **only** in the
 local `.env` file and injects it into the `memorist-core` container. The key is
 **never** shown again, never written to logs, and never stored in the browser or
 database. In the app you reference the key by its **variable name**, for example
-`MEMORIST_MEMORY_EXTRACTION_API_KEY`, under **Settings → Memorist → Memory
-Setup**. This bridges the PR5-C env-var reference model for local users.
+`MEMORIST_MEMORY_EXTRACTION_API_KEY`, under **Settings → Memorist → Processing
+Nodes**. Endpoint, model, capabilities, privacy acknowledgement, testing, and
+role-default assignment happen there; the installer does not bypass them.
 
 ## 4. Everyday commands
 
@@ -70,15 +72,20 @@ volumes by default; pass `-PurgeData` to remove them.
 ## 5. Where things live
 
 - **Config + secrets:** `.env` in this folder (git-ignored; keep it private).
-- **Memory data:** Docker named volumes plus the local `data/`, `objects/`,
-  `imports/`, `exports/` folders.
+- **Lite canonical memory:** SQLite in the project-scoped `memorist-data` volume.
+- **Full canonical memory:** PostgreSQL in `memorist-postgres-data`; FalkorDB
+  in `falkordb-data` is a rebuildable projection only.
+- **Other data:** stable `memorist-*` volumes plus local `data/`, `objects/`,
+  `imports/`, and `exports/` folders.
 - **Logs:** `Show-Memorist-Logs.ps1`, or the `logs/` folder.
 
 ## 6. Upgrading
 
-Your data lives in Docker volumes and local folders, so upgrading images does
-not delete memories. To upgrade: stop Memorist, replace the package files with
-the new release (keep your `.env` and `data/`), then run `Start-Memorist.ps1`.
+Data uses stable Docker volume names independent of the extraction path. To
+upgrade: stop Memorist, copy the existing `.env` into the new extracted
+package, and rerun the installer in the persisted mode. A Lite-to-Full change
+requires the documented SQLite-to-PostgreSQL migration; the installer refuses
+to abandon SQLite data silently.
 See the packaged `docs/upgrade.md`, and `docs/reference/backup-restore.md` in
 the source repository, for backups.
 

@@ -3,12 +3,18 @@
 import hashlib
 import json
 import shutil
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
 
 VERSION = "0.2.0-beta.1"
 OPENWEBUI_BASE_IMAGE = "ghcr.io/open-webui/open-webui:v0.9.6"
+POSTGRES_IMAGE = "postgres:16.9-alpine3.22"
+FALKORDB_IMAGE = (
+    "falkordb/falkordb@sha256:"
+    "2496643cabd67e87fd82458383400c049324daec1fe674ba0db4c5bdaca5d25f"
+)
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "memorist-core" / "src"))
@@ -59,25 +65,22 @@ def assemble() -> dict[str, str]:
     if TARGET.exists():
         shutil.rmtree(TARGET)
     TARGET.mkdir(parents=True)
-    for name in [
-        "README.md",
-        "LICENSE",
-        "Makefile",
-        ".env.example",
-        "docker-compose.lite.yml",
-        "docker-compose.full.yml",
-        "docker-compose.openwebui-smoke.yml",
-        "docker-compose.release.yml",
-    ]:
+    _write_source_version_metadata()
+    _refresh_source_installer_checksums()
+    for name in ["README.md", "LICENSE"]:
         source = ROOT / name
         if source.exists():
             shutil.copy2(source, TARGET / name)
-    for name in ["memorist-core", "open-webui-integration", "docs", "installer", "release"]:
-        source = ROOT / name
-        if source.exists():
-            shutil.copytree(source, TARGET / name, ignore=_ignore)
+    package_target = TARGET / "release" / "memorist-openwebui"
+    package_target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(
+        ROOT / "release" / "memorist-openwebui",
+        package_target,
+        ignore=_ignore,
+    )
+    _copy_installer_runtime()
     _copy_rc_docs()
-    _write_version_metadata()
+    _refresh_installer_checksums()
     manifest = build_package_manifest(TARGET)
     (TARGET / "release" / "package-manifest.ijson").write_text(
         json.dumps(manifest, ensure_ascii=False, separators=(",", ":")),
@@ -108,9 +111,7 @@ def assemble() -> dict[str, str]:
     return {"zip": str(ZIP_PATH), "sha256": str(SHA_PATH), "digest": digest}
 
 
-def _write_version_metadata() -> None:
-    version_dir = TARGET / "release" / "memorist-openwebui"
-    version_dir.mkdir(parents=True, exist_ok=True)
+def _write_source_version_metadata() -> None:
     payload = {
         "package": "memorist-openwebui",
         "target_label": "v0.2.0-beta.1 candidate",
@@ -118,9 +119,10 @@ def _write_version_metadata() -> None:
         "schema_version": SCHEMA_VERSION,
         "openwebui_base": OPENWEBUI_BASE_IMAGE,
         "openwebui_integration_version": "0.2.0-beta.1",
+        "postgres_image": POSTGRES_IMAGE,
+        "falkordb_image": FALKORDB_IMAGE,
     }
     text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    (version_dir / "VERSION.ijson").write_text(text, encoding="utf-8")
     mirror = ROOT / "release" / "memorist-openwebui"
     mirror.mkdir(parents=True, exist_ok=True)
     (mirror / "VERSION.ijson").write_text(text, encoding="utf-8")
@@ -163,6 +165,37 @@ def _copy_rc_docs() -> None:
         source = RC_ROOT / name
         if source.exists():
             shutil.copy2(source, TARGET / name)
+
+
+def _copy_installer_runtime() -> None:
+    """Put every build context inside the extracted installer directory."""
+    runtime = TARGET / "release" / "memorist-openwebui" / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    core_target = runtime / "memorist-core"
+    core_target.mkdir()
+    for name in ["Dockerfile", "pyproject.toml", "README.md"]:
+        shutil.copy2(ROOT / "memorist-core" / name, core_target / name)
+    for name in ["src", "migrations"]:
+        shutil.copytree(ROOT / "memorist-core" / name, core_target / name, ignore=_ignore)
+    integration_target = runtime / "open-webui-integration"
+    integration_target.mkdir()
+    shutil.copytree(
+        ROOT / "open-webui-integration" / "memorist",
+        integration_target / "memorist",
+        ignore=lambda directory, names: {
+            name for name in names if name in {"tests", "__pycache__", ".pytest_cache"}
+        },
+    )
+
+
+def _refresh_installer_checksums() -> None:
+    script = TARGET / "release" / "memorist-openwebui" / "scripts" / "gen_checksums.py"
+    subprocess.run([sys.executable, str(script)], check=True)
+
+
+def _refresh_source_installer_checksums() -> None:
+    script = ROOT / "release" / "memorist-openwebui" / "scripts" / "gen_checksums.py"
+    subprocess.run([sys.executable, str(script)], check=True)
 
 
 def _write_checksums(output: Path) -> None:

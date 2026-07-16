@@ -209,13 +209,16 @@ def test_shipped_entrypoint_mounts_router_with_verified_openwebui_user(
 
 
 def test_release_compose_keeps_core_command_and_mounts_authenticated_ui_router() -> None:
-    compose_path = ROOT.parents[1] / "release" / "memorist-openwebui" / "compose.yml"
-    compose = yaml.safe_load(compose_path.read_text(encoding="utf-8-sig"))
-    core = compose["services"]["memorist-core"]
+    package = ROOT.parents[1] / "release" / "memorist-openwebui"
+    compose = yaml.safe_load((package / "compose.yml").read_text(encoding="utf-8-sig"))
+    lite = yaml.safe_load((package / "compose.lite.yml").read_text(encoding="utf-8-sig"))
+    full = yaml.safe_load((package / "compose.full.yml").read_text(encoding="utf-8-sig"))
     webui = compose["services"]["open-webui"]
 
-    assert "command" not in core
-    assert "/memcore/health" in " ".join(core["healthcheck"]["test"])
+    for overlay in (lite, full):
+        core = overlay["services"]["memorist-core"]
+        assert "command" not in core
+        assert "/memcore/health" in " ".join(core["healthcheck"]["test"])
     assert webui["command"] == ["python", "-m", "memorist.backend.openwebui_entrypoint"]
     assert webui["environment"]["PYTHONPATH"] == "/memorist-integration"
     assert "MEMORIST_OPENWEBUI_WORKSPACE_UUID" in webui["environment"]
