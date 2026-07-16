@@ -52,8 +52,10 @@ jobs:
           target="${RUNNER_TEMP}/Memorist Full Test"
           rm -rf "$target" && mkdir -p "$target"
           unzip -q release/rc/memorist-openwebui-0.2.0-beta.1.zip -d "$target"
-          pkg=$(find "$target" -type f -path '*/release/memorist-openwebui/compose.yml' -printf '%h\n' | head -1)
+          pkg=$(find "$target" -maxdepth 2 -type f -name 'Memorist.cmd' -printf '%h\n' | head -1)
           test -n "$pkg"
+          test -f "$pkg/compose.yml"
+          test -f "$pkg/compose.full.yml"
           test -d "$pkg/runtime/memorist-core"
           test -d "$pkg/runtime/open-webui-integration"
           ! grep -R -E 'context:[[:space:]]*\.\./|source:[[:space:]]*\.\./' "$pkg"/compose*.yml
