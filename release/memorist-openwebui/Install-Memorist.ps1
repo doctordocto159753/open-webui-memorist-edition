@@ -275,23 +275,29 @@ if ($DryRun) {
 $composeFile = Get-MemoristComposeFile -Root $root
 if ($DryRun -or -not $docker.Ready) {
     Write-MemoristLog 'Validating Compose configuration...' 'STEP'
-    if ($docker.Ready) {
-        # Compose validation uses process-scoped values only; dry-run never
-        # writes them to disk or prints them.
-        $env:WEBUI_SECRET_KEY = $webuiSecret
-        $env:MEMORIST_ACTOR_ASSERTION_SECRET = $actorAssertion
-        $env:MEMORIST_ACTOR_SERVICE_TOKEN = $actorToken
-        $env:MEMORIST_OPENWEBUI_WORKSPACE_UUID = '00000000-0000-0000-0000-000000000001'
-        if ($Mode -eq 'full') {
-            $env:MEMORIST_POSTGRES_PASSWORD = $postgresPassword
-            $env:MEMORIST_POSTGRES_DSN = ("postgresql://memorist:{0}@postgres:5432/memorist" -f $postgresPassword)
-        }
-        $rc = Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments @('config', '-q')
-        if ($rc -eq 0) { Write-MemoristLog 'Compose configuration is valid.' 'OK' }
-        else { Write-MemoristLog 'Compose configuration failed to validate.' 'FAIL' }
-    } else {
-        Write-MemoristLog 'Docker unavailable; skipped live compose validation.' 'WARN'
+    if (-not $docker.Ready) {
+        Write-MemoristLog 'Docker/Compose is required to validate the effective package configuration.' 'FAIL'
+        Write-MemoristLog 'Dry run failed. No containers were started and no secrets were written.' 'FAIL'
+        exit 1
     }
+
+    # Compose validation uses process-scoped values only; dry-run never writes
+    # them to disk or prints them.
+    $env:WEBUI_SECRET_KEY = $webuiSecret
+    $env:MEMORIST_ACTOR_ASSERTION_SECRET = $actorAssertion
+    $env:MEMORIST_ACTOR_SERVICE_TOKEN = $actorToken
+    $env:MEMORIST_OPENWEBUI_WORKSPACE_UUID = '00000000-0000-0000-0000-000000000001'
+    if ($Mode -eq 'full') {
+        $env:MEMORIST_POSTGRES_PASSWORD = $postgresPassword
+        $env:MEMORIST_POSTGRES_DSN = ("postgresql://memorist:{0}@postgres:5432/memorist" -f $postgresPassword)
+    }
+    $rc = Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments @('config', '-q')
+    if ($rc -ne 0) {
+        Write-MemoristLog 'Compose configuration failed to validate.' 'FAIL'
+        Write-MemoristLog 'Dry run failed. No containers were started and no secrets were written.' 'FAIL'
+        exit 1
+    }
+    Write-MemoristLog 'Compose configuration is valid.' 'OK'
     Write-Host ''
     Write-MemoristLog 'Dry run complete. No containers were started and no secrets were written.' 'OK'
     exit 0
