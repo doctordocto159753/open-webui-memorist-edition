@@ -14,4 +14,4 @@ Full:
 scripts/start-full.sh
 ```
 
-For detailed Windows, Docker Compose, Open WebUI Filter, validation, import, Heritage, backup, restore, and GitHub upload steps, see `docs/deployment-guide.md` inside the source tree.
+For detailed Windows, Docker Compose, Open WebUI Filter, validation, import, Heritage, backup, and restore steps, see `docs/INSTALLATION.md` and `docs/DEVELOPMENT.md` inside the source tree.

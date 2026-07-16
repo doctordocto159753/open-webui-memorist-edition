@@ -49,7 +49,7 @@ authenticated chat ID. **Memory On** permits both capture/processing and
 retrieval/attachment. **Memory Off** disables both for that chat and explains
 the privacy effect before send. The state is persisted per actor and chat,
 rolls back visually when a save fails, and regeneration helpers preserve the
-original turn's setting. See [Memory workflow toggle](../../../docs/memory-workflow-toggle.md).
+original turn's setting. See [The Memory Machine — consent boundary](../../../docs/MEMORY_MACHINE.md#the-consent-boundary-memory-on--memory-off).
 
 
 ## First-run memory node setup
@@ -59,4 +59,4 @@ Mount `memorist-memory-node-setup` at
 reports the real local fallback state and configures the existing role-based
 Model Control profiles through the authenticated proxy. Remote providers use an
 environment-variable secret reference; raw API keys are never accepted or
-returned. See [Memory processing node setup](../../../docs/memory-node-configuration.md).
+returned. See [Installation — memory processing and API keys](../../../docs/INSTALLATION.md#memory-processing-and-api-keys) and [Model Control Plane reference](../../../docs/reference/model-control-plane.md).

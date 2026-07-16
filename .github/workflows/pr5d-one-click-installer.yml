@@ -42,7 +42,7 @@ jobs:
               if ($failed) { exit 1 }
             '
           else
-            echo "pwsh not available on this runner — PowerShell parse skipped (covered by static validator). See docs/local-release.md."
+            echo "pwsh not available on this runner — PowerShell parse skipped (covered by static validator). See docs/DEVELOPMENT.md."
           fi
       - name: Pester tests (best effort)
         run: |

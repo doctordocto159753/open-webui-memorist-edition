@@ -135,6 +135,6 @@ curl 'http://localhost:8777/memcore/model-control/defaults?role=memory_extractio
 Official ChatGPT/OpenAI imports use the same canonical `memory_extraction` role and memory
 schema as live capture. `full_memory_reconstruction` schedules one durable low-priority job
 per eligible imported user or assistant message, records prompt/model usage provenance, and
-does not sample for cost reasons. See `docs/import.md` for the bounded processing and retry
+does not sample for cost reasons. See `docs/reference/import.md` for the bounded processing and retry
 contract. The import API control plane is currently SQLite-backed; direct PostgreSQL import
 orchestration parity remains explicitly tracked as follow-up work.

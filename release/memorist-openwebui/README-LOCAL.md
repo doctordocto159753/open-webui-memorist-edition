@@ -79,7 +79,8 @@ volumes by default; pass `-PurgeData` to remove them.
 Your data lives in Docker volumes and local folders, so upgrading images does
 not delete memories. To upgrade: stop Memorist, replace the package files with
 the new release (keep your `.env` and `data/`), then run `Start-Memorist.ps1`.
-See `docs/upgrade.md` and `docs/backup-restore.md` for backups.
+See the packaged `docs/upgrade.md`, and `docs/reference/backup-restore.md` in
+the source repository, for backups.
 
 ## 7. Troubleshooting
 
@@ -89,5 +90,5 @@ See `docs/upgrade.md` and `docs/backup-restore.md` for backups.
 - **UI slow to load first time:** images are still pulling/building; watch
   `Show-Memorist-Logs.ps1`.
 
-More detail: `docs/troubleshooting.md` and the repository
-`docs/windows-local-install.md`.
+More detail: the packaged `docs/troubleshooting.md`, and the repository's
+`docs/INSTALLATION.md` and `docs/TROUBLESHOOTING.md`.
