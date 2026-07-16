@@ -5,6 +5,9 @@ name: PR5-D One-Click Installer
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: pr5d-one-click-installer-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -14,13 +17,14 @@ jobs:
     name: Installer Package — Static Validation
     runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          clean: false
+          clean: true
+          persist-credentials: false
           show-progress: false
-      - name: Static installer validation (no PowerShell required)
+      - name: Static installer validation
         run: python3 installer/scripts/validate_installer.py --dry-run
-      - name: PowerShell syntax parse (best effort)
+      - name: PowerShell syntax parse when available
         run: |
           if command -v pwsh >/dev/null 2>&1; then
             pwsh -NoProfile -Command '
@@ -35,27 +39,12 @@ jobs:
                   $failed = $true
                   Write-Host "PARSE ERRORS in $($f.Name):"
                   $errors | ForEach-Object { Write-Host "  $($_.Message)" }
-                } else {
-                  Write-Host "OK $($f.Name)"
                 }
               }
               if ($failed) { exit 1 }
             '
           else
-            echo "pwsh not available on this runner — PowerShell parse skipped (covered by static validator). See docs/DEVELOPMENT.md."
-          fi
-      - name: Pester tests (best effort)
-        run: |
-          if command -v pwsh >/dev/null 2>&1; then
-            pwsh -NoProfile -Command '
-              if (Get-Module -ListAvailable -Name Pester) {
-                Invoke-Pester -Path release/memorist-openwebui/tests -CI
-              } else {
-                Write-Host "Pester not installed — skipping module unit tests."
-              }
-            '
-          else
-            echo "pwsh not available — Pester tests skipped."
+            echo "pwsh unavailable; mandatory PowerShell contract coverage runs in PR5-F."
           fi
 
   compose-config:
@@ -66,35 +55,35 @@ jobs:
       MEMORIST_ACTOR_SERVICE_TOKEN: ci-validation-token
       MEMORIST_OPENWEBUI_WORKSPACE_UUID: 00000000-0000-0000-0000-000000000001
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          clean: false
+          clean: true
+          persist-credentials: false
           show-progress: false
       - name: Require an authoritative Compose CLI
         run: bash .github/scripts/ensure-compose.sh
-      - name: Validate release compose (root + packaged, lite + full)
-        # Missing Compose is a hard failure; this always renders the
-        # authoritative merged Lite and Full configurations.
+      - name: Validate release compose (root + packaged, Lite + Full)
         run: python3 installer/scripts/validate_compose.py
 
   dry-run:
     name: Installer Package — Dry Run
     runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          clean: false
+          clean: true
+          persist-credentials: false
           show-progress: false
       - name: Installer dry run (no containers, no secrets)
         run: |
           if command -v pwsh >/dev/null 2>&1; then
-            pwsh -NoProfile -File release/memorist-openwebui/Install-Memorist.ps1 -Mode lite -DryRun -NonInteractive
+            pwsh -NoProfile -File release/memorist-openwebui/Install-Memorist.ps1 -Mode lite -DryRun -NonInteractive -NoBrowser
             if [ -f release/memorist-openwebui/.env ]; then
               echo "FAIL: dry run wrote an .env file"; exit 1
             fi
             echo "OK: dry run wrote no .env"
           else
-            echo "pwsh not available — validating dry-run guards statically instead."
+            echo "pwsh unavailable; validating dry-run guards statically."
             python3 installer/scripts/validate_installer.py --dry-run
           fi
 
@@ -102,9 +91,10 @@ jobs:
     name: Installer Package — Release Manifest
     runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          clean: false
+          clean: true
+          persist-credentials: false
           show-progress: false
       - name: Verify package checksums include installer entry points
         run: python3 release/memorist-openwebui/scripts/gen_checksums.py --check
