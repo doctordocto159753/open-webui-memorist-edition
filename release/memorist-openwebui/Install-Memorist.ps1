@@ -14,7 +14,7 @@
     name. See docs/INSTALLATION.md in the source repository.
 
 .PARAMETER Mode
-    'lite' (default, recommended) or 'full'.
+    'lite' or 'full'. Omit only for the interactive wizard.
 
 .PARAMETER DryRun
     Validate the flow without writing secrets or starting containers.
@@ -30,13 +30,14 @@
     .\Install-Memorist.ps1 -Mode full -NonInteractive
 
 .EXAMPLE
-    .\Install-Memorist.ps1 -DryRun
+    .\Install-Memorist.ps1 -Mode lite -DryRun -NonInteractive
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('lite', 'full')][string]$Mode = 'lite',
+    [ValidateSet('lite', 'full')][string]$Mode,
     [switch]$DryRun,
-    [switch]$NonInteractive
+    [switch]$NonInteractive,
+    [switch]$NoBrowser
 )
 
 Set-StrictMode -Version Latest
@@ -47,6 +48,34 @@ Import-Module (Join-Path $scriptRoot 'scripts\MemoristCommon.psm1') -Force
 
 $root = Get-MemoristRoot -ScriptRoot $scriptRoot
 Set-Location $root
+
+# An existing .env is authoritative. A mode change requires the certified data
+# migration workflow and is never performed implicitly by this installer.
+$envPath = Join-Path $root '.env'
+$installedMode = $null
+if (Test-Path -LiteralPath $envPath) {
+    try { $installedMode = Get-MemoristInstalledMode -Root $root } catch {
+        Write-MemoristLog $_.Exception.Message 'FAIL'; exit 1
+    }
+}
+if ([string]::IsNullOrWhiteSpace($Mode)) {
+    if ($null -ne $installedMode) {
+        $Mode = $installedMode
+    } elseif ($NonInteractive) {
+        Write-MemoristLog 'Non-interactive installation requires explicit -Mode lite or -Mode full.' 'FAIL'
+        exit 2
+    } else {
+        Write-Host ''
+        Write-Host '  Which runtime do you want to install?' -ForegroundColor Cyan
+        Write-Host '    1. Lite - SQLite, lower resource usage (about 4 GB free disk recommended)'
+        Write-Host '    2. Full - PostgreSQL + FalkorDB (about 8 GB free disk and 6 GB RAM recommended)'
+        do { $answer = (Read-Host 'Selection [1/2]').Trim() } while ($answer -notin @('1', '2'))
+        $Mode = if ($answer -eq '2') { 'full' } else { 'lite' }
+    }
+} elseif ($null -ne $installedMode -and $Mode -ne $installedMode) {
+    Write-MemoristLog ("Installed mode is {0}; refusing implicit switch to {1}. Export and run the certified SQLite-to-PostgreSQL migration before changing modes." -f $installedMode, $Mode) 'FAIL'
+    exit 2
+}
 
 Show-MemoristBanner -Subtitle ("Setup wizard  -  mode: {0}{1}" -f $Mode, $(if ($DryRun) { '  (dry run)' } else { '' }))
 
@@ -83,8 +112,10 @@ foreach ($p in @(@{Name = 'Open WebUI'; Port = $webPort }, @{Name = 'Memorist Co
     }
 }
 $freeGb = Get-MemoristFreeDiskGb -Path $root
-if ($freeGb -ge 0 -and $freeGb -lt 5) {
-    Write-MemoristLog ("Only {0} GB free. Docker images need several GB; free up space before continuing." -f $freeGb) 'WARN'
+$minimumDiskGb = if ($Mode -eq 'full') { 8 } else { 4 }
+if ($freeGb -ge 0 -and $freeGb -lt $minimumDiskGb) {
+    Write-MemoristLog ("Only {0} GB free; {1} mode requires at least {2} GB free." -f $freeGb, $Mode, $minimumDiskGb) 'FAIL'
+    if (-not $DryRun) { exit 1 }
 } elseif ($freeGb -ge 0) {
     Write-MemoristLog ("{0} GB free disk" -f $freeGb) 'OK'
 }
@@ -103,7 +134,6 @@ foreach ($dir in @('data', 'objects', 'imports', 'exports', 'logs')) {
 
 # --- 4. Local .env generation ------------------------------------------------
 Write-MemoristLog 'Generating local configuration (.env)...' 'STEP'
-$envPath = Join-Path $root '.env'
 $examplePath = Join-Path $root '.env.example'
 $lines = Read-MemoristEnvLines -Path $examplePath
 if (-not $lines -or $lines.Count -eq 0) {
@@ -126,10 +156,17 @@ function Get-ExistingValue {
 $actorAssertion = (Get-ExistingValue 'MEMORIST_ACTOR_ASSERTION_SECRET')
 $actorToken = (Get-ExistingValue 'MEMORIST_ACTOR_SERVICE_TOKEN')
 $webuiSecret = (Get-ExistingValue 'WEBUI_SECRET_KEY')
+$postgresPassword = (Get-ExistingValue 'MEMORIST_POSTGRES_PASSWORD')
 if ([string]::IsNullOrWhiteSpace($actorAssertion)) { $actorAssertion = (New-MemoristSecret) }
 if ([string]::IsNullOrWhiteSpace($actorToken)) { $actorToken = (New-MemoristSecret) }
 if ([string]::IsNullOrWhiteSpace($webuiSecret)) { $webuiSecret = (New-MemoristSecret) }
+if ($Mode -eq 'full' -and [string]::IsNullOrWhiteSpace($postgresPassword)) {
+    # Hex is cryptographically random and URL-safe, so the same value is safe
+    # in POSTGRES_PASSWORD and the PostgreSQL URI without lossy encoding.
+    $postgresPassword = (New-MemoristSecret -Bytes 32)
+}
 
+$lines = Set-MemoristEnvValue -Lines $lines -Key 'COMPOSE_PROJECT_NAME' -Value 'memorist'
 $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_MODE' -Value $Mode
 $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_LOCAL_ONLY' -Value 'true'
 $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_ACTOR_ASSERTION_SECRET' -Value $actorAssertion
@@ -138,7 +175,26 @@ $lines = Set-MemoristEnvValue -Lines $lines -Key 'WEBUI_SECRET_KEY' -Value $webu
 $lines = Set-MemoristEnvValue -Lines $lines -Key 'OPEN_WEBUI_PORT' -Value $webPort.ToString()
 $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_PORT' -Value $corePort.ToString()
 if ($Mode -eq 'full') {
+    $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_RUNTIME_PROFILE' -Value 'full'
+    $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_CANONICAL_STORE' -Value 'postgres'
+    $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_POSTGRES_PASSWORD' -Value $postgresPassword
+    $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_POSTGRES_DSN' -Value ("postgresql://memorist:{0}@postgres:5432/memorist" -f $postgresPassword)
     $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_GRAPH_BACKEND' -Value 'falkordb'
+    $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_FALKORDB_URL' -Value 'redis://falkordb:6379'
+    $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_HOT_SCHEDULER' -Value 'in_memory'
+    foreach ($feature in @(
+        'MEMORIST_ENABLE_OPENWEBUI_ADAPTER', 'MEMORIST_ENABLE_GRAPH_PROJECTION',
+        'MEMORIST_ENABLE_MEMORY_WORKER', 'MEMORIST_ENABLE_IMPORT_SYSTEM',
+        'MEMORIST_ENABLE_MEMORY_CONTEXT_ATTACHMENT', 'MEMORIST_ENABLE_ACTIVE_MEMORY_BLOCKS',
+        'MEMORIST_ENABLE_USER_PROFILE_PROJECTION', 'MEMORIST_ENABLE_FORGETTING_PIPELINE')) {
+        $lines = Set-MemoristEnvValue -Lines $lines -Key $feature -Value 'true'
+    }
+} else {
+    $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_RUNTIME_PROFILE' -Value 'lite'
+    $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_CANONICAL_STORE' -Value 'sqlite'
+    $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_GRAPH_BACKEND' -Value 'disabled'
+    $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_HOT_SCHEDULER' -Value 'disabled'
+    $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_ENABLE_GRAPH_PROJECTION' -Value 'false'
 }
 
 # --- 5. API key wizard (PR5-C env-var bridge) --------------------------------
@@ -146,8 +202,10 @@ Write-MemoristLog 'Memory processing provider setup...' 'STEP'
 $roles = Get-MemoristApiKeyRoles
 Write-Host '  Choose how memory extraction should run:' -ForegroundColor Gray
 Write-Host '    [1] Local deterministic  (no API key, fully local - recommended for first run)'
-Write-Host '    [2] OpenAI-compatible remote  (enter an endpoint + API key, stored locally)'
-Write-Host '    [3] Skip for now  (configure later in Settings -> Memorist -> Memory Setup)'
+Write-Host '    [2] Store an optional provider API key locally'
+Write-Host '        (endpoint, model, capabilities, privacy acknowledgement, testing, and role defaults'
+Write-Host '         are configured later in Settings -> Memorist -> Processing Nodes)'
+Write-Host '    [3] Skip for now  (configure later in Settings -> Memorist -> Processing Nodes)'
 
 $choice = '1'
 if (-not $NonInteractive -and -not $DryRun) {
@@ -176,7 +234,7 @@ if ($choice -eq '2') {
         } else {
             $primaryEnv = $roles['memory_extraction']
             $lines = Set-MemoristEnvValue -Lines $lines -Key $primaryEnv -Value $plain
-            Write-MemoristLog ("Stored key for {0} = {1}" -f $primaryEnv, (Get-MemoristMaskedSecret $plain)) 'OK'
+            Write-MemoristLog ("Stored a local key value for {0}; the value was not displayed." -f $primaryEnv) 'OK'
 
             $shareAll = 'n'
             if (-not $NonInteractive) {
@@ -195,7 +253,9 @@ if ($choice -eq '2') {
         }
     }
     Write-Host ''
-    Write-Host '  Next: open Settings -> Memorist -> Memory Setup and enter the variable NAME' -ForegroundColor Gray
+    Write-Host '  Next: open Settings -> Memorist -> Processing Nodes and enter the variable NAME,' -ForegroundColor Gray
+    Write-Host '        endpoint, model, capability flags, and privacy acknowledgement; then test and' -ForegroundColor Gray
+    Write-Host '        assign the profile to a role. The installer does not bypass those admin controls.' -ForegroundColor Gray
     Write-Host ("        {0} (not the key value) for the extraction role." -f $roles['memory_extraction']) -ForegroundColor Gray
 } elseif ($choice -eq '3') {
     Write-MemoristLog 'Skipping provider setup. Local deterministic fallback stays active.' 'OK'
@@ -215,21 +275,36 @@ if ($DryRun) {
 $composeFile = Get-MemoristComposeFile -Root $root
 if ($DryRun -or -not $docker.Ready) {
     Write-MemoristLog 'Validating Compose configuration...' 'STEP'
-    if ($docker.Ready) {
-        $rc = Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments @('config', '-q')
-        if ($rc -eq 0) { Write-MemoristLog 'Compose configuration is valid.' 'OK' }
-        else { Write-MemoristLog 'Compose configuration failed to validate.' 'FAIL' }
-    } else {
-        Write-MemoristLog 'Docker unavailable; skipped live compose validation.' 'WARN'
+    if (-not $docker.Ready) {
+        Write-MemoristLog 'Docker/Compose is required to validate the effective package configuration.' 'FAIL'
+        Write-MemoristLog 'Dry run failed. No containers were started and no secrets were written.' 'FAIL'
+        exit 1
     }
+
+    # Compose validation uses process-scoped values only; dry-run never writes
+    # them to disk or prints them.
+    $env:WEBUI_SECRET_KEY = $webuiSecret
+    $env:MEMORIST_ACTOR_ASSERTION_SECRET = $actorAssertion
+    $env:MEMORIST_ACTOR_SERVICE_TOKEN = $actorToken
+    $env:MEMORIST_OPENWEBUI_WORKSPACE_UUID = '00000000-0000-0000-0000-000000000001'
+    if ($Mode -eq 'full') {
+        $env:MEMORIST_POSTGRES_PASSWORD = $postgresPassword
+        $env:MEMORIST_POSTGRES_DSN = ("postgresql://memorist:{0}@postgres:5432/memorist" -f $postgresPassword)
+    }
+    $rc = Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments @('config', '-q')
+    if ($rc -ne 0) {
+        Write-MemoristLog 'Compose configuration failed to validate.' 'FAIL'
+        Write-MemoristLog 'Dry run failed. No containers were started and no secrets were written.' 'FAIL'
+        exit 1
+    }
+    Write-MemoristLog 'Compose configuration is valid.' 'OK'
     Write-Host ''
     Write-MemoristLog 'Dry run complete. No containers were started and no secrets were written.' 'OK'
     exit 0
 }
 
 Write-MemoristLog 'Starting Docker-backed services (first run pulls/builds images)...' 'STEP'
-$services = if ($Mode -eq 'full') { @() } else { @('memorist-core', 'open-webui') }
-$upArgs = @('up', '-d', '--build') + $services
+$upArgs = @('up', '-d', '--build', '--remove-orphans')
 $rc = Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments $upArgs
 if ($rc -ne 0) {
     Write-MemoristLog 'Compose failed to start services. Run Show-Memorist-Logs.ps1 to inspect.' 'FAIL'
@@ -241,22 +316,46 @@ Write-MemoristLog 'Waiting for services to become healthy...' 'STEP'
 $coreOk = Wait-MemoristService -Name 'Memorist Core' -Url ("http://localhost:{0}/memcore/health" -f $corePort) -TimeoutSec 180
 $webOk = Wait-MemoristService -Name 'Open WebUI' -Url ("http://localhost:{0}/health" -f $webPort) -TimeoutSec 240
 
+$postgresOk = $true
+$falkorOk = $true
+$runtimeOk = $coreOk
+if ($Mode -eq 'full') {
+    Write-MemoristLog 'Verifying live Full runtime (configuration alone is not sufficient)...' 'STEP'
+    $postgresOk = ((Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments @('exec', '-T', 'postgres', 'pg_isready', '-U', 'memorist', '-d', 'memorist')) -eq 0)
+    $falkorOk = ((Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments @('exec', '-T', 'falkordb', 'redis-cli', 'ping')) -eq 0)
+    $runtimeOk = Test-MemoristFullReadiness -Url ("http://localhost:{0}/memcore/config/effective" -f $corePort)
+    try {
+        $health = Get-MemoristEffectiveConfig -Url ("http://localhost:{0}/memcore/health" -f $corePort)
+        $runtimeOk = $runtimeOk -and $health.graph_status -eq 'ok' -and @($health.profile_warnings).Count -eq 0
+    } catch { $runtimeOk = $false }
+}
+
+if (-not ($coreOk -and $webOk -and $postgresOk -and $falkorOk -and $runtimeOk)) {
+    Write-MemoristLog 'Installation verification failed; success will not be reported. Run Show-Memorist-Logs.ps1 for sanitized diagnostics.' 'FAIL'
+    exit 1
+}
+
 # --- 9. Browser launch + next steps -----------------------------------------
 $uiUrl = "http://localhost:$webPort"
-if ($webOk) {
+if ($webOk -and -not $NoBrowser) {
     Open-MemoristBrowser -Url $uiUrl
-} else {
-    Write-MemoristLog 'Open WebUI did not report healthy in time. It may still be starting; check the logs.' 'WARN'
 }
 
 Write-Host ''
 Write-Host '  Memorist is set up.' -ForegroundColor Green
+if ($Mode -eq 'full') {
+    Write-Host '    Runtime profile: full'
+    Write-Host '    Canonical store: PostgreSQL'
+    Write-Host '    Graph backend:   FalkorDB'
+    Write-Host '    Scheduler:       in_memory'
+    Write-Host '    PostgreSQL:      healthy'
+    Write-Host '    FalkorDB:        healthy'
+    Write-Host '    Memorist Core:   healthy'
+    Write-Host '    Open WebUI:      healthy'
+}
 Write-Host ("    Open WebUI:     {0}" -f $uiUrl)
 Write-Host ("    Memorist Core:  http://localhost:{0}/memcore/health" -f $corePort)
 Write-Host '    Manage:         Start-Memorist.ps1 / Stop-Memorist.ps1 / Show-Memorist-Logs.ps1'
 Write-Host '    Reset/remove:   Reset-Memorist-Data.ps1 / Uninstall-Memorist.ps1'
 Write-Host '    Config file:    .env  (keep private; it holds local secrets)'
 Write-Host ''
-if (-not ($coreOk -and $webOk)) {
-    Write-MemoristLog 'Some services were slow to start. See docs/troubleshooting.md if the UI does not load.' 'WARN'
-}

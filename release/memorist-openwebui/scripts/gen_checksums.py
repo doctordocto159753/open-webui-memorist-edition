@@ -33,7 +33,9 @@ EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".pyd", ".sqlite", ".log"}
 
 def _iter_files() -> list[Path]:
     files: list[Path] = []
-    for path in sorted(PKG_ROOT.rglob("*")):
+    # Sort by the POSIX relative path so the manifest order is identical on
+    # Windows (case-insensitive Path ordering) and Linux (case-sensitive).
+    for path in sorted(PKG_ROOT.rglob("*"), key=lambda p: p.relative_to(PKG_ROOT).as_posix()):
         if not path.is_file():
             continue
         rel = path.relative_to(PKG_ROOT)
@@ -52,7 +54,18 @@ def _iter_files() -> list[Path]:
 def _compute() -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
     for path in _iter_files():
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        data = path.read_bytes()
+        # Git stores package text with LF while Windows worktrees may expose
+        # CRLF. Hash a canonical representation so the tracked manifest is
+        # identical on both platforms. Binary files remain byte-exact.
+        if b"\0" not in data:
+            try:
+                data.decode("utf-8")
+            except UnicodeDecodeError:
+                pass
+            else:
+                data = data.replace(b"\r\n", b"\n")
+        digest = hashlib.sha256(data).hexdigest()
         rel = path.relative_to(PKG_ROOT).as_posix()
         rows.append((digest, rel))
     return rows
@@ -67,7 +80,11 @@ def check() -> int:
     if not CHECKSUM_FILE.exists():
         print("FAIL: checksums.sha256 is missing.")
         return 1
-    current = CHECKSUM_FILE.read_text(encoding="utf-8")
+    # The manifest is generated with LF, but a Windows worktree (or a runner
+    # with core.autocrlf enabled) may present it with CRLF. Only the hashed
+    # content matters, so normalize the manifest's own line endings before
+    # comparing to avoid a false "out of date" on such checkouts.
+    current = CHECKSUM_FILE.read_text(encoding="utf-8").replace("\r\n", "\n")
     if current != computed:
         print("FAIL: checksums.sha256 is out of date. Run gen_checksums.py to refresh.")
         current_lines = set(current.splitlines())
@@ -88,7 +105,7 @@ def check() -> int:
 
 
 def write() -> int:
-    CHECKSUM_FILE.write_text(_render(_compute()), encoding="utf-8")
+    CHECKSUM_FILE.write_bytes(_render(_compute()).encode("utf-8"))
     print(f"Wrote {CHECKSUM_FILE} ({len(_compute())} files).")
     return 0
 

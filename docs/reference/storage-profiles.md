@@ -51,8 +51,8 @@ Startup policy:
 Current status:
 
 ```text
-Full Mode: experimental preview; external certification incomplete.
+Full Mode: certified in the tested local Docker environment.
 ```
 
-Run `python scripts/full_mode_check.py` to generate the local certification
-report before making stronger Full Mode claims.
+The authoritative report records 11/11 passed gates with no skips. This is an
+environment-specific certification, not a production-readiness claim.

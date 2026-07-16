@@ -47,7 +47,7 @@ After commit:
 Full remains:
 
 ```text
-Full Mode: experimental preview; external certification incomplete.
+Full Mode: certified in the tested local Docker environment.
 ```
 
 until migration smoke and every other Full gate pass.

@@ -62,11 +62,11 @@ Common failures, in the order people usually hit them.
 
 ## Graph / Full mode
 
-- Graph projection is optional. When in doubt, use Lite or set
-  `MEMORIST_GRAPH_BACKEND=disabled`.
+- Graph projection is optional only in Lite. Full requires FalkorDB and refuses
+  to start when its PostgreSQL/FalkorDB/runtime contract is inconsistent.
 - Full mode issues usually mean PostgreSQL or FalkorDB didn't come up — check
   their logs and the healthchecks in the compose output. Full remains an
-  advanced preview; see [INSTALLATION.md](INSTALLATION.md#lite-vs-full).
+  see [INSTALLATION.md](INSTALLATION.md#lite-vs-full).
 
 ## Logs
 

@@ -29,9 +29,16 @@ Highlights:
 
 Honest status:
 
-- Lite mode (SQLite, fully local) is the validated path.
-- Full mode (PostgreSQL + FalkorDB) remains an experimental preview until its
-  external certification gates pass.
+- Lite mode (SQLite, fully local) is the validated local path.
+- Full mode (PostgreSQL + FalkorDB) passed all 11 backend/runtime gates in the
+  tested Linux Docker environment with no failures or skips.
+- The PR5-F candidate packages a real self-contained Full stack, persists the
+  installed mode, generates private PostgreSQL credentials, and verifies live
+  runtime fields before success.
+- Real Windows desktop one-click and lifecycle E2E remains pending and must be
+  completed before claiming Windows certification.
+- Backend certification is environment-specific; it is not a
+  production-readiness or security-audit claim.
 - Alpha software: no security audit; schema migrations between alpha versions
   may require export/import; see README "Known limitations".
 

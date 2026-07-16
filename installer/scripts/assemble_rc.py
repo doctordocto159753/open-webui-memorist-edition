@@ -1,14 +1,20 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import json
 import shutil
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
 
 VERSION = "0.2.0-beta.1"
 OPENWEBUI_BASE_IMAGE = "ghcr.io/open-webui/open-webui:v0.9.6"
+POSTGRES_IMAGE = "postgres:16.9-alpine3.22"
+FALKORDB_IMAGE = (
+    "falkordb/falkordb@sha256:"
+    "2496643cabd67e87fd82458383400c049324daec1fe674ba0db4c5bdaca5d25f"
+)
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "memorist-core" / "src"))
@@ -59,27 +65,26 @@ def assemble() -> dict[str, str]:
     if TARGET.exists():
         shutil.rmtree(TARGET)
     TARGET.mkdir(parents=True)
-    for name in [
-        "README.md",
-        "LICENSE",
-        "Makefile",
-        ".env.example",
-        "docker-compose.lite.yml",
-        "docker-compose.full.yml",
-        "docker-compose.openwebui-smoke.yml",
-        "docker-compose.release.yml",
-    ]:
-        source = ROOT / name
-        if source.exists():
-            shutil.copy2(source, TARGET / name)
-    for name in ["memorist-core", "open-webui-integration", "docs", "installer", "release"]:
-        source = ROOT / name
-        if source.exists():
-            shutil.copytree(source, TARGET / name, ignore=_ignore)
-    _copy_rc_docs()
-    _write_version_metadata()
+
+    _write_source_version_metadata()
+    _refresh_source_installer_checksums()
+
+    # The installer package itself is the archive root. A user extracting the
+    # ZIP must see Memorist.cmd immediately, not under release/memorist-openwebui.
+    shutil.copytree(
+        ROOT / "release" / "memorist-openwebui",
+        TARGET,
+        dirs_exist_ok=True,
+        ignore=_ignore,
+    )
+    _copy_installer_runtime()
+    _copy_archive_docs()
+    _normalize_text_files(TARGET)
+
+    # Write package metadata before the installer checksum manifest so the
+    # extracted-package integrity check covers the metadata itself.
     manifest = build_package_manifest(TARGET)
-    (TARGET / "release" / "package-manifest.ijson").write_text(
+    (TARGET / "package-manifest.ijson").write_text(
         json.dumps(manifest, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
     )
@@ -87,30 +92,33 @@ def assemble() -> dict[str, str]:
         json.dumps(manifest, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
     )
+    _refresh_installer_checksums()
     _write_checksums(TARGET / "CHECKSUMS")
+
     issues = scan_path(TARGET)
     if issues:
         detail = "; ".join(f"{issue.path}: {issue.reason}" for issue in issues[:10])
         raise RuntimeError(f"forbidden files in RC staging directory: {detail}")
+
     if ZIP_PATH.exists():
         ZIP_PATH.unlink()
     with zipfile.ZipFile(ZIP_PATH, "w", zipfile.ZIP_DEFLATED) as package:
-        for path in sorted(TARGET.rglob("*")):
+        for path in sorted(TARGET.rglob("*"), key=lambda p: p.relative_to(TARGET).as_posix()):
             if path.is_file():
                 package.write(path, path.relative_to(RC_ROOT).as_posix())
+
     digest = hashlib.sha256(ZIP_PATH.read_bytes()).hexdigest()
     SHA_PATH.write_text(f"{digest}  {ZIP_PATH.name}\n", encoding="utf-8")
     issues = scan_path(ZIP_PATH)
     if issues:
         detail = "; ".join(f"{issue.path}: {issue.reason}" for issue in issues[:10])
         raise RuntimeError(f"forbidden files in RC zip: {detail}")
+
     shutil.rmtree(TARGET)
     return {"zip": str(ZIP_PATH), "sha256": str(SHA_PATH), "digest": digest}
 
 
-def _write_version_metadata() -> None:
-    version_dir = TARGET / "release" / "memorist-openwebui"
-    version_dir.mkdir(parents=True, exist_ok=True)
+def _write_source_version_metadata() -> None:
     payload = {
         "package": "memorist-openwebui",
         "target_label": "v0.2.0-beta.1 candidate",
@@ -118,9 +126,10 @@ def _write_version_metadata() -> None:
         "schema_version": SCHEMA_VERSION,
         "openwebui_base": OPENWEBUI_BASE_IMAGE,
         "openwebui_integration_version": "0.2.0-beta.1",
+        "postgres_image": POSTGRES_IMAGE,
+        "falkordb_image": FALKORDB_IMAGE,
     }
     text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    (version_dir / "VERSION.ijson").write_text(text, encoding="utf-8")
     mirror = ROOT / "release" / "memorist-openwebui"
     mirror.mkdir(parents=True, exist_ok=True)
     (mirror / "VERSION.ijson").write_text(text, encoding="utf-8")
@@ -149,25 +158,80 @@ def _ignore(directory: str, names: list[str]) -> set[str]:
     return ignored
 
 
-def _copy_rc_docs() -> None:
-    for name in [
-        "RELEASE_NOTES.md",
-        "KNOWN_LIMITATIONS.md",
-        "SECURITY.md",
-        "INSTALL.md",
-        "UPGRADE.md",
-        "HANDOFF.md",
-        "RELEASE_DECISION.md",
-        "change-log-after-freeze.md",
+def _copy_archive_docs() -> None:
+    """Ship canonical current docs; never mix frozen RC handoff narratives in."""
+    for source, relative in [
+        (ROOT / "LICENSE", Path("LICENSE")),
+        (ROOT / "SECURITY.md", Path("SECURITY.md")),
+        (ROOT / "RELEASE_NOTES.md", Path("RELEASE_NOTES.md")),
+        (ROOT / "docs" / "INSTALLATION.md", Path("docs/INSTALLATION.md")),
+        (ROOT / "docs" / "TROUBLESHOOTING.md", Path("docs/TROUBLESHOOTING.md")),
+        (ROOT / "docs" / "ARCHITECTURE.md", Path("docs/ARCHITECTURE.md")),
+        (ROOT / "docs" / "MEMORY_MACHINE.md", Path("docs/MEMORY_MACHINE.md")),
+        (ROOT / "docs" / "DEVELOPMENT.md", Path("docs/DEVELOPMENT.md")),
+        (
+            ROOT / "docs" / "reference" / "backup-restore.md",
+            Path("docs/reference/backup-restore.md"),
+        ),
     ]:
-        source = RC_ROOT / name
-        if source.exists():
-            shutil.copy2(source, TARGET / name)
+        if not source.is_file():
+            continue
+        destination = TARGET / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+
+def _copy_installer_runtime() -> None:
+    """Put every build context inside the extracted installer directory."""
+    runtime = TARGET / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    core_target = runtime / "memorist-core"
+    core_target.mkdir()
+    for name in ["Dockerfile", "pyproject.toml", "README.md"]:
+        shutil.copy2(ROOT / "memorist-core" / name, core_target / name)
+    for name in ["src", "migrations"]:
+        shutil.copytree(ROOT / "memorist-core" / name, core_target / name, ignore=_ignore)
+    integration_target = runtime / "open-webui-integration"
+    integration_target.mkdir()
+    shutil.copytree(
+        ROOT / "open-webui-integration" / "memorist",
+        integration_target / "memorist",
+        ignore=lambda directory, names: {
+            name for name in names if name in {"tests", "__pycache__", ".pytest_cache"}
+        },
+    )
+
+
+def _refresh_installer_checksums() -> None:
+    script = TARGET / "scripts" / "gen_checksums.py"
+    subprocess.run([sys.executable, str(script)], check=True)
+
+
+def _refresh_source_installer_checksums() -> None:
+    script = ROOT / "release" / "memorist-openwebui" / "scripts" / "gen_checksums.py"
+    subprocess.run([sys.executable, str(script)], check=True)
+
+
+def _normalize_text_files(root: Path) -> None:
+    """Make packaged text byte-stable across Windows and Linux assembly."""
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        data = path.read_bytes()
+        if b"\0" in data:
+            continue
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        normalized = text.replace("\r\n", "\n")
+        if normalized != text:
+            path.write_bytes(normalized.encode("utf-8"))
 
 
 def _write_checksums(output: Path) -> None:
     lines = []
-    for path in sorted(TARGET.rglob("*")):
+    for path in sorted(TARGET.rglob("*"), key=lambda p: p.relative_to(TARGET).as_posix()):
         if path.is_file() and path.name != "CHECKSUMS":
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             lines.append(f"{digest}  {path.relative_to(TARGET).as_posix()}")

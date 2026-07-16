@@ -1,3 +1,82 @@
-﻿include:
-  - compose.yml
-services: {}
+services:
+  memorist-core:
+    build:
+      context: ./runtime/memorist-core
+    environment:
+      MEMORIST_LOCAL_ONLY: "true"
+      MEMORIST_ENV: production
+      MEMORIST_MODE: full
+      MEMORIST_RUNTIME_PROFILE: full
+      MEMORIST_CANONICAL_STORE: postgres
+      MEMORIST_POSTGRES_DSN: ${MEMORIST_POSTGRES_DSN:?Full mode requires MEMORIST_POSTGRES_DSN}
+      MEMORIST_OBJECT_STORE_PATH: /objects
+      MEMORIST_GRAPH_BACKEND: falkordb
+      MEMORIST_FALKORDB_URL: redis://falkordb:6379
+      MEMORIST_HOT_SCHEDULER: in_memory
+      MEMORIST_ENABLE_OPENWEBUI_ADAPTER: "true"
+      MEMORIST_ENABLE_GRAPH_PROJECTION: "true"
+      MEMORIST_ENABLE_MEMORY_WORKER: "true"
+      MEMORIST_ENABLE_IMPORT_SYSTEM: "true"
+      MEMORIST_ENABLE_MEMORY_CONTEXT_ATTACHMENT: "true"
+      MEMORIST_ENABLE_ACTIVE_MEMORY_BLOCKS: "true"
+      MEMORIST_ENABLE_USER_PROFILE_PROJECTION: "true"
+      MEMORIST_ENABLE_FORGETTING_PIPELINE: "true"
+      MEMORIST_PREFLIGHT_ENABLED: ${MEMORIST_PREFLIGHT_ENABLED:-true}
+      MEMORIST_PREFLIGHT_TIMEOUT_MS: ${MEMORIST_PREFLIGHT_TIMEOUT_MS:-1200}
+      MEMORIST_ATTACHMENT_TOKEN_BUDGET: ${MEMORIST_ATTACHMENT_TOKEN_BUDGET:-1800}
+      MEMORIST_ATTACHMENT_MAX_TOKENS: ${MEMORIST_ATTACHMENT_MAX_TOKENS:-1800}
+      MEMORIST_ATTACHMENT_CONTEXT_RATIO: ${MEMORIST_ATTACHMENT_CONTEXT_RATIO:-0.10}
+      MEMORIST_ATTACHMENT_MIN_TOKENS: ${MEMORIST_ATTACHMENT_MIN_TOKENS:-256}
+      MEMORIST_ATTACHMENT_RESERVED_COMPLETION_TOKENS: ${MEMORIST_ATTACHMENT_RESERVED_COMPLETION_TOKENS:-1024}
+      MEMORIST_ATTACHMENT_FALLBACK_CONTEXT_WINDOW: ${MEMORIST_ATTACHMENT_FALLBACK_CONTEXT_WINDOW:-8192}
+      MEMORIST_FAIL_OPEN: ${MEMORIST_FAIL_OPEN:-true}
+      MEMORIST_ACTOR_ASSERTION_SECRET: ${MEMORIST_ACTOR_ASSERTION_SECRET:?required}
+      MEMORIST_ACTOR_SERVICE_TOKEN: ${MEMORIST_ACTOR_SERVICE_TOKEN:?required}
+      MEMORIST_MEMORY_EXTRACTION_API_KEY: ${MEMORIST_MEMORY_EXTRACTION_API_KEY:-}
+      MEMORIST_HIGH_CONFIDENCE_EXTRACTION_API_KEY: ${MEMORIST_HIGH_CONFIDENCE_EXTRACTION_API_KEY:-}
+      MEMORIST_EMBEDDING_API_KEY: ${MEMORIST_EMBEDDING_API_KEY:-}
+      MEMORIST_PRIVACY_SENSITIVITY_API_KEY: ${MEMORIST_PRIVACY_SENSITIVITY_API_KEY:-}
+      MEMORIST_IMPORT_RECONSTRUCTION_API_KEY: ${MEMORIST_IMPORT_RECONSTRUCTION_API_KEY:-}
+    ports:
+      - "127.0.0.1:${MEMORIST_PORT:-8777}:8777"
+    volumes:
+      - memorist-objects:/objects
+      - memorist-import-staging:/imports
+      - memorist-exports:/exports
+    depends_on:
+      postgres:
+        condition: service_healthy
+      falkordb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8777/memcore/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 15s
+
+  postgres:
+    image: postgres:16.9-alpine3.22
+    environment:
+      POSTGRES_DB: memorist
+      POSTGRES_USER: memorist
+      POSTGRES_PASSWORD: ${MEMORIST_POSTGRES_PASSWORD:?Full mode requires generated PostgreSQL password}
+    volumes:
+      - memorist-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memorist -d memorist"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  falkordb:
+    image: falkordb/falkordb@sha256:2496643cabd67e87fd82458383400c049324daec1fe674ba0db4c5bdaca5d25f
+    volumes:
+      - falkordb-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s

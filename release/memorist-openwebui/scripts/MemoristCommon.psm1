@@ -219,6 +219,31 @@ function Read-MemoristEnvLines {
     return @(Get-Content -LiteralPath $Path -Encoding UTF8)
 }
 
+function Get-MemoristEnvValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Key
+    )
+    foreach ($line in (Read-MemoristEnvLines -Path $Path)) {
+        if ($line -match "^\s*$([regex]::Escape($Key))=(.*)$") { return $Matches[1].Trim() }
+    }
+    return ''
+}
+
+function Get-MemoristInstalledMode {
+    <# Reads the authoritative installed mode. Missing/corrupt values fail closed. #>
+    param([Parameter(Mandatory = $true)][string]$Root)
+    $envPath = Join-Path $Root '.env'
+    if (-not (Test-Path -LiteralPath $envPath)) {
+        throw 'No installed configuration found. Run Install-Memorist.ps1 first.'
+    }
+    $mode = (Get-MemoristEnvValue -Path $envPath -Key 'MEMORIST_MODE').ToLowerInvariant()
+    if ($mode -notin @('lite', 'full')) {
+        throw 'The installed MEMORIST_MODE is missing or invalid. Repair .env or rerun the installer.'
+    }
+    return $mode
+}
+
 function Set-MemoristEnvValue {
     <#
         Sets KEY=VALUE inside an array of .env lines, replacing an existing
@@ -226,7 +251,7 @@ function Set-MemoristEnvValue {
         updated array. The VALUE is never logged by this function.
     #>
     param(
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Lines,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Lines,
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value
     )
@@ -252,7 +277,7 @@ function Write-MemoristEnvFile {
     #>
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Lines
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Lines
     )
     $content = ($Lines -join "`n") + "`n"
     $encoding = New-Object System.Text.UTF8Encoding($false)
@@ -335,9 +360,14 @@ function Open-MemoristBrowser {
 # ---------------------------------------------------------------------------
 
 function Get-MemoristRoot {
-    <# Absolute path to the package root (the parent of the scripts folder). #>
+    <# Absolute package root from either a top-level entry point or scripts/. #>
     param([Parameter(Mandatory = $true)][string]$ScriptRoot)
-    return (Resolve-Path (Join-Path $ScriptRoot '..')).Path
+    if (Test-Path -LiteralPath (Join-Path $ScriptRoot 'compose.yml')) {
+        return (Resolve-Path $ScriptRoot).Path
+    }
+    $parent = (Resolve-Path (Join-Path $ScriptRoot '..')).Path
+    if (Test-Path -LiteralPath (Join-Path $parent 'compose.yml')) { return $parent }
+    throw "Could not locate the Memorist package root from $ScriptRoot."
 }
 
 function Get-MemoristComposeFile {
@@ -357,6 +387,16 @@ function Get-MemoristComposeFile {
     throw "No release compose file found under $Root (expected compose.yml or docker-compose.release.yml)."
 }
 
+function Get-MemoristComposeOverlay {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][ValidateSet('lite', 'full')][string]$Mode
+    )
+    $path = Join-Path $Root ("compose.{0}.yml" -f $Mode)
+    if (-not (Test-Path -LiteralPath $path)) { throw "Missing Compose overlay: $path" }
+    return $path
+}
+
 function Invoke-MemoristCompose {
     <#
         Runs a Docker Compose subcommand for the given profile against the
@@ -366,16 +406,60 @@ function Invoke-MemoristCompose {
     param(
         [Parameter(Mandatory = $true)][string[]]$Compose,
         [Parameter(Mandatory = $true)][string]$ComposeFile,
-        [string]$Profile = 'lite',
+        [Parameter(Mandatory = $true)][ValidateSet('lite', 'full')][string]$Profile,
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
     # Compose may be @('docker','compose') or the legacy @('docker-compose').
     $exe = $Compose[0]
     $prefix = @()
     if ($Compose.Length -gt 1) { $prefix = $Compose[1..($Compose.Length - 1)] }
-    $full = $prefix + @('--profile', $Profile, '-f', $ComposeFile) + $Arguments
-    & $exe @full
-    return $LASTEXITCODE
+    $overlay = Get-MemoristComposeOverlay -Root (Split-Path -Parent $ComposeFile) -Mode $Profile
+    $full = $prefix + @('-f', $ComposeFile, '-f', $overlay) + $Arguments
+    & $exe @full | Out-Host
+    $exitCode = $LASTEXITCODE
+    return $exitCode
+}
+
+function Get-MemoristEffectiveConfig {
+    param([Parameter(Mandatory = $true)][string]$Url)
+    return Invoke-RestMethod -Uri $Url -TimeoutSec 10 -ErrorAction Stop
+}
+
+function Test-MemoristComposeService {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Compose,
+        [Parameter(Mandatory = $true)][string]$ComposeFile,
+        [Parameter(Mandatory = $true)][ValidateSet('lite', 'full')][string]$Mode,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+    $overlay = Get-MemoristComposeOverlay -Root (Split-Path -Parent $ComposeFile) -Mode $Mode
+    $exe = $Compose[0]
+    $prefix = if ($Compose.Length -gt 1) { $Compose[1..($Compose.Length - 1)] } else { @() }
+    $full = $prefix + @('-f', $ComposeFile, '-f', $overlay) + $Arguments
+    & $exe @full *> $null
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Test-MemoristFullReadiness {
+    <# Strict live validation: requested Full is never inferred from .env alone. #>
+    param([Parameter(Mandatory = $true)][string]$Url)
+    try { $config = Get-MemoristEffectiveConfig -Url $Url } catch { return $false }
+    $features = $config.features
+    $requiredFeatures = @(
+        'openwebui_adapter', 'graph_projection', 'memory_worker', 'import_system',
+        'memory_context_attachment', 'active_memory_blocks',
+        'user_profile_projection', 'forgetting_pipeline'
+    )
+    if ($config.runtime_profile -ne 'full' -or
+        $config.canonical_store -ne 'postgres' -or
+        -not $config.postgres_dsn_configured -or
+        $config.graph_backend -ne 'falkordb' -or
+        $config.hot_scheduler -ne 'in_memory' -or
+        @($config.profile_warnings).Count -ne 0) { return $false }
+    foreach ($name in $requiredFeatures) {
+        if (-not [bool]$features.$name) { return $false }
+    }
+    return $true
 }
 
 Export-ModuleMember -Function *-Memorist* , ConvertFrom-MemoristSecureString

@@ -52,9 +52,11 @@ make dev-up-lite        # docker compose -f docker-compose.lite.yml up --build
 make dev-up-full        # experimental PostgreSQL + FalkorDB preview
 ```
 
-The release-oriented orchestration is `docker-compose.release.yml`
-(profiles `lite`/`full`), which mirrors the shipped package compose. Full mode
-must not be described as supported unless
+The release-oriented orchestration is the base `compose.yml` plus the selected
+`compose.lite.yml` or `compose.full.yml` overlay under
+`release/memorist-openwebui/`. The older `docker-compose.release.yml` is kept
+only for source-checkout compatibility and is not a Full certification target.
+Full mode must not be described as supported unless
 `python scripts/full_mode_check.py` reports all external gates passed.
 
 ## Tests

@@ -39,7 +39,8 @@ production and must be distinct high-entropy secrets.
 
 ## Certified graph runtime
 
-PR4-B certifies `falkordb/falkordb:v4.18.10`. CI and the Full Compose profile use that exact tag.
+Full CI and release Compose use the same immutable FalkorDB image digest recorded in
+`release/memorist-openwebui/VERSION.ijson`.
 When the graph backend is disabled or its URL is absent, Full records respectively
 `graph_backend_disabled` or `falkordb_url_missing` without opening a socket. PostgreSQL remains
 canonical in all graph states.

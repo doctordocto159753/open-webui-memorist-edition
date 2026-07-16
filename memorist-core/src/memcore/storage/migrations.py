@@ -18,7 +18,19 @@ def migration_files(migrations_dir: Path) -> list[Path]:
 
 
 def default_migrations_dir() -> Path:
-    return Path(__file__).resolve().parents[3] / "migrations"
+    source_tree = Path(__file__).resolve().parents[3] / "migrations"
+    if source_tree.is_dir():
+        return source_tree
+    # Wheels relocate memcore into site-packages. The self-contained Docker
+    # image intentionally copies the authoritative migration set to
+    # /app/migrations and runs with /app as its working directory.
+    runtime_tree = Path.cwd() / "migrations"
+    if runtime_tree.is_dir():
+        return runtime_tree
+    raise RuntimeError(
+        "SQLite migrations are missing from the runtime package; refusing to start "
+        "with an uninitialized canonical store"
+    )
 
 
 def apply_migrations(connection: sqlite3.Connection, migrations_dir: Path | None = None) -> None:

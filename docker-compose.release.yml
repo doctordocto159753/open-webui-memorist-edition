@@ -1,14 +1,13 @@
-# Release-oriented Compose file for the Memorist local package.
+# Legacy source-checkout Compose retained for developer compatibility.
 #
-# This is the canonical one-click release orchestration. It is intentionally
-# separate from the developer compose files (docker-compose.lite.yml /
-# docker-compose.full.yml) so improving the release path never degrades the
-# developer workflow. The shipped package under release/memorist-openwebui/
-# carries an equivalent compose.yml with package-relative paths.
+# The canonical one-click release orchestration is the self-contained base plus
+# mode overlay under release/memorist-openwebui/. Do not use this legacy file to
+# certify Full; use docker-compose.full.yml for source Full checks or the shipped
+# compose.yml + compose.full.yml pair for release checks.
 #
 # Profiles:
 #   lite  -> Open WebUI + Memorist Core (SQLite, no graph)  [recommended]
-#   full  -> adds FalkorDB graph service                    [advanced preview]
+#   full  -> legacy graph-only developer profile (not certified Full)
 #
 # All secrets/keys are read from .env; none are passed on the command line.
 services:
@@ -73,13 +72,13 @@ services:
       PYTHONPATH: /memorist-integration
     command: ["python", "-m", "memorist.backend.openwebui_entrypoint"]
     ports:
-      - "${OPEN_WEBUI_PORT:-3000}:8080"
+      - "127.0.0.1:${OPEN_WEBUI_PORT:-3000}:8080"
     volumes:
       - openwebui-data:/app/backend/data
       - ./open-webui-integration/memorist:/memorist-integration/memorist:ro
     depends_on:
       memorist-core:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=2)"]
       interval: 15s
@@ -89,7 +88,7 @@ services:
 
   falkordb:
     profiles: ["full", "graph"]
-    image: falkordb/falkordb:v4.18.10
+    image: falkordb/falkordb@sha256:2496643cabd67e87fd82458383400c049324daec1fe674ba0db4c5bdaca5d25f
     ports:
       - "127.0.0.1:${MEMORIST_FALKORDB_PORT:-6379}:6379"
     volumes:

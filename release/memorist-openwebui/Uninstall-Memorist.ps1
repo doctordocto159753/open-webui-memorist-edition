@@ -24,6 +24,7 @@ $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Import-Module (Join-Path $scriptRoot 'scripts\MemoristCommon.psm1') -Force
 $root = Get-MemoristRoot -ScriptRoot $scriptRoot
 Set-Location $root
+$Mode = Get-MemoristInstalledMode -Root $root
 
 Show-MemoristBanner -Subtitle 'Uninstall'
 if ($PurgeData) {
@@ -49,7 +50,12 @@ $downArgs = @('down')
 if ($PurgeData) { $downArgs += '-v' }
 if ($RemoveImages) { $downArgs += @('--rmi', 'local') }
 Write-MemoristLog 'Removing containers...' 'STEP'
-Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile 'lite' -Arguments $downArgs | Out-Null
+$downArgs += '--remove-orphans'
+$rc = Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments $downArgs
+if ($rc -ne 0) {
+    Write-MemoristLog 'Docker removal failed; data folders were not modified.' 'FAIL'
+    exit 1
+}
 
 if ($PurgeData) {
     foreach ($dir in @('data', 'objects', 'imports', 'exports', 'logs')) {

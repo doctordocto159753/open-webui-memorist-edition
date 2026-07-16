@@ -37,6 +37,13 @@ services:
       MEMORIST_FALKORDB_URL: redis://falkordb:6379
       MEMORIST_HOT_SCHEDULER: in_memory
       MEMORIST_ENABLE_GRAPH_PROJECTION: "true"
+      MEMORIST_ENABLE_OPENWEBUI_ADAPTER: "true"
+      MEMORIST_ENABLE_MEMORY_WORKER: "true"
+      MEMORIST_ENABLE_IMPORT_SYSTEM: "true"
+      MEMORIST_ENABLE_MEMORY_CONTEXT_ATTACHMENT: "true"
+      MEMORIST_ENABLE_ACTIVE_MEMORY_BLOCKS: "true"
+      MEMORIST_ENABLE_USER_PROFILE_PROJECTION: "true"
+      MEMORIST_ENABLE_FORGETTING_PIPELINE: "true"
       MEMORIST_ATTACHMENT_MAX_TOKENS: ${MEMORIST_ATTACHMENT_MAX_TOKENS:-1800}
       MEMORIST_ATTACHMENT_CONTEXT_RATIO: ${MEMORIST_ATTACHMENT_CONTEXT_RATIO:-0.10}
       MEMORIST_ATTACHMENT_MIN_TOKENS: ${MEMORIST_ATTACHMENT_MIN_TOKENS:-256}
@@ -57,7 +64,7 @@ services:
         condition: service_started
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16.9-alpine3.22
     environment:
       POSTGRES_DB: memorist
       POSTGRES_USER: memorist
@@ -67,15 +74,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    ports:
-      - "${MEMORIST_POSTGRES_PORT:-5432}:5432"
     volumes:
       - memorist-postgres-data:/var/lib/postgresql/data
 
   falkordb:
-    image: falkordb/falkordb:v4.18.10
-    ports:
-      - "${MEMORIST_FALKORDB_PORT:-6379}:6379"
+    image: falkordb/falkordb@sha256:2496643cabd67e87fd82458383400c049324daec1fe674ba0db4c5bdaca5d25f
     volumes:
       - falkordb-data:/data
 

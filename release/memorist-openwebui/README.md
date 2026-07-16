@@ -1,113 +1,75 @@
 # Memorist OpenWebUI Local Package
 
-This package runs Open WebUI as the parent chat UI and Memorist Core as a complementary local memory service. Release state: `v0.2.0-beta.1 candidate`. Use Lite mode for the validated local path. The packaged Open WebUI image target is pinned to `ghcr.io/open-webui/open-webui:v0.9.6` unless `OPENWEBUI_IMAGE` is explicitly overridden.
+Package version: `0.2.0-beta.1`  
+Status: early public alpha.
 
-## What You Get
-
-- Open WebUI container
-- Memorist Core FastAPI container
-- SQLite-backed local memory engine
-- local object store volumes
-- optional FalkorDB service for Full mode
-- trusted Open WebUI Filter/Function bundle
-- documented Open WebUI Filter contract and payload fixtures
-- package manifest and forbidden-file scanner
-- SQLite writer diagnostics and real daily-use smoke
-- import pause/resume/cancel progress endpoints
-- doctor, backup, restore, logs, and reset scripts
-- install/security/import/privacy/upgrade docs
+This self-contained package runs Open WebUI with Memorist Core. Lite uses SQLite.
+Full uses PostgreSQL as the only canonical memory store and FalkorDB as a
+rebuildable graph projection. The Full backend/runtime has passed the eleven
+Docker certification gates on the tested Linux environment. Windows desktop
+one-click validation is tracked separately and must not be inferred from that
+backend certification.
 
 ## Windows one-click
 
-Windows users should start with **`README-LOCAL.md`**: double-click
-`Memorist.cmd` (or run `.\Install-Memorist.ps1`) for a guided setup that detects
-Docker, generates a private `.env`, optionally captures a provider API key
-locally, starts the services, and opens the browser. Lifecycle scripts
-(`Start-`, `Stop-`, `Restart-`, `Show-…-Logs`, `Reset-…-Data`, `Uninstall-`)
-ship alongside. The bash flow below remains available for macOS/Linux and CI.
+1. Install and start Docker Desktop.
+2. Extract the ZIP into a folder you own.
+3. Double-click `Memorist.cmd`.
+4. Choose Lite or Full in the wizard.
 
-## Start Lite
+The installer creates an ACL-restricted local `.env`, generates strong session
+secrets, generates a private PostgreSQL password for Full, starts the selected
+services, verifies the effective runtime, and opens `http://localhost:3000` only
+after required checks pass.
 
-```bash
-cp .env.example .env
-scripts/start-lite.sh
+Command-line equivalents:
+
+```powershell
+.\Install-Memorist.ps1
+.\Install-Memorist.ps1 -Mode full -NonInteractive -NoBrowser
+.\Install-Memorist.ps1 -Mode lite -DryRun -NonInteractive
 ```
 
-Open:
+## Runtime matrix
 
-- Open WebUI: `http://localhost:3000`
-- Memorist Core: `http://localhost:8777/memcore/health`
+| | Lite | Full |
+| --- | --- | --- |
+| Services | Open WebUI, Memorist Core | Open WebUI, Memorist Core, PostgreSQL, FalkorDB |
+| Canonical store | SQLite | PostgreSQL |
+| Graph | disabled | FalkorDB projection |
+| Scheduler | disabled | `in_memory` |
+| Database/graph host ports | none | none |
 
-Lite is the recommended default. It uses SQLite and does not require graph services or embeddings.
+## Processing nodes and API keys
 
-## Start Full
+Local deterministic processing needs no API key. The installer may store
+optional role-key values only in the local `.env`. Endpoint, model, capability
+flags, privacy acknowledgement, profile testing, and role-default assignment
+are completed in **Settings → Memorist → Processing Nodes**. Plaintext key
+values are not stored in the browser, SQLite, PostgreSQL, or FalkorDB.
 
-```bash
-cp .env.example .env
-scripts/start-full.sh
+## Lifecycle
+
+```powershell
+.\Start-Memorist.ps1
+.\Stop-Memorist.ps1
+.\Restart-Memorist.ps1
+.\Show-Memorist-Logs.ps1
+.\Reset-Memorist-Data.ps1
+.\Uninstall-Memorist.ps1
 ```
 
-Full mode starts optional graph services, uses more memory, and remains an experimental preview until external PostgreSQL/FalkorDB gates pass.
+The scripts read the installed mode from `.env`. Uninstall preserves volumes by
+default. `-PurgeData` and Reset are destructive and require explicit
+confirmation.
 
-## Install Memorist Into Open WebUI
+## Data
 
-Install these trusted server-side integration files according to your Open WebUI deployment:
+- Lite canonical data: `memorist-data`
+- Full canonical data: `memorist-postgres-data`
+- Full graph projection: `falkordb-data`
+- Open WebUI accounts: `openwebui-data`
+- Objects/imports/exports: project-scoped Memorist volumes
 
-```text
-open-webui-integration/memorist/filter/memorist_memory_filter.py
-open-webui-integration/memorist/function/memorist_status_function.py
-open-webui-integration/memorist/shared/
-```
-
-Security warning: Open WebUI Filters and Functions execute Python on the server. Install only from this trusted package.
-
-## Configure Model Providers
-
-Do not place provider credentials in Memorist files. Configure model providers in Open WebUI Admin Settings -> Connections.
-
-## Run Doctor
-
-```bash
-scripts/doctor.sh lite
-```
-
-Doctor checks Docker, Compose, writable folders, ports, health endpoints, local-only mode, and graph status.
-
-## Daily Smoke
-
-From the source repository root, run:
-
-```bash
-make smoke-daily
-```
-
-The smoke verifies Memorist Core health, base APIs, Open WebUI capture, adaptive budget calculation, and diagnostics against a temporary local SQLite database.
-
-## Backup
-
-```bash
-scripts/backup.sh
-```
-
-Backups use the SQLite backup API; do not copy a live WAL database manually.
-
-## Restore
-
-```bash
-scripts/restore.sh path/to/heritage.zip
-```
-
-Restore runs dry-run first unless explicit confirmation is provided.
-
-## Data Volumes
-
-- `openwebui-data`
-- `memorist-data`
-- `memorist-objects`
-- `memorist-import-staging`
-- `memorist-exports`
-- `falkordb-data` in Full mode
-
-## Local-only Policy
-
-Memorist defaults to local-only mode, no telemetry, and no default API keys.
+See `README-LOCAL.md` and the packaged `docs/` directory for installation,
+security, troubleshooting, and upgrade details.
