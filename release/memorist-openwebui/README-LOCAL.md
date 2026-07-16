@@ -4,8 +4,10 @@ Memorist is a local-first memory edition of Open WebUI. This package runs
 everything on your own machine with Docker; you do **not** need Git, Python, or
 `uv` to use it.
 
-> Status: alpha/beta. Lite uses SQLite. Full uses PostgreSQL + FalkorDB and is
-> certified in the tested local Docker environment; it uses more resources.
+> Status: early public alpha. Lite uses SQLite. Full uses PostgreSQL + FalkorDB
+> and has passed the eleven backend/runtime gates in the tested Linux Docker
+> environment. Windows desktop one-click validation remains a separate release
+> gate.
 
 ## 1. Requirements
 
@@ -86,8 +88,8 @@ upgrade: stop Memorist, copy the existing `.env` into the new extracted
 package, and rerun the installer in the persisted mode. A Lite-to-Full change
 requires the documented SQLite-to-PostgreSQL migration; the installer refuses
 to abandon SQLite data silently.
-See the packaged `docs/upgrade.md`, and `docs/reference/backup-restore.md` in
-the source repository, for backups.
+See the packaged `docs/upgrade.md` for upgrade notes and use Heritage export for
+a portable backup before alpha-version migrations.
 
 ## 7. Troubleshooting
 
@@ -97,5 +99,4 @@ the source repository, for backups.
 - **UI slow to load first time:** images are still pulling/building; watch
   `Show-Memorist-Logs.ps1`.
 
-More detail: the packaged `docs/troubleshooting.md`, and the repository's
-`docs/INSTALLATION.md` and `docs/TROUBLESHOOTING.md`.
+More detail: the packaged `docs/troubleshooting.md`.
