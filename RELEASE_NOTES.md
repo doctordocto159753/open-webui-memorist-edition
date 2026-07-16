@@ -1,28 +1,42 @@
-# Memorist OpenWebUI v0.2.0-beta.1 Development Baseline Notes
+# Release Notes
 
-This baseline packages Memorist Core with a local Open WebUI Filter/Function integration, a supported SQLite Lite compose path, an experimental Full Mode preview, local diagnostics, import/export support, Heritage verification, Model Control Plane runtime integration, sentence-level Jakobson Memory Intelligence Core, and Memory Worker Prompt Pack v2.
+## v0.2.0 — early public alpha (current)
 
-This is not Public Beta GO. It is a GitHub development baseline intended for independent audit and continued development.
+Memorist's first public-ready candidate: a local-first memory layer for
+Open WebUI with a transparent, inspectable memory pipeline.
 
-Current status:
+Highlights:
 
-- Lite Mode is the beta-candidate local path.
-- Full Mode is an experimental PostgreSQL/FalkorDB preview until real external Full gates pass.
-- Memory Intelligence Core / sentence-level Jakobson pipeline is implemented as the current semantic routing baseline.
-- Model Control Plane backend/runtime baseline is implemented; UI/product polish remains future work.
-- Prompt Pack v2 is implemented as the non-chat prompt contract and audit baseline.
-- Open WebUI integration is contract-tested with fixtures; the pinned real container smoke remains manual/pending.
+- **Canonical semantic authority** — one gate/route/candidate/provenance
+  pipeline shared by Lite and Full, with gate-before-candidate semantics,
+  trust/provenance classification, and no ordinary memory from
+  phatic/greeting, privacy, forget, or manual-review turns.
+- **Transparent memory attachments** — a read-only, redacted "Memory used"
+  panel shows exactly what context was attached to a turn.
+- **Truthful per-chat Memory On / Memory Off** — enforced server-side as a
+  consent ceiling; regeneration honors the original turn's state.
+- **First-run memory node configuration** — admin-only Memory Setup wizard
+  with provider-neutral OpenAI-compatible profiles, real role-capability
+  tests, and env-var secret references (no plaintext keys in browser or DB).
+- **Windows-first one-click local installer** — Docker Desktop-backed setup
+  wizard, local `.env` generation with strong secrets, optional local API-key
+  capture, health checks, browser launch, and guarded
+  start/stop/reset/uninstall scripts.
+- **Memory engine baseline** — sentence-level Jakobson analysis, versioned
+  evidence-linked memories, scoped rank-fused retrieval with abstention,
+  bounded attachments, import (ChatGPT/Claude/Gemini/Open WebUI), Heritage
+  export/restore, and a residue-checked forget workflow.
 
-Included hardening:
+Honest status:
 
-- explicit FastAPI TestClient dependency and reproducible `make check`;
-- durable Open WebUI session aliases for stable IDs, temporary IDs, client nonce, and first-message fingerprints;
-- atomic local job claiming, SQLite WAL/busy-timeout/busy-retry hardening, and SQLite write actor diagnostics;
-- import progress, pause/resume/cancel, bounded commit, backpressure, and heavy import CI smoke;
-- model-aware Memory Context Attachment budget calculation and preflight fail-open behavior;
-- local Model Control roles, defaults, usage, cost, health, privacy acknowledgement, and provider profiles;
-- sentence-level Jakobson annotation tables, memory signal routes, and candidate evidence lineage;
-- Prompt Pack v2 registry, schemas, validators, role mapping, prompt execution audit, and specialized extractor prompts;
-- Heritage roundtrip, forget residue, consistency, recovery, source package, RC schema, and forbidden-file scans.
+- Lite mode (SQLite, fully local) is the validated path.
+- Full mode (PostgreSQL + FalkorDB) remains an experimental preview until its
+  external certification gates pass.
+- Alpha software: no security audit; schema migrations between alpha versions
+  may require export/import; see README "Known limitations".
 
-Generated packages under `release/source/` and `release/rc/` are reproducible build outputs. They should be rebuilt before publishing and are not evidence by themselves; the release reports and checks determine readiness.
+Storage schema version: 18. Pinned Open WebUI base:
+`ghcr.io/open-webui/open-webui:v0.9.6`.
+
+Generated packages under `release/source/` and `release/rc/` are reproducible
+build outputs; rebuild them before publishing.

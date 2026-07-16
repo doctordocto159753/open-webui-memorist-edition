@@ -951,7 +951,7 @@ def test_ui_model_settings_contract() -> None:
 
 def test_docs_include_model_roles() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    architecture = (ROOT / "docs/architecture.md").read_text(encoding="utf-8")
+    architecture = (ROOT / "docs/ARCHITECTURE.md").read_text(encoding="utf-8")
 
     assert "Model Control Plane" in readme
     assert "main_chat_observed" in readme

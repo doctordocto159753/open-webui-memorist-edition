@@ -11,7 +11,7 @@
     The wizard never stores plaintext API keys in the browser or database. Keys
     entered here are written only to the local .env file and injected into the
     memorist-core container environment, where the backend resolves them by
-    name. See docs/windows-local-install.md.
+    name. See docs/INSTALLATION.md in the source repository.
 
 .PARAMETER Mode
     'lite' (default, recommended) or 'full'.

@@ -2,12 +2,7 @@
 
 This document explains the memory-engine architecture of **Open WebUI Memorist Edition**. It focuses on the memory engine itself: design philosophy, processing layers, data model, runtime flows, implementation techniques, trust and privacy boundaries, Lite/Full mode separation, and the architectural contributions introduced by this project.
 
-This document is not meant to replace the root README. The root README introduces the repository, installation, tests, and release status. This file is best placed in one of these locations:
-
-```text
-docs/memory-engine-architecture.md
-README_MEMORY_ENGINE_ARCHITECTURE.md
-```
+This document is not meant to replace the root README. The root README introduces the repository, installation, tests, and release status; [MEMORY_MACHINE.md](../MEMORY_MACHINE.md) is the condensed walk-through of the same pipeline.
 
 ## Current status
 
