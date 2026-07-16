@@ -2,7 +2,7 @@
 .SYNOPSIS
     Follow Memorist service logs.
 .PARAMETER Service
-    Optional single service name (memorist-core, open-webui, falkordb).
+    Optional single service name (memorist-core, open-webui, postgres, falkordb).
 .PARAMETER Tail
     Number of trailing lines to show (default 200).
 .PARAMETER NoFollow
@@ -28,4 +28,8 @@ $composeFile = Get-MemoristComposeFile -Root $root
 $logArgs = @('logs', '--tail', $Tail.ToString())
 if (-not $NoFollow) { $logArgs += '-f' }
 if (-not [string]::IsNullOrWhiteSpace($Service)) { $logArgs += $Service }
-Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments $logArgs | Out-Null
+$rc = Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments $logArgs
+if ($rc -ne 0) {
+    Write-MemoristLog 'Docker Compose could not read the requested logs.' 'FAIL'
+    exit $rc
+}
