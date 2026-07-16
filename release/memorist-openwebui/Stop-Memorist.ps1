@@ -20,4 +20,4 @@ Write-MemoristLog 'Stopping services (data volumes are kept)...' 'STEP'
 # 'down' without -v preserves named volumes and local data.
 $rc = Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments @('down', '--remove-orphans')
 if ($rc -eq 0) { Write-MemoristLog 'Stopped. Your memory data is preserved.' 'OK' }
-else { Write-MemoristLog 'Stop returned a non-zero exit code.' 'WARN' }
+else { Write-MemoristLog 'Stop failed; containers may still be running.' 'FAIL'; exit 1 }
