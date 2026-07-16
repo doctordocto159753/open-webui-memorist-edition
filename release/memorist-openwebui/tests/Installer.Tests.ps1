@@ -1,6 +1,6 @@
 <#
 Pester tests for the Memorist installer shared module. These run only where
-PowerShell + Pester are available (see the PR5-D workflow); Linux CI without
+PowerShell + Pester are available (see the PR5-F workflow); Linux CI without
 PowerShell relies on installer/scripts/validate_installer.py instead.
 #>
 $modulePath = Join-Path (Join-Path $PSScriptRoot '..') 'scripts\MemoristCommon.psm1'
@@ -102,6 +102,30 @@ Describe 'Lifecycle failure semantics' {
         $text = Get-Content (Join-Path $packageRoot 'Uninstall-Memorist.ps1') -Raw
         if ($text -notmatch "Docker removal failed[\s\S]*exit 1") {
             throw 'uninstall can report success after Compose failure'
+        }
+    }
+
+    It 'propagates Stop and Start failures through Restart' {
+        $text = Get-Content (Join-Path $packageRoot 'Restart-Memorist.ps1') -Raw
+        if ($text -notmatch 'Stop-Memorist\.ps1[\s\S]*\$LASTEXITCODE -ne 0') {
+            throw 'restart ignores Stop failure'
+        }
+        if ($text -notmatch 'Start-Memorist\.ps1[\s\S]*\$LASTEXITCODE -ne 0') {
+            throw 'restart ignores Start failure'
+        }
+    }
+
+    It 'checks every script result in the Windows Full smoke' {
+        $text = Get-Content (Join-Path $packageRoot 'Test-Memorist-Full.ps1') -Raw
+        if ($text -notmatch 'Invoke-MemoristCheckedScript' -or $text -notmatch '\$LASTEXITCODE -ne 0') {
+            throw 'Windows Full smoke can continue after a lifecycle script failure'
+        }
+    }
+
+    It 'checks Full graph and backing services during Start' {
+        $text = Get-Content (Join-Path $packageRoot 'Start-Memorist.ps1') -Raw
+        foreach ($needle in @('graph_status', 'pg_isready', 'redis-cli')) {
+            if ($text -notmatch [regex]::Escape($needle)) { throw "Full Start does not verify $needle" }
         }
     }
 
