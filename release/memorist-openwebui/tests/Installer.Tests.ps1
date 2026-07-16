@@ -75,3 +75,38 @@ Describe 'Installed mode authority' {
         if (-not $threw) { throw 'corrupt mode did not fail closed' }
     }
 }
+
+Describe 'Lifecycle failure semantics' {
+    $packageRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
+
+    It 'makes installer dry-run fail when Compose validation fails' {
+        $text = Get-Content (Join-Path $packageRoot 'Install-Memorist.ps1') -Raw
+        if ($text -notmatch "Compose configuration failed to validate[\s\S]*exit 1") {
+            throw 'installer can report a successful dry-run after Compose failure'
+        }
+    }
+
+    It 'makes stop fail when Compose down fails' {
+        $text = Get-Content (Join-Path $packageRoot 'Stop-Memorist.ps1') -Raw
+        if ($text -notmatch "Stop failed[\s\S]*exit 1") { throw 'stop does not fail closed' }
+    }
+
+    It 'does not delete local folders when Docker volume reset is unavailable' {
+        $text = Get-Content (Join-Path $packageRoot 'Reset-Memorist-Data.ps1') -Raw
+        if ($text -notmatch "Reset aborted before deleting local folders[\s\S]*exit 1") {
+            throw 'reset can claim success while Docker volumes remain'
+        }
+    }
+
+    It 'makes uninstall fail before local purge when Compose down fails' {
+        $text = Get-Content (Join-Path $packageRoot 'Uninstall-Memorist.ps1') -Raw
+        if ($text -notmatch "Docker removal failed[\s\S]*exit 1") {
+            throw 'uninstall can report success after Compose failure'
+        }
+    }
+
+    It 'does not suppress Lite doctor failures' {
+        $text = Get-Content (Join-Path $packageRoot 'scripts/start-lite.sh') -Raw
+        if ($text -match 'doctor\.sh" lite \|\| true') { throw 'Lite startup suppresses doctor failure' }
+    }
+}
