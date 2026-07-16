@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import json
@@ -65,25 +65,25 @@ def assemble() -> dict[str, str]:
     if TARGET.exists():
         shutil.rmtree(TARGET)
     TARGET.mkdir(parents=True)
+
     _write_source_version_metadata()
     _refresh_source_installer_checksums()
-    for name in ["README.md", "LICENSE"]:
-        source = ROOT / name
-        if source.exists():
-            shutil.copy2(source, TARGET / name)
-    package_target = TARGET / "release" / "memorist-openwebui"
-    package_target.parent.mkdir(parents=True, exist_ok=True)
+
+    # The installer package itself is the archive root. A user extracting the
+    # ZIP must see Memorist.cmd immediately, not under release/memorist-openwebui.
     shutil.copytree(
         ROOT / "release" / "memorist-openwebui",
-        package_target,
+        TARGET,
+        dirs_exist_ok=True,
         ignore=_ignore,
     )
     _copy_installer_runtime()
-    _copy_rc_docs()
+    _copy_archive_docs()
     _normalize_text_files(TARGET)
     _refresh_installer_checksums()
+
     manifest = build_package_manifest(TARGET)
-    (TARGET / "release" / "package-manifest.ijson").write_text(
+    (TARGET / "package-manifest.ijson").write_text(
         json.dumps(manifest, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
     )
@@ -92,22 +92,26 @@ def assemble() -> dict[str, str]:
         encoding="utf-8",
     )
     _write_checksums(TARGET / "CHECKSUMS")
+
     issues = scan_path(TARGET)
     if issues:
         detail = "; ".join(f"{issue.path}: {issue.reason}" for issue in issues[:10])
         raise RuntimeError(f"forbidden files in RC staging directory: {detail}")
+
     if ZIP_PATH.exists():
         ZIP_PATH.unlink()
     with zipfile.ZipFile(ZIP_PATH, "w", zipfile.ZIP_DEFLATED) as package:
-        for path in sorted(TARGET.rglob("*")):
+        for path in sorted(TARGET.rglob("*"), key=lambda p: p.relative_to(TARGET).as_posix()):
             if path.is_file():
                 package.write(path, path.relative_to(RC_ROOT).as_posix())
+
     digest = hashlib.sha256(ZIP_PATH.read_bytes()).hexdigest()
     SHA_PATH.write_text(f"{digest}  {ZIP_PATH.name}\n", encoding="utf-8")
     issues = scan_path(ZIP_PATH)
     if issues:
         detail = "; ".join(f"{issue.path}: {issue.reason}" for issue in issues[:10])
         raise RuntimeError(f"forbidden files in RC zip: {detail}")
+
     shutil.rmtree(TARGET)
     return {"zip": str(ZIP_PATH), "sha256": str(SHA_PATH), "digest": digest}
 
@@ -152,25 +156,32 @@ def _ignore(directory: str, names: list[str]) -> set[str]:
     return ignored
 
 
-def _copy_rc_docs() -> None:
-    for name in [
-        "RELEASE_NOTES.md",
-        "KNOWN_LIMITATIONS.md",
-        "SECURITY.md",
-        "INSTALL.md",
-        "UPGRADE.md",
-        "HANDOFF.md",
-        "RELEASE_DECISION.md",
-        "change-log-after-freeze.md",
+def _copy_archive_docs() -> None:
+    """Ship canonical current docs; never mix frozen RC handoff narratives in."""
+    for source, relative in [
+        (ROOT / "LICENSE", Path("LICENSE")),
+        (ROOT / "SECURITY.md", Path("SECURITY.md")),
+        (ROOT / "RELEASE_NOTES.md", Path("RELEASE_NOTES.md")),
+        (ROOT / "docs" / "INSTALLATION.md", Path("docs/INSTALLATION.md")),
+        (ROOT / "docs" / "TROUBLESHOOTING.md", Path("docs/TROUBLESHOOTING.md")),
+        (ROOT / "docs" / "ARCHITECTURE.md", Path("docs/ARCHITECTURE.md")),
+        (ROOT / "docs" / "MEMORY_MACHINE.md", Path("docs/MEMORY_MACHINE.md")),
+        (ROOT / "docs" / "DEVELOPMENT.md", Path("docs/DEVELOPMENT.md")),
+        (
+            ROOT / "docs" / "reference" / "backup-restore.md",
+            Path("docs/reference/backup-restore.md"),
+        ),
     ]:
-        source = RC_ROOT / name
-        if source.exists():
-            shutil.copy2(source, TARGET / name)
+        if not source.is_file():
+            continue
+        destination = TARGET / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
 
 
 def _copy_installer_runtime() -> None:
     """Put every build context inside the extracted installer directory."""
-    runtime = TARGET / "release" / "memorist-openwebui" / "runtime"
+    runtime = TARGET / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     core_target = runtime / "memorist-core"
     core_target.mkdir()
@@ -190,7 +201,7 @@ def _copy_installer_runtime() -> None:
 
 
 def _refresh_installer_checksums() -> None:
-    script = TARGET / "release" / "memorist-openwebui" / "scripts" / "gen_checksums.py"
+    script = TARGET / "scripts" / "gen_checksums.py"
     subprocess.run([sys.executable, str(script)], check=True)
 
 
