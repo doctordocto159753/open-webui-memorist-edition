@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
         with: {clean: false, show-progress: false}
       - name: Require Docker and Compose
-        run: docker info >/dev/null && docker compose version
+        run: bash .github/scripts/ensure-compose.sh --require-docker
       - run: python3 installer/scripts/validate_installer.py --dry-run
       - run: python3 installer/scripts/validate_compose.py
       - run: python3 release/memorist-openwebui/scripts/gen_checksums.py --check
@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
         with: {clean: false, show-progress: false}
       - name: Require Docker and Compose
-        run: docker info >/dev/null && docker compose version
+        run: bash .github/scripts/ensure-compose.sh --require-docker
       - name: Assemble release archive
         run: python3 installer/scripts/assemble_rc.py
       - name: Extract outside checkout into a path containing spaces
@@ -63,8 +63,8 @@ jobs:
       - uses: actions/checkout@v4
         with: {clean: false, show-progress: false}
       - uses: astral-sh/setup-uv@v5
-      - name: Require live Docker
-        run: docker info >/dev/null && docker compose version
+      - name: Require live Docker and Compose
+        run: bash .github/scripts/ensure-compose.sh --require-docker
       - name: Install test dependencies
         working-directory: memorist-core
         run: uv sync --all-extras --quiet

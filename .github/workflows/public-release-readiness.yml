@@ -72,6 +72,8 @@ jobs:
         with:
           clean: false
           show-progress: false
+      - name: Require an authoritative Compose CLI
+        run: bash .github/scripts/ensure-compose.sh
       - name: Installer static checks (files, functions, secret redaction, dry-run guards)
         run: python3 installer/scripts/validate_installer.py --dry-run
       - name: Release compose validation (lite + full)
