@@ -78,7 +78,11 @@ def check() -> int:
     if not CHECKSUM_FILE.exists():
         print("FAIL: checksums.sha256 is missing.")
         return 1
-    current = CHECKSUM_FILE.read_text(encoding="utf-8")
+    # The manifest is generated with LF, but a Windows worktree (or a runner
+    # with core.autocrlf enabled) may present it with CRLF. Only the hashed
+    # content matters, so normalize the manifest's own line endings before
+    # comparing to avoid a false "out of date" on such checkouts.
+    current = CHECKSUM_FILE.read_text(encoding="utf-8").replace("\r\n", "\n")
     if current != computed:
         print("FAIL: checksums.sha256 is out of date. Run gen_checksums.py to refresh.")
         current_lines = set(current.splitlines())
