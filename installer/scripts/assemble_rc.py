@@ -80,6 +80,7 @@ def assemble() -> dict[str, str]:
     )
     _copy_installer_runtime()
     _copy_rc_docs()
+    _normalize_text_files(TARGET)
     _refresh_installer_checksums()
     manifest = build_package_manifest(TARGET)
     (TARGET / "release" / "package-manifest.ijson").write_text(
@@ -196,6 +197,23 @@ def _refresh_installer_checksums() -> None:
 def _refresh_source_installer_checksums() -> None:
     script = ROOT / "release" / "memorist-openwebui" / "scripts" / "gen_checksums.py"
     subprocess.run([sys.executable, str(script)], check=True)
+
+
+def _normalize_text_files(root: Path) -> None:
+    """Make packaged text byte-stable across Windows and Linux assembly."""
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        data = path.read_bytes()
+        if b"\0" in data:
+            continue
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        normalized = text.replace("\r\n", "\n")
+        if normalized != text:
+            path.write_bytes(normalized.encode("utf-8"))
 
 
 def _write_checksums(output: Path) -> None:

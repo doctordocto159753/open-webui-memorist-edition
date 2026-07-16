@@ -175,8 +175,7 @@ class Settings(BaseSettings):
                 disabled = [name for name, enabled in required_full_features.items() if not enabled]
                 if disabled:
                     raise ValueError(
-                        "production full runtime requires enabled features: "
-                        + ", ".join(disabled)
+                        "production full runtime requires enabled features: " + ", ".join(disabled)
                     )
         if (
             self.runtime_profile == "dev"
