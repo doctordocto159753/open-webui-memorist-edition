@@ -146,4 +146,17 @@ jobs:
             if ($errors.Count) { throw "PowerShell parse failed: $($_.FullName)" }
           }
           if (-not (Get-Module -ListAvailable Pester)) { throw 'Pester is required; refusing false-green skip' }
-          Invoke-Pester -Path release/memorist-openwebui/tests -CI
+          $config = New-PesterConfiguration
+          $config.Run.Path = 'release/memorist-openwebui/tests'
+          $config.Run.PassThru = $true
+          $config.Output.Verbosity = 'Detailed'
+          $config.TestResult.Enabled = $true
+          $config.TestResult.OutputPath = 'release/artifacts/pester-results.xml'
+          $config.TestResult.OutputFormat = 'NUnitXml'
+          $result = Invoke-Pester -Configuration $config
+          if ($result.FailedCount -gt 0) { exit 1 }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: pr5f-pester-results
+          path: release/artifacts/pester-results.xml
