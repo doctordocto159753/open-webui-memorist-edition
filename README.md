@@ -10,9 +10,9 @@ that lets a chat system remember with consent, show what it remembers, and
 keep the memory machine inspectable.
 
 > **Status: early public alpha.** Lite mode uses SQLite. Full mode uses
-> PostgreSQL + FalkorDB and is certified in the tested local Docker environment
-> (11/11 external gates; Windows 11 one-click smoke). Expect rough edges; don't expect silent data loss — nothing here
-> deletes memory without asking.
+> PostgreSQL + FalkorDB and has passed all 11 backend/runtime gates in the tested
+> Linux Docker environment. Real Windows desktop one-click E2E remains pending.
+> Expect rough edges; nothing here deletes memory without asking.
 
 ## Why memory, and why this way
 
@@ -101,7 +101,7 @@ Pure-Python development without Docker works too — see
 | Graph projection | disabled | FalkorDB (rebuildable, never canonical) |
 | Embeddings | optional | optional |
 | Footprint | low — runs on modest machines | heavier |
-| Status | validated local path | certified in tested local Docker environment |
+| Status | validated local path | backend/runtime 11/11 passed; Windows desktop E2E pending |
 
 Lite and Full share one canonical semantic pipeline, so both make the same
 memory decisions — Full adds storage scale and graph projection, not different
@@ -190,13 +190,12 @@ forks may need to adapt CI). Start with
   migrations between alpha versions may require export/import.
 - Docker Desktop (or Docker Engine + Compose) is required for the release
   path; there is no signed native installer yet.
-- Full mode's external certification is incomplete — treat it as a preview.
+- Full backend/runtime certification passed 11/11 in the tested Linux Docker environment; real Windows desktop one-click E2E remains pending.
 - Semantic quality depends on the models you configure; the local
   deterministic fallback is safe but intentionally conservative.
 - Provider export formats change; import adapters are defensive, not
   guaranteed.
-- CI validates installer dry-run and compose config on Linux runners, not
-  every Windows desktop scenario.
+- CI validates the extracted package dry-run and Compose configuration on Linux runners, not every Windows desktop scenario.
 
 ## License and attribution
 
