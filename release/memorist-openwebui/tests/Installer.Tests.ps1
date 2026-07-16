@@ -77,7 +77,12 @@ Describe 'Installed mode authority' {
 }
 
 Describe 'Lifecycle failure semantics' {
-    $packageRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
+    # Pester v5 runs the Describe body during discovery but It blocks during the
+    # run phase, so a bare assignment here is $null inside the tests. Set it in
+    # BeforeAll so every It sees the resolved package root.
+    BeforeAll {
+        $packageRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
+    }
 
     It 'makes installer dry-run fail when Compose validation fails' {
         $text = Get-Content (Join-Path $packageRoot 'Install-Memorist.ps1') -Raw
