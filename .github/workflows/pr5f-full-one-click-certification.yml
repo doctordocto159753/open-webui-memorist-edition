@@ -26,7 +26,14 @@ jobs:
         run: bash .github/scripts/ensure-compose.sh --require-docker
       - run: python3 installer/scripts/validate_installer.py --dry-run
       - run: python3 installer/scripts/validate_compose.py
-      - run: python3 release/memorist-openwebui/scripts/gen_checksums.py --check
+      - name: Regenerate source-package checksums
+        run: python3 release/memorist-openwebui/scripts/gen_checksums.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pr5f-generated-source-checksums
+          path: release/memorist-openwebui/checksums.sha256
+      - name: Committed source-package checksums are current
+        run: git diff --exit-code -- release/memorist-openwebui/checksums.sha256
       - name: Shell syntax
         run: find release/memorist-openwebui/scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
 
