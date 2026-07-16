@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -95,8 +96,9 @@ def run() -> dict[str, Any]:
 
 
 def _compose(argv: list[str], project_name: str, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
+    compose = _compose_command(env)
     return subprocess.run(
-        ["docker", "compose", "-p", project_name, "-f", "docker-compose.full.yml", *argv],
+        [*compose, "-p", project_name, "-f", "docker-compose.full.yml", *argv],
         cwd=ROOT,
         env=env,
         text=True,
@@ -106,6 +108,22 @@ def _compose(argv: list[str], project_name: str, env: dict[str, str], timeout: i
         stderr=subprocess.STDOUT,
         timeout=timeout,
     )
+
+
+def _compose_command(env: dict[str, str]) -> list[str]:
+    override = env.get("MEMORIST_COMPOSE_BIN")
+    if override and Path(override).is_file():
+        return [override]
+    if shutil.which("docker") and subprocess.run(
+        ["docker", "compose", "version"],
+        capture_output=True,
+        env=env,
+    ).returncode == 0:
+        return ["docker", "compose"]
+    standalone = shutil.which("docker-compose", path=env.get("PATH"))
+    if standalone:
+        return [standalone]
+    raise RuntimeError("Docker Compose CLI is unavailable")
 
 
 def _wait_for_health(port: str, timeout_seconds: int = 180) -> dict[str, Any]:
