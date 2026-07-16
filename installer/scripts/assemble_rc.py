@@ -80,8 +80,9 @@ def assemble() -> dict[str, str]:
     _copy_installer_runtime()
     _copy_archive_docs()
     _normalize_text_files(TARGET)
-    _refresh_installer_checksums()
 
+    # Write package metadata before the installer checksum manifest so the
+    # extracted-package integrity check covers the metadata itself.
     manifest = build_package_manifest(TARGET)
     (TARGET / "package-manifest.ijson").write_text(
         json.dumps(manifest, ensure_ascii=False, separators=(",", ":")),
@@ -91,6 +92,7 @@ def assemble() -> dict[str, str]:
         json.dumps(manifest, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
     )
+    _refresh_installer_checksums()
     _write_checksums(TARGET / "CHECKSUMS")
 
     issues = scan_path(TARGET)
