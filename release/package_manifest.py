@@ -34,7 +34,10 @@ def build_package_manifest(
 ) -> dict[str, Any]:
     package_root = Path(root)
     files = []
-    for path in sorted(package_root.rglob("*")):
+    # Sort by POSIX relative path for byte-stable ordering across platforms.
+    for path in sorted(
+        package_root.rglob("*"), key=lambda p: p.relative_to(package_root).as_posix()
+    ):
         if not path.is_file():
             continue
         relative_path = path.relative_to(package_root).as_posix()

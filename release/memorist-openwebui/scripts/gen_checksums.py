@@ -33,7 +33,9 @@ EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".pyd", ".sqlite", ".log"}
 
 def _iter_files() -> list[Path]:
     files: list[Path] = []
-    for path in sorted(PKG_ROOT.rglob("*")):
+    # Sort by the POSIX relative path so the manifest order is identical on
+    # Windows (case-insensitive Path ordering) and Linux (case-sensitive).
+    for path in sorted(PKG_ROOT.rglob("*"), key=lambda p: p.relative_to(PKG_ROOT).as_posix()):
         if not path.is_file():
             continue
         rel = path.relative_to(PKG_ROOT)

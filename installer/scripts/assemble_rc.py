@@ -218,7 +218,7 @@ def _normalize_text_files(root: Path) -> None:
 
 def _write_checksums(output: Path) -> None:
     lines = []
-    for path in sorted(TARGET.rglob("*")):
+    for path in sorted(TARGET.rglob("*"), key=lambda p: p.relative_to(TARGET).as_posix()):
         if path.is_file() and path.name != "CHECKSUMS":
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             lines.append(f"{digest}  {path.relative_to(TARGET).as_posix()}")
