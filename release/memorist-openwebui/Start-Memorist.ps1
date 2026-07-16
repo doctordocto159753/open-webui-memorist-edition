@@ -43,9 +43,24 @@ $webPort = if ($webPortValue) { [int]$webPortValue } else { 3000 }
 $corePort = if ($corePortValue) { [int]$corePortValue } else { 8777 }
 $coreOk = Wait-MemoristService -Name 'Memorist Core' -Url ("http://localhost:{0}/memcore/health" -f $corePort) -TimeoutSec 180
 $webOk = Wait-MemoristService -Name 'Open WebUI' -Url ("http://localhost:{0}/health" -f $webPort) -TimeoutSec 180
+
 if ($Mode -eq 'full' -and $coreOk) {
     $coreOk = Test-MemoristFullReadiness -Url ("http://localhost:{0}/memcore/config/effective" -f $corePort)
+    if ($coreOk) {
+        try {
+            $health = Get-MemoristEffectiveConfig -Url ("http://localhost:{0}/memcore/health" -f $corePort)
+            $coreOk = $health.graph_status -eq 'ok' -and @($health.profile_warnings).Count -eq 0
+        } catch {
+            $coreOk = $false
+        }
+    }
+    if ($coreOk) {
+        $postgresOk = Test-MemoristComposeService -Compose $docker.Compose -ComposeFile $composeFile -Mode $Mode -Arguments @('exec', '-T', 'postgres', 'pg_isready', '-U', 'memorist', '-d', 'memorist')
+        $falkorOk = Test-MemoristComposeService -Compose $docker.Compose -ComposeFile $composeFile -Mode $Mode -Arguments @('exec', '-T', 'falkordb', 'redis-cli', 'ping')
+        $coreOk = $postgresOk -and $falkorOk
+    }
 }
+
 if (-not ($coreOk -and $webOk)) { Write-MemoristLog 'Runtime readiness verification failed.' 'FAIL'; exit 1 }
 if ($webOk -and -not $NoBrowser) { Open-MemoristBrowser -Url "http://localhost:$webPort" }
 Write-MemoristLog ("Open WebUI: http://localhost:{0}" -f $webPort) 'OK'
