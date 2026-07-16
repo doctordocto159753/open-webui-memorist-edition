@@ -5,6 +5,9 @@ name: PR5-F Full One-Click Certification
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: pr5f-full-one-click-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -14,8 +17,11 @@ jobs:
     name: Release Package Static Validation
     runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
-      - uses: actions/checkout@v4
-        with: {clean: false, show-progress: false}
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          clean: true
+          persist-credentials: false
+          show-progress: false
       - name: Require Docker and Compose
         run: bash .github/scripts/ensure-compose.sh --require-docker
       - run: python3 installer/scripts/validate_installer.py --dry-run
@@ -25,27 +31,39 @@ jobs:
         run: find release/memorist-openwebui/scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
 
   self-contained-package:
-    name: Self-Contained Package Smoke
+    name: Self-Contained Package Integrity and Full Dry Run
     runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
-      - uses: actions/checkout@v4
-        with: {clean: false, show-progress: false}
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          clean: true
+          persist-credentials: false
+          show-progress: false
       - name: Require Docker and Compose
         run: bash .github/scripts/ensure-compose.sh --require-docker
+      - name: Require PowerShell
+        run: bash .github/scripts/ensure-pwsh.sh
       - name: Assemble release archive
         run: python3 installer/scripts/assemble_rc.py
       - name: Extract outside checkout into a path containing spaces
+        shell: bash
         run: |
+          set -euo pipefail
           target="${RUNNER_TEMP}/Memorist Full Test"
           rm -rf "$target" && mkdir -p "$target"
           unzip -q release/rc/memorist-openwebui-0.2.0-beta.1.zip -d "$target"
           pkg=$(find "$target" -type f -path '*/release/memorist-openwebui/compose.yml' -printf '%h\n' | head -1)
           test -n "$pkg"
-          (cd "$pkg" && python3 scripts/gen_checksums.py --check)
           test -d "$pkg/runtime/memorist-core"
           test -d "$pkg/runtime/open-webui-integration"
-          ! grep -R -E 'build:[[:space:]]*$|context:[[:space:]]*\.\./' "$pkg"/compose*.yml | grep '\.\./'
-      - uses: actions/upload-artifact@v4
+          ! grep -R -E 'context:[[:space:]]*\.\./|source:[[:space:]]*\.\./' "$pkg"/compose*.yml
+          (
+            cd "$pkg"
+            python3 scripts/gen_checksums.py --check
+            pwsh -NoProfile -File ./Install-Memorist.ps1 -Mode full -DryRun -NonInteractive -NoBrowser
+            test ! -f .env
+          )
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: pr5f-self-contained-package
           path: |
@@ -60,9 +78,12 @@ jobs:
       MEMORIST_FULL_COMPOSE_SMOKE: "true"
       MEMORIST_FULL_SMOKE_AUTO_DOCKER: "true"
     steps:
-      - uses: actions/checkout@v4
-        with: {clean: false, show-progress: false}
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          clean: true
+          persist-credentials: false
+          show-progress: false
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
       - name: Require live Docker and Compose
         run: bash .github/scripts/ensure-compose.sh --require-docker
       - name: Install test dependencies
@@ -77,7 +98,7 @@ jobs:
           r=json.load(open('release/artifacts/full-mode-certification-report.ijson'))
           assert r['summary'] == {'passed': 11, 'failed': 0, 'skipped_or_manual': 0, 'all_required_passed': True, 'skipped_manual_blocks_certification': False, 'critical_failures': []}
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: pr5f-full-certification
@@ -87,18 +108,20 @@ jobs:
             release/artifacts/logs/**
 
   powershell-lifecycle:
-    name: PowerShell Lifecycle Tests
+    name: PowerShell Lifecycle Contract Tests
     runs-on: [self-hosted, linux, x64, memorist-ci]
     steps:
-      - uses: actions/checkout@v4
-        with: {clean: false, show-progress: false}
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          clean: true
+          persist-credentials: false
+          show-progress: false
       - name: Require PowerShell for lifecycle validation
         run: bash .github/scripts/ensure-pwsh.sh
       - name: Require Pester
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # Freshly provisioned portable pwsh does not register PSGallery by default.
           if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
             Register-PSRepository -Default
           }
