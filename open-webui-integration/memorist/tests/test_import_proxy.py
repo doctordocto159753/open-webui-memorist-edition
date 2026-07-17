@@ -33,11 +33,15 @@ class FakeAsyncClient:
         return None
 
     async def request(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
-        self.calls.append({"kind": "request", "method": method, "url": url, **kwargs})
+        self.calls.append(
+            {"kind": "request", "method": method, "url": url, **kwargs}
+        )
         return FakeResponse()
 
     async def post(self, url: str, **kwargs: Any) -> FakeResponse:
-        self.calls.append({"kind": "upload", "method": "POST", "url": url, **kwargs})
+        self.calls.append(
+            {"kind": "upload", "method": "POST", "url": url, **kwargs}
+        )
         return FakeResponse()
 
 
@@ -86,11 +90,14 @@ def test_import_proxy_forwards_only_after_admin_auth(monkeypatch: Any) -> None:
     assert FakeMemoristClient.actor_calls == [
         ("GET", "/memcore/imports", "admin-user", "server-workspace")
     ]
-    assert FakeAsyncClient.calls[0]["url"] == "http://memorist-core:8777/memcore/imports"
+    assert (
+        FakeAsyncClient.calls[0]["url"]
+        == "http://memorist-core:8777/memcore/imports"
+    )
     assert FakeAsyncClient.calls[0]["params"] == [("limit", "10")]
 
 
-def test_import_upload_ignores_browser_workspace_and_forces_server_scope(monkeypatch: Any) -> None:
+def test_import_upload_forces_server_scope(monkeypatch: Any) -> None:
     FakeAsyncClient.calls.clear()
     FakeMemoristClient.actor_calls.clear()
     monkeypatch.setattr(import_proxy, "MemoristClient", FakeMemoristClient)
