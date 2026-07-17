@@ -25,7 +25,7 @@ from typing import Any
 
 MEMORIST_FILTER_ID = "memorist_memory_filter"
 MEMORIST_FILTER_NAME = "Memorist Memory"
-MEMORIST_FILTER_CONTENT_VERSION = "pr5g-1"
+MEMORIST_FILTER_CONTENT_VERSION = "pr5g-2"
 
 _WRAPPER_TEMPLATE = '''"""Memorist managed chat filter (auto-provisioned; do not edit).
 
@@ -47,7 +47,7 @@ from memorist.filter.memorist_memory_filter import Filter as _MemoristPackagedFi
 def _server_side_user(__user__):
     user = dict(__user__ or {{}})
     workspace = os.environ.get("MEMORIST_OPENWEBUI_WORKSPACE_UUID")
-    if workspace and not user.get("workspace_id"):
+    if workspace:
         user["workspace_id"] = workspace
     return user
 
