@@ -8,7 +8,7 @@ server-configured workspace on uploads.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import quote
 
 import httpx
@@ -98,9 +98,9 @@ async def list_imports(
 @router.post("/upload-file")
 async def upload_import_file(
     actor: AuthenticatedAdmin,
-    file: UploadFile = File(...),
-    mode: str = Form("inspect"),
-    processing_mode: str | None = Form(None),
+    file: Annotated[UploadFile, File()],
+    mode: Annotated[str, Form()] = "inspect",
+    processing_mode: Annotated[str | None, Form()] = None,
 ) -> dict[str, Any]:
     client = MemoristClient()
     core_path = "/memcore/imports/upload-file"
