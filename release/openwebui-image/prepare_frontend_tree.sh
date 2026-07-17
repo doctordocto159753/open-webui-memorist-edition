@@ -45,6 +45,10 @@ grep -q "MemoristComposerToggle" "$OUT/src/lib/components/chat/MessageInput.svel
 grep -q "MemoristMessageDisclosure" "$OUT/src/lib/components/chat/Messages/ResponseMessage.svelte"
 grep -q "memorist" "$OUT/src/lib/components/admin/Settings.svelte"
 test -f "$OUT/src/routes/(app)/settings/memorist/+layout.svelte"
+test -f "$OUT/src/routes/(app)/settings/memorist/import/[runUuid]/+page.svelte"
 test -f "$OUT/src/lib/memorist/surfaces.ts"
+test -f "$OUT/src/lib/memorist/authTransport.ts"
+grep -q "/api/v1/memorist" "$OUT/src/lib/memorist/authTransport.ts"
+grep -q "Authorization" "$OUT/src/lib/memorist/authTransport.ts"
 
 echo "frontend tree assembled at $OUT"
