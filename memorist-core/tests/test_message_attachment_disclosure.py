@@ -55,8 +55,9 @@ def _capture_turn(client: TestClient, *, message_id: str, conversation: str) -> 
     )
     assert captured.status_code == 200, captured.text
     body = captured.json()
-    _insert_attachment(Path(client.app_state_db_path), session_uuid, body["message_uuid"])
-    return body["message_uuid"]
+    message_uuid = str(body["message_uuid"])
+    _insert_attachment(Path(client.app_state_db_path), session_uuid, message_uuid)
+    return message_uuid
 
 
 def _insert_attachment(db_path: Path, session_uuid: str, input_message_uuid: str) -> None:

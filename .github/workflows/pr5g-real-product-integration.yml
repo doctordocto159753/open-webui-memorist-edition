@@ -283,7 +283,9 @@ jobs:
           CYPRESS_INSTALL_BINARY: "0"
         run: |
           set -o pipefail
-          docker build --progress=plain \
+          # The runner uses the legacy Docker builder (no buildx), which does not
+          # support --progress; output is captured via tee instead.
+          docker build \
             -t memorist/openwebui:0.2.0-beta.2 \
             -f "${MEMORIST_PACKAGE_DIR}/runtime/openwebui-image/Dockerfile" \
             "${MEMORIST_PACKAGE_DIR}/runtime" \
