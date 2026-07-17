@@ -1,4 +1,5 @@
 <script lang="ts">
+	import '$lib/memorist/authTransport';
 	import '$lib/memorist/surfaces';
 
 	export let messageId: string = '';
