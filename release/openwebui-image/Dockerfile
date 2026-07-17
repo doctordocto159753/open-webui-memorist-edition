@@ -3,7 +3,7 @@
 #
 # Reproducibility contract (see source-pin.json):
 #   * frontend is rebuilt from the pinned Open WebUI 0.9.6 PyPI source
-#     snapshot (sha256-verified ADD; not a git clone) with the Memorist
+#     snapshot (sha256-verified download; not a git clone) with the Memorist
 #     overlay + reviewed patch layer applied;
 #   * the runtime layer starts from the pinned upstream container image by
 #     immutable digest and only replaces the compiled frontend and adds the
@@ -25,11 +25,13 @@ FROM ${NODE_BUILDER} AS frontend
 ARG OPENWEBUI_SDIST_URL
 ARG OPENWEBUI_SDIST_SHA256
 WORKDIR /build
-ADD --checksum=sha256:${OPENWEBUI_SDIST_SHA256} ${OPENWEBUI_SDIST_URL} /build/openwebui-src.tar.gz
+RUN apk add --no-cache patch ca-certificates \
+    && wget --https-only --tries=4 --timeout=30 \
+        -O /build/openwebui-src.tar.gz "${OPENWEBUI_SDIST_URL}" \
+    && echo "${OPENWEBUI_SDIST_SHA256}  /build/openwebui-src.tar.gz" | sha256sum -c -
 COPY openwebui-image/ /build/openwebui-image/
 COPY open-webui-integration/memorist/ui/ /build/memorist-ui/
-RUN apk add --no-cache patch \
-    && sh /build/openwebui-image/prepare_frontend_tree.sh \
+RUN sh /build/openwebui-image/prepare_frontend_tree.sh \
         /build/openwebui-src.tar.gz \
         /build/src-tree \
         /build/openwebui-image \
