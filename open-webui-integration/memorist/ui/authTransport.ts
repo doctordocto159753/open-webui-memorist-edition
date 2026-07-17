@@ -1,9 +1,11 @@
 const CONTROL_PREFIX = "/api/v1/memorist";
 const LEGACY_IMPORT_PREFIX = "/memcore/imports";
 const CONTROL_IMPORT_PREFIX = `${CONTROL_PREFIX}/imports`;
-const INSTALL_FLAG = "__memoristAuthenticatedTransportInstalled";
+const INSTALL_FLAG = "__memoristAuthenticatedTransportInstalled" as const;
 
-type MemoristWindow = Window & { [INSTALL_FLAG]?: boolean };
+type MemoristWindow = Window & {
+  __memoristAuthenticatedTransportInstalled?: boolean;
+};
 
 function browserToken(): string {
   if (typeof localStorage === "undefined") return "";
@@ -24,9 +26,14 @@ function sameOriginPath(value: string): { url: URL; relative: boolean } | null {
 export function memoristControlUrl(value: string): string {
   const parsed = sameOriginPath(value);
   if (!parsed) return value;
-  if (parsed.url.pathname === LEGACY_IMPORT_PREFIX || parsed.url.pathname.startsWith(`${LEGACY_IMPORT_PREFIX}/`)) {
+  if (
+    parsed.url.pathname === LEGACY_IMPORT_PREFIX ||
+    parsed.url.pathname.startsWith(`${LEGACY_IMPORT_PREFIX}/`)
+  ) {
     parsed.url.pathname = `${CONTROL_IMPORT_PREFIX}${parsed.url.pathname.slice(LEGACY_IMPORT_PREFIX.length)}`;
-    return parsed.relative ? `${parsed.url.pathname}${parsed.url.search}${parsed.url.hash}` : parsed.url.toString();
+    return parsed.relative
+      ? `${parsed.url.pathname}${parsed.url.search}${parsed.url.hash}`
+      : parsed.url.toString();
   }
   return value;
 }
@@ -35,15 +42,36 @@ export function isMemoristAuthenticatedUrl(value: string): boolean {
   const parsed = sameOriginPath(memoristControlUrl(value));
   return Boolean(
     parsed &&
-      (parsed.url.pathname === CONTROL_PREFIX || parsed.url.pathname.startsWith(`${CONTROL_PREFIX}/`)),
+      (parsed.url.pathname === CONTROL_PREFIX ||
+        parsed.url.pathname.startsWith(`${CONTROL_PREFIX}/`)),
   );
 }
 
 function authenticatedHeaders(initial?: HeadersInit): Headers {
   const headers = new Headers(initial || {});
   const token = browserToken();
-  if (token && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
   return headers;
+}
+
+function rewrittenRequest(input: Request, targetUrl: string, init: RequestInit | undefined): Request {
+  const method = init?.method || input.method;
+  const base: RequestInit = {
+    method,
+    body: method === "GET" || method === "HEAD" ? undefined : input.clone().body,
+    mode: input.mode,
+    credentials: input.credentials,
+    cache: input.cache,
+    redirect: input.redirect,
+    referrer: input.referrer,
+    referrerPolicy: input.referrerPolicy,
+    integrity: input.integrity,
+    keepalive: input.keepalive,
+    signal: input.signal,
+  };
+  return new Request(targetUrl, { ...base, ...init, headers: authenticatedHeaders(init?.headers || input.headers) });
 }
 
 export function installMemoristAuthenticatedTransport(): void {
@@ -59,13 +87,13 @@ export function installMemoristAuthenticatedTransport(): void {
     const targetUrl = memoristControlUrl(rawUrl);
     if (!isMemoristAuthenticatedUrl(targetUrl)) return nativeFetch(input, init);
 
-    const requestHeaders = input instanceof Request ? input.headers : undefined;
-    const headers = authenticatedHeaders(init?.headers || requestHeaders);
     if (input instanceof Request) {
-      const rewritten = new Request(targetUrl, input);
-      return nativeFetch(rewritten, { ...init, headers });
+      return nativeFetch(rewrittenRequest(input, targetUrl, init));
     }
-    return nativeFetch(targetUrl, { ...init, headers });
+    return nativeFetch(targetUrl, {
+      ...init,
+      headers: authenticatedHeaders(init?.headers),
+    });
   }) as typeof window.fetch;
 
   if (typeof XMLHttpRequest === "undefined") return;
@@ -73,7 +101,8 @@ export function installMemoristAuthenticatedTransport(): void {
   const nativeSend = XMLHttpRequest.prototype.send;
   const authenticated = new WeakSet<XMLHttpRequest>();
 
-  XMLHttpRequest.prototype.open = function (
+  XMLHttpRequest.prototype.open = (function (
+    this: XMLHttpRequest,
     method: string,
     url: string | URL,
     async = true,
@@ -90,9 +119,11 @@ export function installMemoristAuthenticatedTransport(): void {
       username,
       password,
     );
-  };
+  }) as typeof XMLHttpRequest.prototype.open;
 
-  XMLHttpRequest.prototype.send = function (body?: Document | XMLHttpRequestBodyInit | null): void {
+  XMLHttpRequest.prototype.send = function (
+    body?: Document | XMLHttpRequestBodyInit | null,
+  ): void {
     if (authenticated.has(this)) {
       const token = browserToken();
       if (token) this.setRequestHeader("Authorization", `Bearer ${token}`);
