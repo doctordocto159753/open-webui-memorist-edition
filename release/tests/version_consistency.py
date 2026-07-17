@@ -2,11 +2,34 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
-import tomllib
 import zipfile
 from pathlib import Path
 from typing import Any
+
+try:  # tomllib is stdlib on 3.11+; some CI runners still expose an older python3
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised only on <3.11 runners
+    tomllib = None  # type: ignore[assignment]
+
+
+def _project_version(pyproject_text: str) -> str:
+    if tomllib is not None:
+        return tomllib.loads(pyproject_text)["project"]["version"]
+    # Minimal fallback: read the single project.version line without a TOML lib.
+    in_project = False
+    for line in pyproject_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_project = stripped == "[project]"
+            continue
+        if in_project:
+            match = re.match(r"""version\s*=\s*["']([^"']+)["']""", stripped)
+            if match:
+                return match.group(1)
+    raise KeyError("project.version not found in pyproject.toml")
+
 
 ROOT = Path(__file__).resolve().parents[2]
 CORE_SRC = ROOT / "memorist-core" / "src"
@@ -28,8 +51,9 @@ VERSION_SUFFIX = f"memorist-openwebui-{RC_VERSION}/VERSION.ijson"
 
 def run() -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
-    pyproject = tomllib.loads((ROOT / "memorist-core" / "pyproject.toml").read_text())
-    pyproject_version = pyproject["project"]["version"]
+    pyproject_version = _project_version(
+        (ROOT / "memorist-core" / "pyproject.toml").read_text()
+    )
     expected_pep440 = __version__.replace("-beta.", "b")
     if pyproject_version != expected_pep440:
         issues.append(

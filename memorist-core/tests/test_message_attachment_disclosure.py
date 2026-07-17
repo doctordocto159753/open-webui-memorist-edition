@@ -85,7 +85,8 @@ def _insert_attachment(db_path: Path, session_uuid: str, input_message_uuid: str
 def _set_lifecycle(db_path: Path, input_message_uuid: str, lifecycle_status: str) -> None:
     with connect(str(db_path)) as connection:
         connection.execute(
-            "UPDATE memory_context_attachments SET lifecycle_status = ? WHERE input_message_uuid = ?",
+            "UPDATE memory_context_attachments SET lifecycle_status = ? "
+            "WHERE input_message_uuid = ?",
             (lifecycle_status, input_message_uuid),
         )
         connection.commit()

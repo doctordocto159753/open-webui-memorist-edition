@@ -76,7 +76,7 @@ if "%1"=="compose" (
 exit /b 0
 "@ | Set-Content -LiteralPath $shim
         }
-        [pscustomobject]@{ Root = $sandbox; ShimDir = $shimDir; Log = $log }
+        [pscustomobject]@{ Root = $sandbox; ShimDir = $shimDir; Shim = $shim; Log = $log }
     }
 
     function Invoke-MemoristScript {
@@ -85,15 +85,22 @@ exit /b 0
             [Parameter(Mandatory = $true)][string]$Script,
             [string[]]$Arguments = @()
         )
-        $separator = if ($script:isUnix) { ':' } else { ';' }
+        # Inject the controlled docker shim deterministically via
+        # MEMORIST_DOCKER_CLI (honored by MemoristCommon's Get-MemoristDockerCli)
+        # instead of relying on PATH ordering, which is not reliable across
+        # runners. The child pwsh inherits this process env var.
         $pwshArgs = @('-NoProfile', '-File', (Join-Path $Sandbox.Root $Script)) + $Arguments
-        $previousPath = $env:PATH
+        $previous = $env:MEMORIST_DOCKER_CLI
         try {
-            $env:PATH = $Sandbox.ShimDir + $separator + $previousPath
+            $env:MEMORIST_DOCKER_CLI = $Sandbox.Shim
             $output = & pwsh @pwshArgs 2>&1 | Out-String
             [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
         } finally {
-            $env:PATH = $previousPath
+            if ($null -eq $previous) {
+                Remove-Item Env:MEMORIST_DOCKER_CLI -ErrorAction SilentlyContinue
+            } else {
+                $env:MEMORIST_DOCKER_CLI = $previous
+            }
         }
     }
 

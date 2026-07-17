@@ -25,7 +25,15 @@ echo "$EXPECTED_SHA256  $SDIST" | sha256sum -c -
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
-tar -xzf "$SDIST" -C "$OUT" --strip-components=1 "$EXTRACTED_ROOT"
+# Strip the single top-level directory ($EXTRACTED_ROOT) without naming it as a
+# member: BusyBox tar (Alpine builder) does not reliably match a directory
+# member that PyPI sdists omit as an explicit entry. The sdist always has
+# exactly one root dir, so --strip-components=1 yields the tree directly.
+tar -xzf "$SDIST" -C "$OUT" --strip-components=1
+if [ ! -f "$OUT/package.json" ]; then
+    echo "expected $EXTRACTED_ROOT/package.json after extraction" >&2
+    exit 1
+fi
 
 echo "copying Memorist UI modules into src/lib/memorist..."
 mkdir -p "$OUT/src/lib/memorist"

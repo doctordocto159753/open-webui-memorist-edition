@@ -147,11 +147,23 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
-            Register-PSRepository -Default
+          # Prefer an already-installed Pester (self-hosted runners often ship
+          # one and cannot always reach the PowerShell Gallery); only register
+          # the gallery and install when a compatible version is genuinely
+          # missing.
+          $pester = Get-Module -ListAvailable -Name Pester |
+            Where-Object { $_.Version -ge [version]'5.5.0' } |
+            Sort-Object Version -Descending | Select-Object -First 1
+          if (-not $pester) {
+            if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
+              Register-PSRepository -Default
+            }
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+            Install-Module Pester -RequiredVersion 5.6.1 -Force -Scope CurrentUser -AllowClobber
+          } else {
+            Write-Host "Using preinstalled Pester $($pester.Version)"
           }
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-          Install-Module Pester -RequiredVersion 5.6.1 -Force -Scope CurrentUser -AllowClobber
+          Import-Module Pester -MinimumVersion 5.5 -Force
           $configuration = New-PesterConfiguration
           $configuration.Run.Path = @(
             'release/memorist-openwebui/tests/Lifecycle.Behavioral.Tests.ps1',
@@ -323,6 +335,8 @@ jobs:
           set -euo pipefail
           npm ci
           npm install --no-save @playwright/test@1.49.1
+          # Install the Chromium browser + OS deps the runner needs to launch it.
+          npx playwright install --with-deps chromium
       - name: Playwright product E2E — phase 1 (setup, capture, retrieval, off, security, isolation)
         env:
           MEMORIST_E2E_BASE_URL: http://localhost:3000
@@ -332,7 +346,8 @@ jobs:
         run: |
           set -euo pipefail
           cd "${MEMORIST_PACKAGE_DIR}"
-          compose="docker compose -f compose.yml -f compose.full.yml"
+          if [ -n "${MEMORIST_COMPOSE_BIN:-}" ]; then base="$MEMORIST_COMPOSE_BIN"; else base="docker compose"; fi
+          compose="$base -f compose.yml -f compose.full.yml"
           captured=$($compose exec -T postgres psql -U memorist -d memorist -tA -c \
             "SELECT count(*) FROM openwebui_message_captures WHERE role='user' AND message_uuid IN (SELECT message_uuid FROM messages WHERE raw_text LIKE '%Alpha%')")
           test "$captured" = "1" || { echo "expected exactly 1 capture lineage for the fact, got $captured"; exit 1; }
@@ -364,7 +379,8 @@ jobs:
         run: |
           set -euo pipefail
           cd "${MEMORIST_PACKAGE_DIR}"
-          compose="docker compose -f compose.yml -f compose.full.yml"
+          if [ -n "${MEMORIST_COMPOSE_BIN:-}" ]; then base="$MEMORIST_COMPOSE_BIN"; else base="docker compose"; fi
+          compose="$base -f compose.yml -f compose.full.yml"
           captured=$($compose exec -T postgres psql -U memorist -d memorist -tA -c \
             "SELECT count(*) FROM openwebui_message_captures WHERE role='user' AND message_uuid IN (SELECT message_uuid FROM messages WHERE raw_text LIKE '%Alpha%')")
           test "$captured" = "1" || { echo "duplicate capture after restart/regeneration: $captured"; exit 1; }
@@ -375,7 +391,8 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/pr5g-diagnostics"
           cp "${RUNNER_TEMP}/pr5g-docker-build.log" "${RUNNER_TEMP}/pr5g-diagnostics/" 2>/dev/null || true
           cd "${MEMORIST_PACKAGE_DIR}" || exit 0
-          docker compose -f compose.yml -f compose.full.yml logs --no-color 2>/dev/null \
+          if [ -n "${MEMORIST_COMPOSE_BIN:-}" ]; then base="$MEMORIST_COMPOSE_BIN"; else base="docker compose"; fi
+          $base -f compose.yml -f compose.full.yml logs --no-color 2>/dev/null \
             | sed -e "s/${MEMORIST_E2E_STUB_KEY}/[redacted-canary]/g" \
                   -e 's/\(SECRET\|TOKEN\|PASSWORD\|API_KEY\)=[^ ]*/\1=[redacted]/g' \
             > "${RUNNER_TEMP}/pr5g-diagnostics/compose.log" || true
@@ -388,7 +405,7 @@ jobs:
           $envFile = Join-Path $env:MEMORIST_PACKAGE_DIR '.env'
           if (-not (Test-Path -LiteralPath $envFile)) { return }
           Set-Location $env:MEMORIST_PACKAGE_DIR
-          ./Stop-Memorist.ps1
+          if (Test-Path .env) { ./Stop-Memorist.ps1 }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

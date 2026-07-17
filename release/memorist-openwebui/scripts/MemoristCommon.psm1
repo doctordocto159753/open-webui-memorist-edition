@@ -17,6 +17,18 @@
 
 Set-StrictMode -Version Latest
 
+function Get-MemoristDockerCli {
+    <#
+        The docker executable to invoke. Production always uses 'docker' on
+        PATH. Behavioral tests set MEMORIST_DOCKER_CLI to a controlled shim so
+        Docker/Compose readiness and failures can be simulated deterministically
+        without relying on PATH ordering. This never affects a real install
+        (the variable is unset there).
+    #>
+    if ($env:MEMORIST_DOCKER_CLI) { return $env:MEMORIST_DOCKER_CLI }
+    return 'docker'
+}
+
 # ---------------------------------------------------------------------------
 # Constants shared across the installer surface.
 # ---------------------------------------------------------------------------
@@ -90,10 +102,11 @@ function Get-MemoristComposeCommand {
         ("docker compose") and falls back to the legacy "docker-compose".
         Returns $null when neither is available.
     #>
-    if (Get-Command docker -ErrorAction SilentlyContinue) {
-        & docker compose version *> $null
+    $dockerCli = Get-MemoristDockerCli
+    if (Get-Command $dockerCli -ErrorAction SilentlyContinue) {
+        & $dockerCli compose version *> $null
         if ($LASTEXITCODE -eq 0) {
-            return @('docker', 'compose')
+            return @($dockerCli, 'compose')
         }
     }
     if (Get-Command docker-compose -ErrorAction SilentlyContinue) {
@@ -115,13 +128,14 @@ function Test-MemoristDocker {
         Ready         = $false
     }
 
-    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+    $dockerCli = Get-MemoristDockerCli
+    if (-not (Get-Command $dockerCli -ErrorAction SilentlyContinue)) {
         $result.Message = 'Docker CLI not found. Install Docker Desktop and reopen this window.'
         return [pscustomobject]$result
     }
     $result.CliPresent = $true
 
-    & docker info *> $null
+    & $dockerCli info *> $null
     if ($LASTEXITCODE -ne 0) {
         $result.Message = 'Docker is installed but the daemon is not reachable. Start Docker Desktop and wait for it to report "Running".'
         return [pscustomobject]$result
