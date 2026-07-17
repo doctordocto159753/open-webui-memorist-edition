@@ -25,9 +25,9 @@ FROM ${NODE_BUILDER} AS frontend
 ARG OPENWEBUI_SDIST_URL
 ARG OPENWEBUI_SDIST_SHA256
 WORKDIR /build
-RUN apk add --no-cache patch ca-certificates \
-    && wget --https-only --tries=4 --timeout=30 \
-        -O /build/openwebui-src.tar.gz "${OPENWEBUI_SDIST_URL}" \
+RUN apk add --no-cache patch ca-certificates curl \
+    && curl -fsSL --retry 4 --connect-timeout 30 \
+        -o /build/openwebui-src.tar.gz "${OPENWEBUI_SDIST_URL}" \
     && echo "${OPENWEBUI_SDIST_SHA256}  /build/openwebui-src.tar.gz" | sha256sum -c -
 COPY openwebui-image/ /build/openwebui-image/
 COPY open-webui-integration/memorist/ui/ /build/memorist-ui/
