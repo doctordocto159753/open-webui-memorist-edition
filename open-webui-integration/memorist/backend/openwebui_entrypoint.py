@@ -8,8 +8,8 @@ Open WebUI. It:
 2. binds the Memorist actor dependency to Open WebUI's native session
    authentication (``get_verified_user``) — browser-controlled identity is
    never consulted;
-3. registers the authenticated proxy router and deterministically reorders it
-   ahead of the SPA catch-all mount (see ``route_order``);
+3. registers the authenticated proxy routers and deterministically reorders
+   them ahead of the SPA catch-all mount (see ``route_order``);
 4. wraps the upstream lifespan so that, after Open WebUI's own startup, the
    managed Memorist chat filter is provisioned and the route-order invariant
    is asserted — any violation aborts startup loudly.
@@ -25,6 +25,7 @@ from uuid import UUID
 from fastapi import Depends
 
 from .filter_provisioning import ensure_memorist_filter_provisioned
+from .import_proxy import router as import_router
 from .route_order import (
     assert_memorist_route_order,
     ensure_memorist_routes_precede_spa,
@@ -78,6 +79,10 @@ def assert_supported_openwebui_version() -> str:
     )
 
 
+def _expected_memorist_route_count() -> int:
+    return len(router.routes) + len(import_router.routes)
+
+
 def create_app() -> Any:
     """Mount Memorist into the pinned Open WebUI backend with native session auth."""
     assert_supported_openwebui_version()
@@ -99,11 +104,18 @@ def create_app() -> Any:
 
     app.dependency_overrides[require_openwebui_actor] = verified_memorist_actor
     if not any(
-        str(getattr(route, "path", "")).startswith("/api/v1/memorist") for route in app.routes
+        str(getattr(route, "path", "")).startswith("/api/v1/memorist/")
+        and not str(getattr(route, "path", "")).startswith("/api/v1/memorist/imports")
+        for route in app.routes
     ):
         app.include_router(router)
+    if not any(
+        str(getattr(route, "path", "")).startswith("/api/v1/memorist/imports")
+        for route in app.routes
+    ):
+        app.include_router(import_router)
     ensure_memorist_routes_precede_spa(app)
-    assert_memorist_route_order(app, minimum_route_count=len(router.routes))
+    assert_memorist_route_order(app, minimum_route_count=_expected_memorist_route_count())
     _install_memorist_lifespan(app)
     return app
 
@@ -122,7 +134,7 @@ def _install_memorist_lifespan(app: Any) -> None:
         async with upstream_lifespan(host_app) as state:
             summary = await ensure_memorist_filter_provisioned()
             report = assert_memorist_route_order(
-                host_app, minimum_route_count=len(router.routes)
+                host_app, minimum_route_count=_expected_memorist_route_count()
             )
             host_app.state.memorist_integration = {
                 "filter": summary,
