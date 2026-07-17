@@ -33,7 +33,10 @@ def _safe_failure(response: httpx.Response) -> HTTPException:
             detail = payload["detail"]
     except Exception:
         pass
-    return HTTPException(status_code=response.status_code, detail=sanitize_error(str(detail)))
+    return HTTPException(
+        status_code=response.status_code,
+        detail=sanitize_error(str(detail)),
+    )
 
 
 async def _forward(
@@ -43,7 +46,12 @@ async def _forward(
     request: Request | None = None,
 ) -> dict[str, Any]:
     client = MemoristClient()
-    headers = client._actor_headers(method, core_path, actor.user_uuid, actor.workspace_uuid)
+    headers = client._actor_headers(
+        method,
+        core_path,
+        actor.user_uuid,
+        actor.workspace_uuid,
+    )
     content: bytes | None = None
     if request is not None:
         content = await request.body()
@@ -51,11 +59,17 @@ async def _forward(
         if content_type:
             headers["Content-Type"] = content_type
     try:
-        async with httpx.AsyncClient(timeout=client.config.timeout_seconds) as transport:
+        async with httpx.AsyncClient(
+            timeout=client.config.timeout_seconds
+        ) as transport:
             response = await transport.request(
                 method,
                 client.base_url + core_path,
-                params=list(request.query_params.multi_items()) if request is not None else None,
+                params=(
+                    list(request.query_params.multi_items())
+                    if request is not None
+                    else None
+                ),
                 headers=headers,
                 content=content,
             )
@@ -65,13 +79,19 @@ async def _forward(
         raise _safe_failure(response)
     payload = response.json() if response.content else {}
     if not isinstance(payload, dict):
-        raise HTTPException(status_code=502, detail="Memorist Core returned an invalid import response")
+        raise HTTPException(
+            status_code=502,
+            detail="Memorist Core returned an invalid import response",
+        )
     return payload
 
 
 @router.get("")
 @router.get("/")
-async def list_imports(request: Request, actor: AuthenticatedAdmin) -> dict[str, Any]:
+async def list_imports(
+    request: Request,
+    actor: AuthenticatedAdmin,
+) -> dict[str, Any]:
     return await _forward(actor, "GET", "/memcore/imports", request)
 
 
@@ -84,7 +104,12 @@ async def upload_import_file(
 ) -> dict[str, Any]:
     client = MemoristClient()
     core_path = "/memcore/imports/upload-file"
-    headers = client._actor_headers("POST", core_path, actor.user_uuid, actor.workspace_uuid)
+    headers = client._actor_headers(
+        "POST",
+        core_path,
+        actor.user_uuid,
+        actor.workspace_uuid,
+    )
     data = {
         "mode": mode,
         "target_workspace_uuid": actor.workspace_uuid,
@@ -93,7 +118,9 @@ async def upload_import_file(
         data["processing_mode"] = processing_mode
     try:
         await file.seek(0)
-        async with httpx.AsyncClient(timeout=client.config.timeout_seconds) as transport:
+        async with httpx.AsyncClient(
+            timeout=client.config.timeout_seconds
+        ) as transport:
             response = await transport.post(
                 client.base_url + core_path,
                 headers=headers,
@@ -112,7 +139,10 @@ async def upload_import_file(
         raise _safe_failure(response)
     payload = response.json()
     if not isinstance(payload, dict):
-        raise HTTPException(status_code=502, detail="Memorist Core returned an invalid upload response")
+        raise HTTPException(
+            status_code=502,
+            detail="Memorist Core returned an invalid upload response",
+        )
     return payload
 
 
@@ -122,37 +152,62 @@ async def get_import(run_uuid: str, actor: AuthenticatedAdmin) -> dict[str, Any]
 
 
 @router.post("/{run_uuid}/inspect")
-async def inspect_import(run_uuid: str, request: Request, actor: AuthenticatedAdmin) -> dict[str, Any]:
+async def inspect_import(
+    run_uuid: str,
+    request: Request,
+    actor: AuthenticatedAdmin,
+) -> dict[str, Any]:
     return await _forward(actor, "POST", _run_path(run_uuid, "/inspect"), request)
 
 
 @router.post("/{run_uuid}/reconstruct")
-async def reconstruct_import(run_uuid: str, request: Request, actor: AuthenticatedAdmin) -> dict[str, Any]:
+async def reconstruct_import(
+    run_uuid: str,
+    request: Request,
+    actor: AuthenticatedAdmin,
+) -> dict[str, Any]:
     return await _forward(actor, "POST", _run_path(run_uuid, "/reconstruct"), request)
 
 
 @router.post("/{run_uuid}/dry-run")
-async def dry_run_import(run_uuid: str, request: Request, actor: AuthenticatedAdmin) -> dict[str, Any]:
+async def dry_run_import(
+    run_uuid: str,
+    request: Request,
+    actor: AuthenticatedAdmin,
+) -> dict[str, Any]:
     return await _forward(actor, "POST", _run_path(run_uuid, "/dry-run"), request)
 
 
 @router.get("/{run_uuid}/dry-run-report")
-async def dry_run_report(run_uuid: str, actor: AuthenticatedAdmin) -> dict[str, Any]:
+async def dry_run_report(
+    run_uuid: str,
+    actor: AuthenticatedAdmin,
+) -> dict[str, Any]:
     return await _forward(actor, "GET", _run_path(run_uuid, "/dry-run-report"))
 
 
 @router.post("/{run_uuid}/commit")
-async def commit_import(run_uuid: str, request: Request, actor: AuthenticatedAdmin) -> dict[str, Any]:
+async def commit_import(
+    run_uuid: str,
+    request: Request,
+    actor: AuthenticatedAdmin,
+) -> dict[str, Any]:
     return await _forward(actor, "POST", _run_path(run_uuid, "/commit"), request)
 
 
 @router.get("/{run_uuid}/progress")
-async def import_progress(run_uuid: str, actor: AuthenticatedAdmin) -> dict[str, Any]:
+async def import_progress(
+    run_uuid: str,
+    actor: AuthenticatedAdmin,
+) -> dict[str, Any]:
     return await _forward(actor, "GET", _run_path(run_uuid, "/progress"))
 
 
 @router.get("/{run_uuid}/processing-report")
-async def processing_report(run_uuid: str, actor: AuthenticatedAdmin) -> dict[str, Any]:
+async def processing_report(
+    run_uuid: str,
+    actor: AuthenticatedAdmin,
+) -> dict[str, Any]:
     return await _forward(actor, "GET", _run_path(run_uuid, "/processing-report"))
 
 
@@ -162,7 +217,12 @@ def _action_route(action: str):
         request: Request,
         actor: AuthenticatedAdmin,
     ) -> dict[str, Any]:
-        return await _forward(actor, "POST", _run_path(run_uuid, f"/{action}"), request)
+        return await _forward(
+            actor,
+            "POST",
+            _run_path(run_uuid, f"/{action}"),
+            request,
+        )
 
     return endpoint
 
