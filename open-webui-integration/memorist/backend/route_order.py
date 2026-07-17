@@ -54,9 +54,34 @@ class RouteOrderReport:
         return self.memorist_last_index < self.spa_mount_index
 
 
-def _is_memorist_route(route: Any) -> bool:
+def _route_paths(route: Any) -> list[str]:
+    """Materialized path(s) a route entry serves.
+
+    Older FastAPI materializes ``include_router`` immediately into APIRoute
+    objects with a ``path``. Newer FastAPI appends a lazy ``_IncludedRouter``
+    placeholder instead; its wrapped ``original_router`` already carries the
+    fully prefixed sub-route paths, so inspect those. Everything else stays
+    duck-typed so both host generations satisfy the same invariant.
+    """
     path = getattr(route, "path", None)
-    return isinstance(path, str) and path.startswith(MEMORIST_ROUTE_PREFIX)
+    if isinstance(path, str) and path:
+        return [path]
+    inner = getattr(route, "original_router", None)
+    if inner is not None:
+        return [
+            sub_path
+            for sub in getattr(inner, "routes", [])
+            if isinstance(sub_path := getattr(sub, "path", None), str)
+        ]
+    return []
+
+
+def _memorist_path_count(route: Any) -> int:
+    return sum(1 for path in _route_paths(route) if path.startswith(MEMORIST_ROUTE_PREFIX))
+
+
+def _is_memorist_route(route: Any) -> bool:
+    return _memorist_path_count(route) > 0
 
 
 def _is_root_mount(route: Any) -> bool:
@@ -114,10 +139,13 @@ def describe_route_order(app: Any) -> RouteOrderReport:
     routes = app.router.routes
     spa_index = find_spa_mount_index(routes)
     memorist_indexes = [index for index, route in enumerate(routes) if _is_memorist_route(route)]
+    # Count served paths, not list entries: a lazy _IncludedRouter placeholder
+    # is one entry but carries the whole router's routes.
+    memorist_route_count = sum(_memorist_path_count(routes[index]) for index in memorist_indexes)
     return RouteOrderReport(
         spa_mount_present=spa_index is not None,
         spa_mount_index=spa_index,
-        memorist_route_count=len(memorist_indexes),
+        memorist_route_count=memorist_route_count,
         memorist_first_index=min(memorist_indexes) if memorist_indexes else None,
         memorist_last_index=max(memorist_indexes) if memorist_indexes else None,
     )

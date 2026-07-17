@@ -38,6 +38,9 @@ RUN sh /build/openwebui-image/prepare_frontend_tree.sh \
         /build/memorist-ui
 WORKDIR /build/src-tree
 ENV APP_BUILD_HASH=memorist-pr5g
+# The Open WebUI vite build needs well over Node's default heap; without this
+# the in-container build dies with "JavaScript heap out of memory".
+ENV NODE_OPTIONS=--max-old-space-size=6144
 RUN npm ci --force \
     && npm run build \
     && test -f build/index.html \
