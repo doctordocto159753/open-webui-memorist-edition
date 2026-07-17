@@ -2,6 +2,7 @@
 	import { onDestroy } from 'svelte';
 
 	import { chatId, temporaryChatEnabled } from '$lib/stores';
+	import '$lib/memorist/authTransport';
 	import { mountMemoryWorkflowToggleNearComposer } from '$lib/memorist/surfaces';
 
 	let container: HTMLElement | null = null;
