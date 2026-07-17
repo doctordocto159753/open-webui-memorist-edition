@@ -49,17 +49,19 @@ BeforeAll {
         $log = Join-Path $sandbox 'docker-invocations.log'
         if ($script:isUnix) {
             $shim = Join-Path $shimDir 'docker'
-            @"
+            $escapedLog = $log.Replace('\', '\\').Replace('"', '\"')
+            $shimContent = @'
 #!/bin/sh
-echo "docker \$@" >> "$log"
-case "\$1" in
-  info) exit $DockerInfoExit ;;
+echo "docker $@" >> "{0}"
+case "$1" in
+  info) exit {1} ;;
   compose)
-    if [ "\$2" = "version" ]; then exit 0; fi
-    exit $ComposeExit ;;
+    if [ "$2" = "version" ]; then exit 0; fi
+    exit {2} ;;
 esac
 exit 0
-"@ | Set-Content -LiteralPath $shim -NoNewline
+'@ -f $escapedLog, $DockerInfoExit, $ComposeExit
+            $shimContent | Set-Content -LiteralPath $shim -NoNewline
             chmod +x $shim
         } else {
             $shim = Join-Path $shimDir 'docker.cmd'
