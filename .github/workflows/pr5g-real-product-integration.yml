@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MEMORIST_E2E_STUB_KEY: sk-memorist-e2e-canary-000000000000
+  MEMORIST_E2E_STUB_KEY: memorist-e2e-secret-canary-000000000000
 
 jobs:
   backend-route-integration:
@@ -147,7 +147,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          Install-Module Pester -MinimumVersion 5.5 -Force -Scope CurrentUser
+          if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
+            Register-PSRepository -Default
+          }
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module Pester -RequiredVersion 5.6.1 -Force -Scope CurrentUser -AllowClobber
           $configuration = New-PesterConfiguration
           $configuration.Run.Path = @(
             'release/memorist-openwebui/tests/Lifecycle.Behavioral.Tests.ps1',
@@ -156,6 +160,7 @@ jobs:
           $configuration.Run.Exit = $true
           $configuration.TestResult.Enabled = $true
           $configuration.TestResult.OutputPath = "$env:RUNNER_TEMP/pr5g-installer-results.xml"
+          $configuration.TestResult.OutputFormat = 'NUnitXml'
           $configuration.Output.Verbosity = 'Detailed'
           Invoke-Pester -Configuration $configuration
       - name: Reported totals match discovered tests
@@ -193,12 +198,18 @@ jobs:
           set -euo pipefail
           zip=$(ls release/rc/memorist-openwebui-*.zip)
           python3 installer/scripts/validate_package.py "$zip"
-      - name: Schema, version-consistency, and upgrade-contract gates
+      - name: RC package schema
         run: |
-          set -euo pipefail
-          python3 release/tests/rc_package_schema.py
-          python3 release/tests/version_consistency.py
-          python3 release/tests/upgrade_contract.py
+          set -o pipefail
+          python3 release/tests/rc_package_schema.py | tee "${RUNNER_TEMP}/rc-package-schema.json"
+      - name: Version consistency
+        run: |
+          set -o pipefail
+          python3 release/tests/version_consistency.py | tee "${RUNNER_TEMP}/version-consistency.json"
+      - name: Upgrade contract
+        run: |
+          set -o pipefail
+          python3 release/tests/upgrade_contract.py | tee "${RUNNER_TEMP}/upgrade-contract.json"
       - name: Mutation check — validator must fail on a tampered archive
         run: |
           set -euo pipefail
@@ -214,12 +225,17 @@ jobs:
           set -euo pipefail
           sha256sum release/rc/memorist-openwebui-*.zip | tee "${RUNNER_TEMP}/zip-digest.txt"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
         with:
-          name: pr5g-user-facing-zip
+          name: pr5g-package-validation
           path: |
             release/rc/memorist-openwebui-*.zip
             release/rc/memorist-openwebui-*.sha256
             release/package-manifest.ijson
+            ${{ runner.temp }}/rc-package-schema.json
+            ${{ runner.temp }}/version-consistency.json
+            ${{ runner.temp }}/upgrade-contract.json
+            ${{ runner.temp }}/zip-digest.txt
 
   composed-product-e2e:
     name: Real composed artifact smoke and Playwright product E2E
@@ -254,11 +270,12 @@ jobs:
         env:
           CYPRESS_INSTALL_BINARY: "0"
         run: |
-          set -euo pipefail
-          docker build \
+          set -o pipefail
+          docker build --progress=plain \
             -t memorist/openwebui:0.2.0-beta.2 \
             -f "${MEMORIST_PACKAGE_DIR}/runtime/openwebui-image/Dockerfile" \
-            "${MEMORIST_PACKAGE_DIR}/runtime"
+            "${MEMORIST_PACKAGE_DIR}/runtime" \
+            2>&1 | tee "${RUNNER_TEMP}/pr5g-docker-build.log"
       - name: Start the deterministic local model stub on the host
         run: |
           set -euo pipefail
@@ -356,6 +373,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/pr5g-diagnostics"
+          cp "${RUNNER_TEMP}/pr5g-docker-build.log" "${RUNNER_TEMP}/pr5g-diagnostics/" 2>/dev/null || true
           cd "${MEMORIST_PACKAGE_DIR}" || exit 0
           docker compose -f compose.yml -f compose.full.yml logs --no-color 2>/dev/null \
             | sed -e "s/${MEMORIST_E2E_STUB_KEY}/[redacted-canary]/g" \
@@ -366,6 +384,9 @@ jobs:
         if: always()
         shell: pwsh
         run: |
+          if ([string]::IsNullOrWhiteSpace($env:MEMORIST_PACKAGE_DIR)) { return }
+          $envFile = Join-Path $env:MEMORIST_PACKAGE_DIR '.env'
+          if (-not (Test-Path -LiteralPath $envFile)) { return }
           Set-Location $env:MEMORIST_PACKAGE_DIR
           ./Stop-Memorist.ps1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
