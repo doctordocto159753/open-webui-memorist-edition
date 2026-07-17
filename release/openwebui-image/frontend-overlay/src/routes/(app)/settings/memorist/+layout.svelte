@@ -4,6 +4,7 @@
 
 	import { WEBUI_NAME, mobile, showSidebar, user } from '$lib/stores';
 	import Sidebar from '$lib/components/icons/Sidebar.svelte';
+	import '$lib/memorist/authTransport';
 
 	import {
 		MEMORIST_SETTINGS_NAVIGATION,
