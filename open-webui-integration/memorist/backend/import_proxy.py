@@ -59,17 +59,11 @@ async def _forward(
         if content_type:
             headers["Content-Type"] = content_type
     try:
-        async with httpx.AsyncClient(
-            timeout=client.config.timeout_seconds
-        ) as transport:
+        async with httpx.AsyncClient(timeout=client.config.timeout_seconds) as transport:
             response = await transport.request(
                 method,
                 client.base_url + core_path,
-                params=(
-                    list(request.query_params.multi_items())
-                    if request is not None
-                    else None
-                ),
+                params=(list(request.query_params.multi_items()) if request is not None else None),
                 headers=headers,
                 content=content,
             )
@@ -118,9 +112,7 @@ async def upload_import_file(
         data["processing_mode"] = processing_mode
     try:
         await file.seek(0)
-        async with httpx.AsyncClient(
-            timeout=client.config.timeout_seconds
-        ) as transport:
+        async with httpx.AsyncClient(timeout=client.config.timeout_seconds) as transport:
             response = await transport.post(
                 client.base_url + core_path,
                 headers=headers,
