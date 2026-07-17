@@ -292,6 +292,36 @@ export type PrivacyAcknowledgementResponse = {
   schema_version: number;
 };
 
+export type MemoristMessageAttachmentDisclosure = {
+  status: string;
+  attachment_uuid: string | null;
+  disclose: boolean;
+};
+
+export type MemoristOpenWebUIDiagnostics = {
+  core_health: {
+    status?: string;
+    runtime_profile?: string;
+    canonical_store?: string;
+    graph_backend?: string;
+    graph_status?: string;
+    scheduler?: string;
+    hot_scheduler?: string;
+    profile_warnings?: string[];
+    full_mode_certification?: string;
+    full_mode_certification_note?: string;
+  };
+  integration: {
+    filter?: { filter_id?: string; action?: string };
+    route_order?: {
+      spa_mount_present?: boolean;
+      memorist_route_count?: number;
+      ordered_before_spa?: boolean;
+    };
+  };
+  openwebui_version: string;
+};
+
 export class MemoristClient {
   constructor(
     private readonly baseUrl: string = "/memcore",
@@ -324,6 +354,10 @@ export class MemoristClient {
   async acknowledgeModelControlPrivacy(payload: PrivacyAcknowledgementRequest): Promise<PrivacyAcknowledgementResponse> { return this.controlPost("/model-control/privacy/acknowledge", payload); }
   async modelRoleCosts(): Promise<unknown> { return this.get("/costs/model-roles"); }
   async diagnostics(): Promise<unknown> { return this.controlGet("/openwebui/status"); }
+  async openwebuiDiagnostics(): Promise<MemoristOpenWebUIDiagnostics> { return this.controlGet("/openwebui/diagnostics"); }
+  async messageAttachmentDisclosure(openwebuiMessageId: string): Promise<MemoristMessageAttachmentDisclosure> {
+    return this.controlGet(`/memory-control/messages/${encodeURIComponent(openwebuiMessageId)}/attachment`);
+  }
   async resolveMemoristPolicy(payload: {
     user_uuid?: string | null;
     chat_uuid?: string | null;

@@ -220,11 +220,14 @@ def test_release_compose_keeps_core_command_and_mounts_authenticated_ui_router()
         assert "command" not in core
         assert "/memcore/health" in " ".join(core["healthcheck"]["test"])
     assert webui["command"] == ["python", "-m", "memorist.backend.openwebui_entrypoint"]
-    assert webui["environment"]["PYTHONPATH"] == "/memorist-integration"
     assert "MEMORIST_OPENWEBUI_WORKSPACE_UUID" in webui["environment"]
-    assert any(
-        str(volume).endswith(":/memorist-integration/memorist:ro") for volume in webui["volumes"]
-    )
+    # PR5-G: the integration ships baked into the derivative image (built from
+    # the packaged runtime/openwebui-image context); a runtime source bind
+    # mount would disappear on container recreation and is forbidden.
+    assert webui["image"].startswith("${MEMORIST_OPENWEBUI_IMAGE:-memorist/openwebui:")
+    assert webui["build"]["context"] == "./runtime"
+    assert webui["build"]["dockerfile"] == "openwebui-image/Dockerfile"
+    assert not any("memorist-integration" in str(volume) for volume in webui["volumes"])
 
 
 def test_memory_workflow_proxy_is_authenticated_and_actor_signed() -> None:

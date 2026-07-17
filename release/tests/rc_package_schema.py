@@ -17,10 +17,15 @@ if str(CORE_SRC) not in sys.path:
 from memcore.version import SCHEMA_VERSION  # noqa: E402
 from release.scan_forbidden_files import scan_path  # noqa: E402
 
-ZIP_PATH = ROOT / "release" / "rc" / "memorist-openwebui-0.2.0-beta.1.zip"
-SHA_PATH = ROOT / "release" / "rc" / "memorist-openwebui-0.2.0-beta.1.sha256"
-VERSION_SUFFIX = "release/memorist-openwebui/VERSION.ijson"
-MANIFEST_SUFFIX = "release/package-manifest.ijson"
+sys.path.insert(0, str(ROOT / "installer" / "scripts"))
+from assemble_rc import VERSION as RC_VERSION  # noqa: E402
+
+ZIP_PATH = ROOT / "release" / "rc" / f"memorist-openwebui-{RC_VERSION}.zip"
+SHA_PATH = ROOT / "release" / "rc" / f"memorist-openwebui-{RC_VERSION}.sha256"
+# The user-facing archive is flat: Memorist.cmd and the integrity metadata
+# live directly under the single extracted root directory.
+VERSION_SUFFIX = f"memorist-openwebui-{RC_VERSION}/VERSION.ijson"
+MANIFEST_SUFFIX = f"memorist-openwebui-{RC_VERSION}/package-manifest.ijson"
 
 
 def run() -> dict[str, Any]:

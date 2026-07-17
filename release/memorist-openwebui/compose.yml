@@ -2,7 +2,15 @@ name: ${COMPOSE_PROJECT_NAME:-memorist}
 
 services:
   open-webui:
-    image: ${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.9.6}
+    # The Memorist Open WebUI derivative image: pinned upstream v0.9.6 with the
+    # Memorist frontend compiled in and the integration package baked into the
+    # image (see runtime/openwebui-image/Dockerfile + source-pin.json).
+    # MEMORIST_OPENWEBUI_IMAGE may point at a prebuilt pinned image; otherwise
+    # the bundled build context reproduces it locally with Docker only.
+    image: ${MEMORIST_OPENWEBUI_IMAGE:-memorist/openwebui:0.2.0-beta.2}
+    build:
+      context: ./runtime
+      dockerfile: openwebui-image/Dockerfile
     environment:
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:?installer must generate WEBUI_SECRET_KEY}
       MEMORIST_CORE_URL: http://memorist-core:8777
@@ -19,13 +27,17 @@ services:
       # use its normal Ollama integration for its own optional RAG embeddings;
       # Memorist processing-node configuration remains independent.
       RAG_EMBEDDING_ENGINE: ${OPENWEBUI_RAG_EMBEDDING_ENGINE:-ollama}
-      PYTHONPATH: /memorist-integration
+      # Optional preconfigured OpenAI-compatible chat connection (also used by
+      # the release E2E suite with a local deterministic stub on the host).
+      OPENAI_API_BASE_URL: ${OPENAI_API_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: ["python", "-m", "memorist.backend.openwebui_entrypoint"]
     ports:
       - "127.0.0.1:${OPEN_WEBUI_PORT:-3000}:8080"
     volumes:
       - openwebui-data:/app/backend/data
-      - ./runtime/open-webui-integration/memorist:/memorist-integration/memorist:ro
     depends_on:
       memorist-core:
         condition: service_healthy

@@ -271,7 +271,10 @@ def _user_id(user: dict[str, Any] | None) -> str | None:
 
 
 def _message_id(message: dict[str, Any], metadata: dict[str, Any]) -> str | None:
-    value = message.get("id") or metadata.get("message_id")
+    # Prefer the user message's own id; Open WebUI 0.9.x also exposes it as
+    # metadata.user_message_id while metadata.message_id names the assistant
+    # message being generated. Capture lineage must follow the user turn.
+    value = message.get("id") or metadata.get("user_message_id") or metadata.get("message_id")
     return str(value) if value is not None else None
 
 

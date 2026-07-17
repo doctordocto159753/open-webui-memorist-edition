@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -24,14 +25,16 @@ from shared.payload_parser import (  # noqa: E402
 
 class Filter:
     class Valves:
-        memorist_core_url: str = "http://localhost:8777"
+        # Defaults come from the trusted container environment so the
+        # auto-provisioned filter works without manual valve editing.
+        memorist_core_url: str = os.getenv("MEMORIST_CORE_URL", "http://localhost:8777")
         enabled: bool = True
         preflight_enabled: bool = True
         fail_open: bool = True
         debug: bool = False
-        retrieval_mode: str = "standard"
-        token_budget: int = 1800
-        timeout_ms: int = 1200
+        retrieval_mode: str = os.getenv("MEMORIST_RETRIEVAL_MODE", "standard")
+        token_budget: int = int(os.getenv("MEMORIST_ATTACHMENT_TOKEN_BUDGET", "1800"))
+        timeout_ms: int = int(os.getenv("MEMORIST_PREFLIGHT_TIMEOUT_MS", "1200"))
 
     def __init__(self) -> None:
         self.valves = self.Valves()

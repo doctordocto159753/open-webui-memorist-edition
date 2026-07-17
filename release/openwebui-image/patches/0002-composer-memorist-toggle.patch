@@ -1,0 +1,19 @@
+--- a/src/lib/components/chat/MessageInput.svelte	2020-02-02 00:00:00.000000000 +0000
++++ b/src/lib/components/chat/MessageInput.svelte	2026-07-16 23:31:47.117595171 +0000
+@@ -68,6 +68,7 @@
+ 	import { getSuggestionRenderer } from '../common/RichTextInput/suggestions';
+ 
+ 	import InputMenu from './MessageInput/InputMenu.svelte';
++	import MemoristComposerToggle from '$lib/components/memorist/MemoristComposerToggle.svelte';
+ 	import VoiceRecording from './MessageInput/VoiceRecording.svelte';
+ 
+ 	import ToolServersModal from './ToolServersModal.svelte';
+@@ -1725,6 +1726,8 @@
+ 										</IntegrationsMenu>
+ 									{/if}
+ 
++									<MemoristComposerToggle />
++
+ 									{#if selectedModelIds.length === 1 && $models.find((m) => m.id === selectedModelIds[0])?.has_user_valves}
+ 										<div class="ml-1 flex gap-1.5">
+ 											<Tooltip content={$i18n.t('Valves')} placement="top">

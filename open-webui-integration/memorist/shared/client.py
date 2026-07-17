@@ -278,7 +278,11 @@ class MemoristClient:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Call an allow-listed Core path from the authenticated Open WebUI backend."""
-        if not (path.startswith("/memcore/memory-control/") or path == "/memcore/openwebui/status"):
+        if not (
+            path.startswith("/memcore/memory-control/")
+            or path.startswith("/memcore/model-control/")
+            or path == "/memcore/openwebui/status"
+        ):
             raise MemoristCoreUnavailable("backend actor proxy path is not allowed")
         return self._request(
             method,

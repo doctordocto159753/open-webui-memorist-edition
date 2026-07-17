@@ -320,6 +320,33 @@ function Test-MemoristHttp {
     }
 }
 
+function Test-MemoristProxyRoutes {
+    <#
+        Verifies the authenticated Memorist proxy is actually mounted inside
+        Open WebUI. An unauthenticated probe of a known Memorist API path must
+        return HTTP 401 JSON. A 404, HTML, or 2xx response means the SPA
+        catch-all swallowed the API route: the product would look healthy while
+        the entire Memorist surface is unreachable, so Start must fail.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][int]$WebPort,
+        [int]$TimeoutSec = 5
+    )
+    $url = "http://localhost:$WebPort/api/v1/memorist/openwebui/status"
+    try {
+        # Portable across Windows PowerShell 5.1 and PowerShell 7: a
+        # successful (2xx/3xx) unauthenticated response means the SPA
+        # catch-all swallowed the API path, which is a failure.
+        $null = Invoke-WebRequest -Uri $url -TimeoutSec $TimeoutSec -UseBasicParsing -ErrorAction Stop
+        return $false
+    } catch {
+        $response = $_.Exception.Response
+        if ($null -eq $response) { return $false }
+        $status = [int]$response.StatusCode
+        return ($status -eq 401 -or $status -eq 403)
+    }
+}
+
 function Wait-MemoristService {
     <#
         Polls a health URL until healthy or the deadline passes. Prints a single
