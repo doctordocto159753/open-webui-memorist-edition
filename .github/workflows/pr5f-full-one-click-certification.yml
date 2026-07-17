@@ -56,9 +56,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mapfile -t archives < <(find release/rc -maxdepth 1 -type f -name 'memorist-openwebui-*.zip' | sort)
+          if [ "${#archives[@]}" -ne 1 ]; then
+            printf 'Expected exactly one assembled release ZIP, found %s\n' "${#archives[@]}"
+            printf '%s\n' "${archives[@]:-}"
+            exit 1
+          fi
           target="${RUNNER_TEMP}/Memorist Full Test"
           rm -rf "$target" && mkdir -p "$target"
-          unzip -q release/rc/memorist-openwebui-0.2.0-beta.1.zip -d "$target"
+          unzip -q "${archives[0]}" -d "$target"
           pkg=$(find "$target" -maxdepth 2 -type f -name 'Memorist.cmd' -printf '%h\n' | head -1)
           test -n "$pkg"
           test -f "$pkg/compose.yml"
