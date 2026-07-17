@@ -29,10 +29,10 @@ def _safe_failure(response: httpx.Response) -> HTTPException:
     detail: Any = f"Memorist import request failed ({response.status_code})"
     try:
         payload = response.json()
-        if isinstance(payload, dict) and payload.get("detail") is not None:
-            detail = payload["detail"]
-    except Exception:
-        pass
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict) and payload.get("detail") is not None:
+        detail = payload["detail"]
     return HTTPException(
         status_code=response.status_code,
         detail=sanitize_error(str(detail)),
