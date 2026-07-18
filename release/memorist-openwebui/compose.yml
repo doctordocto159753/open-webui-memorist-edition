@@ -31,6 +31,10 @@ services:
       # the release E2E suite with a local deterministic stub on the host).
       OPENAI_API_BASE_URL: ${OPENAI_API_BASE_URL:-https://api.openai.com/v1}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # Keep Open WebUI's normal Ollama integration by default, while allowing
+      # installations that intentionally use only an OpenAI-compatible
+      # provider to disable unreachable Ollama discovery explicitly.
+      ENABLE_OLLAMA_API: ${ENABLE_OLLAMA_API:-true}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: ["python", "-m", "memorist.backend.openwebui_entrypoint"]
