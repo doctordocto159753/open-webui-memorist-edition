@@ -9,10 +9,27 @@ const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 export const STATE_PATH = path.join(moduleDir, ".state", "e2e-state.json");
 export const STUB_URL = process.env.MEMORIST_E2E_STUB_URL || "http://localhost:9800";
+export const BASE_URL = process.env.MEMORIST_E2E_BASE_URL || "http://localhost:3000";
+// Persisted admin browser session produced by global setup and consumed via
+// the Playwright `storageState` option so every default page is authenticated.
+export const ADMIN_STORAGE_STATE = path.join(moduleDir, ".state", "admin-storage.json");
+
+export type Credentials = { name: string; email: string; password: string };
+
+export const ADMIN: Credentials = {
+  name: "Admin",
+  email: "admin@memorist.local",
+  password: "memorist-admin-pass-1",
+};
+export const MEMBER: Credentials = {
+  name: "Member",
+  email: "member@memorist.local",
+  password: "memorist-member-pass-1",
+};
 
 export type E2EState = {
-  admin: { name: string; email: string; password: string };
-  member: { name: string; email: string; password: string };
+  admin: Credentials;
+  member: Credentials;
   captureChatId?: string;
   retrievalChatId?: string;
   offChatId?: string;
@@ -21,10 +38,7 @@ export type E2EState = {
 };
 
 export function defaultState(): E2EState {
-  return {
-    admin: { name: "Admin", email: "admin@memorist.local", password: "memorist-admin-pass-1" },
-    member: { name: "Member", email: "member@memorist.local", password: "memorist-member-pass-1" },
-  };
+  return { admin: { ...ADMIN }, member: { ...MEMBER } };
 }
 
 export function loadState(): E2EState {
@@ -48,67 +62,57 @@ export async function dismissOverlays(page: Page): Promise<void> {
 }
 
 /**
- * Put the Open WebUI auth screen into the requested mode. The screen toggles
- * between sign-in and sign-up through a link or button; the presence of the
- * ``#name`` field is what distinguishes sign-up from sign-in.
+ * Bootstrap the first admin against the composed Open WebUI. The first signup
+ * is always allowed even when the UI only offers a sign-in form; a repeat call
+ * (e.g. phase 2 after restart) falls back to sign-in. Returns the admin token.
  */
-async function ensureAuthMode(page: Page, mode: "signup" | "signin"): Promise<void> {
-  const wantName = mode === "signup";
-  const label = wantName ? /sign ?up|create/i : /sign ?in|log ?in/i;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const nameVisible = await page
-      .locator("#name")
-      .isVisible()
-      .catch(() => false);
-    if (nameVisible === wantName) return;
-    const toggle = page
-      .getByRole("button", { name: label })
-      .or(page.getByRole("link", { name: label }))
-      .last();
-    if (!(await toggle.isVisible().catch(() => false))) return;
-    await toggle.click().catch(() => undefined);
-    await page.waitForTimeout(300);
+export async function bootstrapAdmin(
+  request: APIRequestContext,
+  user: Credentials = ADMIN,
+): Promise<string> {
+  let response = await request.post(`${BASE_URL}/api/v1/auths/signup`, {
+    data: { name: user.name, email: user.email, password: user.password },
+    failOnStatusCode: false,
+  });
+  if (!response.ok()) {
+    response = await request.post(`${BASE_URL}/api/v1/auths/signin`, {
+      data: { email: user.email, password: user.password },
+    });
   }
+  if (!response.ok()) {
+    throw new Error(`admin bootstrap failed: ${response.status()} ${await response.text()}`);
+  }
+  return (await response.json()).token as string;
 }
 
 /**
- * Submit the auth form. Open WebUI locks body scroll on this screen, so a
- * below-the-fold submit button can report "outside of the viewport" and never
- * pass the normal click actionability path. The element is already
- * visible/enabled/stable, so a forced click is safe and viewport-independent.
+ * Authenticate ``page`` as ``user`` through the API and inject the token into
+ * the SPA's storage. The composed Open WebUI exposes only a sign-in form whose
+ * submit button sits in a scroll-locked container that Playwright cannot click,
+ * so token injection is the reliable, product-faithful path (the SPA reads the
+ * same ``localStorage`` token for every authenticated request).
  */
-async function submitAuthForm(page: Page): Promise<void> {
-  await page.locator('button[type="submit"]').first().click({ force: true });
+export async function authenticate(page: Page, user: Credentials): Promise<string> {
+  const response = await page.request.post(`${BASE_URL}/api/v1/auths/signin`, {
+    data: { email: user.email, password: user.password },
+    failOnStatusCode: true,
+  });
+  const token = (await response.json()).token as string;
+  await page.goto("/");
+  await page.evaluate((value) => window.localStorage.setItem("token", value), token);
+  await page.reload();
+  await dismissOverlays(page);
+  return token;
 }
 
-export async function signUp(
-  page: Page,
-  user: { name: string; email: string; password: string },
-): Promise<void> {
-  await page.goto("/auth");
-  await ensureAuthMode(page, "signup");
-  const nameField = page.locator("#name");
-  if (await nameField.isVisible().catch(() => false)) {
-    await nameField.fill(user.name);
-  }
-  await page.locator("#email").fill(user.email);
-  await page.locator("#password").fill(user.password);
-  await submitAuthForm(page);
-  await page.waitForURL((url) => !url.pathname.startsWith("/auth"), { timeout: 30_000 });
-  await dismissOverlays(page);
+// The suite's sign-up/sign-in entry points are both authentication: the admin
+// account itself is created once in global setup via bootstrapAdmin().
+export async function signUp(page: Page, user: Credentials): Promise<void> {
+  await authenticate(page, user);
 }
 
-export async function signIn(
-  page: Page,
-  user: { email: string; password: string },
-): Promise<void> {
-  await page.goto("/auth");
-  await ensureAuthMode(page, "signin");
-  await page.locator("#email").fill(user.email);
-  await page.locator("#password").fill(user.password);
-  await submitAuthForm(page);
-  await page.waitForURL((url) => !url.pathname.startsWith("/auth"), { timeout: 30_000 });
-  await dismissOverlays(page);
+export async function signIn(page: Page, user: Credentials): Promise<void> {
+  await authenticate(page, user);
 }
 
 export async function sendChatMessage(page: Page, text: string): Promise<void> {

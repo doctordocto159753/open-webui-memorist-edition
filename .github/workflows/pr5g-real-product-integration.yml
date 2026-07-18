@@ -369,7 +369,7 @@ jobs:
             -v "$PWD":/work -w /work \
             mcr.microsoft.com/playwright:v1.49.1-noble \
             npx playwright test --config tests/e2e/playwright.config.ts tests/e2e/product.spec.ts
-      - name: Auth DOM diagnostic (only when the E2E failed)
+      - name: Authenticated product DOM diagnostic (only when the E2E failed)
         if: failure()
         run: |
           set -uo pipefail
@@ -378,20 +378,36 @@ jobs:
             mcr.microsoft.com/playwright:v1.49.1-noble \
             node -e '
               const { chromium } = require("playwright-core");
+              const BASE = "http://localhost:3000";
               (async () => {
                 const b = await chromium.launch();
-                const p = await b.newPage();
-                await p.goto("http://localhost:3000/auth", { waitUntil: "networkidle", timeout: 30000 })
-                  .catch((e) => console.log("goto:", e.message));
-                console.log("=== buttons (type:text) ===");
+                const ctx = await b.newContext();
+                const p = await ctx.newPage();
+                let token = "";
+                try {
+                  const r = await ctx.request.post(BASE + "/api/v1/auths/signin", {
+                    data: { email: "admin@memorist.local", password: "memorist-admin-pass-1" } });
+                  token = (await r.json()).token || "";
+                  console.log("signin status:", r.status());
+                } catch (e) { console.log("signin err:", e.message); }
+                await p.goto(BASE + "/", { waitUntil: "domcontentloaded", timeout: 30000 })
+                  .catch((e) => console.log("goto / err:", e.message));
+                if (token) await p.evaluate((t) => window.localStorage.setItem("token", t), token);
+                await p.goto(BASE + "/admin/settings", { waitUntil: "networkidle", timeout: 30000 })
+                  .catch((e) => console.log("goto admin err:", e.message));
+                console.log("=== url ===", p.url());
+                console.log("=== memorist/settings hrefs ===");
                 console.log(JSON.stringify(await p.evaluate(() =>
-                  Array.from(document.querySelectorAll("button")).map((x) => x.type + ":" + x.textContent.trim())).catch(String)));
-                console.log("=== links (text) ===");
+                  Array.from(document.querySelectorAll("a[href]")).map((a) => a.getAttribute("href"))
+                    .filter((h) => /memorist|settings/i.test(h || ""))).catch(String)));
+                console.log("=== data-memorist attrs ===");
                 console.log(JSON.stringify(await p.evaluate(() =>
-                  Array.from(document.querySelectorAll("a")).map((x) => x.textContent.trim()).filter(Boolean)).catch(String)));
-                console.log("=== inputs (id:type) ===");
+                  Array.from(document.querySelectorAll("[data-memorist-nav],[data-memorist-page]"))
+                    .map((e) => e.tagName + "|nav=" + e.getAttribute("data-memorist-nav") + "|page=" + e.getAttribute("data-memorist-page"))).catch(String)));
+                console.log("=== memorist-* custom elements ===");
                 console.log(JSON.stringify(await p.evaluate(() =>
-                  Array.from(document.querySelectorAll("input")).map((x) => x.id + ":" + x.type)).catch(String)));
+                  Array.from(new Set(Array.from(document.querySelectorAll("*")).map((e) => e.tagName.toLowerCase())
+                    .filter((t) => t.startsWith("memorist-"))))).catch(String)));
                 await b.close();
               })().catch((e) => console.log("dump err:", e.message));
             ' || true
