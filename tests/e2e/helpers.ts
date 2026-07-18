@@ -1,8 +1,13 @@
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-export const STATE_PATH = path.join(__dirname, ".state", "e2e-state.json");
+// The repo is an ES module ("type": "module"), so the CommonJS __dirname global
+// is not defined; derive it from import.meta.url instead.
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+
+export const STATE_PATH = path.join(moduleDir, ".state", "e2e-state.json");
 export const STUB_URL = process.env.MEMORIST_E2E_STUB_URL || "http://localhost:9800";
 
 export type E2EState = {

@@ -351,21 +351,24 @@ jobs:
             || { echo "status body was not the expected JSON error"; cat /tmp/memorist-status.json; exit 1; }
           ! grep -qi "<html" /tmp/memorist-status.json
           curl -sf http://localhost:8777/memcore/health | python3 -m json.tool
-      - name: Install Playwright
+      - name: Install Playwright test runner
         run: |
           set -euo pipefail
           npm ci
           npm install --no-save @playwright/test@1.49.1
-          # Install the Chromium browser. Prefer pulling OS deps too, but this
-          # self-hosted runner's user cannot sudo without a password, so fall
-          # back to a browser-only install (the runner pool already carries the
-          # shared libraries Chromium needs to launch).
-          npx playwright install --with-deps chromium || npx playwright install chromium
+          # Browsers and their system libraries come from the pinned official
+          # Playwright image (this self-hosted runner's user cannot sudo/apt to
+          # install them). Pre-pull once so both phases start fast.
+          docker pull mcr.microsoft.com/playwright:v1.49.1-noble
       - name: Playwright product E2E — phase 1 (setup, capture, retrieval, off, security, isolation)
-        env:
-          MEMORIST_E2E_BASE_URL: http://localhost:3000
-          MEMORIST_E2E_STUB_URL: http://localhost:9800
-        run: npx playwright test --config tests/e2e/playwright.config.ts tests/e2e/product.spec.ts
+        run: |
+          set -euo pipefail
+          docker run --rm --network host --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -e MEMORIST_E2E_BASE_URL=http://localhost:3000 \
+            -e MEMORIST_E2E_STUB_URL=http://localhost:9800 \
+            -v "$PWD":/work -w /work \
+            mcr.microsoft.com/playwright:v1.49.1-noble \
+            npx playwright test --config tests/e2e/playwright.config.ts tests/e2e/product.spec.ts
       - name: Database truth assertions (capture lineage, off suppression)
         run: |
           set -euo pipefail
@@ -395,10 +398,14 @@ jobs:
           ./Start-Memorist.ps1 -NoBrowser
           if ($LASTEXITCODE -ne 0) { throw "Start-Memorist failed" }
       - name: Playwright product E2E — phase 2 (restart persistence, regeneration)
-        env:
-          MEMORIST_E2E_BASE_URL: http://localhost:3000
-          MEMORIST_E2E_STUB_URL: http://localhost:9800
-        run: npx playwright test --config tests/e2e/playwright.config.ts tests/e2e/post-restart.spec.ts
+        run: |
+          set -euo pipefail
+          docker run --rm --network host --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -e MEMORIST_E2E_BASE_URL=http://localhost:3000 \
+            -e MEMORIST_E2E_STUB_URL=http://localhost:9800 \
+            -v "$PWD":/work -w /work \
+            mcr.microsoft.com/playwright:v1.49.1-noble \
+            npx playwright test --config tests/e2e/playwright.config.ts tests/e2e/post-restart.spec.ts
       - name: Post-restart duplicate checks
         run: |
           set -euo pipefail
