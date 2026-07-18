@@ -328,9 +328,15 @@ jobs:
         run: |
           set -euo pipefail
           curl -sf http://localhost:3000/health
-          code=$(curl -s -o /tmp/memorist-status.json -w "%{http_code}" http://localhost:3000/api/v1/memorist/openwebui/status)
+          code=$(curl -s -o /tmp/memorist-status.json -w "%{http_code}" -H "Accept: application/json" http://localhost:3000/api/v1/memorist/openwebui/status)
+          # The proxy route must exist and require auth: 401 JSON, never 404 or
+          # SPA HTML. The exact detail text depends on which auth layer rejects
+          # first (Open WebUI session auth vs the Memorist actor guard), so we
+          # assert the contract — JSON body with a detail field, no SPA markup.
           test "$code" = "401" || { echo "expected 401, got $code"; cat /tmp/memorist-status.json; exit 1; }
-          grep -q "actor required" /tmp/memorist-status.json
+          python3 -c "import json,sys; d=json.load(open('/tmp/memorist-status.json')); assert 'detail' in d, d" \
+            || { echo "status body was not the expected JSON error"; cat /tmp/memorist-status.json; exit 1; }
+          ! grep -qi "<html" /tmp/memorist-status.json
           curl -sf http://localhost:8777/memcore/health | python3 -m json.tool
       - name: Install Playwright
         run: |
