@@ -100,7 +100,19 @@ export async function authenticate(page: Page, user: Credentials): Promise<strin
   const token = (await response.json()).token as string;
   await page.goto("/");
   await page.evaluate((value) => window.localStorage.setItem("token", value), token);
+  // Reload so the SPA boots with the token, and wait until it has fetched the
+  // current user (which populates the admin session) before returning.
+  // Otherwise a follow-up navigation to a gated admin route (e.g. the Memorist
+  // settings tab) races the session bootstrap and the tab has not rendered yet.
+  const sessionReady = page
+    .waitForResponse(
+      (r) => /\/api\/v1\/auths\/?(\?|$)/.test(r.url()) && r.request().method() === "GET",
+      { timeout: 30_000 },
+    )
+    .catch(() => undefined);
   await page.reload();
+  await sessionReady;
+  await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => undefined);
   await dismissOverlays(page);
   return token;
 }

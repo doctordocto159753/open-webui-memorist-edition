@@ -483,7 +483,11 @@ jobs:
         if: always()
         with:
           name: pr5g-playwright-report
+          # Playwright resolves reporter/output paths relative to the config
+          # directory (tests/e2e), so the report, JSON result, and per-test
+          # screenshots/traces live there — not at the repo root.
           path: |
-            playwright-report
-            playwright-results.json
+            tests/e2e/playwright-report
+            tests/e2e/playwright-results.json
+            tests/e2e/test-results
             ${{ runner.temp }}/pr5g-diagnostics

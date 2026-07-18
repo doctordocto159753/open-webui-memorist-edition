@@ -38,7 +38,7 @@ test.beforeEach(({ page }) => {
 test("first launch: admin signup and visible Memorist navigation", async ({ page }) => {
   await signUp(page, state.admin);
 
-  await page.goto("/admin/settings");
+  await page.goto("/admin/settings", { waitUntil: "networkidle" });
   const memoristNav = page.locator('a[href="/settings/memorist/memory-setup"]');
   await expect(memoristNav).toBeVisible();
   await expect(memoristNav).toContainText("Memorist");
