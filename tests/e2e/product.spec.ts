@@ -130,7 +130,23 @@ test("non-Memorist routes retain provider-dependent initialization", async ({ pa
   await page.route("**/api/models*", async (route) => {
     modelsRequestHeld = true;
     await modelsGate;
-    await route.continue();
+    // Complete discovery deterministically after proving this route remains
+    // blocked on it. Backend provider reachability is asserted separately by
+    // the composed smoke gate and the processing-node provider test.
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: [
+          {
+            id: "memorist-e2e-stub",
+            name: "memorist-e2e-stub",
+            object: "model",
+            owned_by: "memorist-e2e",
+          },
+        ],
+      }),
+    });
   });
 
   try {
