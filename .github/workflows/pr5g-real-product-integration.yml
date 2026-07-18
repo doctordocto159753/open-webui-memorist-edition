@@ -393,21 +393,25 @@ jobs:
                 await p.goto(BASE + "/", { waitUntil: "domcontentloaded", timeout: 30000 })
                   .catch((e) => console.log("goto / err:", e.message));
                 if (token) await p.evaluate((t) => window.localStorage.setItem("token", t), token);
-                await p.goto(BASE + "/admin/settings", { waitUntil: "networkidle", timeout: 30000 })
-                  .catch((e) => console.log("goto admin err:", e.message));
-                console.log("=== url ===", p.url());
-                console.log("=== memorist/settings hrefs ===");
-                console.log(JSON.stringify(await p.evaluate(() =>
-                  Array.from(document.querySelectorAll("a[href]")).map((a) => a.getAttribute("href"))
-                    .filter((h) => /memorist|settings/i.test(h || ""))).catch(String)));
-                console.log("=== data-memorist attrs ===");
-                console.log(JSON.stringify(await p.evaluate(() =>
-                  Array.from(document.querySelectorAll("[data-memorist-nav],[data-memorist-page]"))
-                    .map((e) => e.tagName + "|nav=" + e.getAttribute("data-memorist-nav") + "|page=" + e.getAttribute("data-memorist-page"))).catch(String)));
-                console.log("=== memorist-* custom elements ===");
-                console.log(JSON.stringify(await p.evaluate(() =>
-                  Array.from(new Set(Array.from(document.querySelectorAll("*")).map((e) => e.tagName.toLowerCase())
-                    .filter((t) => t.startsWith("memorist-"))))).catch(String)));
+                // Reproduce the failing scenario: a direct load + reload of the
+                // memory-setup route (the test fails re-asserting after reload).
+                await p.goto(BASE + "/settings/memorist/memory-setup", { waitUntil: "networkidle", timeout: 60000 })
+                  .catch((e) => console.log("goto memory-setup err:", e.message));
+                await p.reload({ waitUntil: "networkidle", timeout: 60000 })
+                  .catch((e) => console.log("reload err:", e.message));
+                console.log("=== url after reload ===", p.url());
+                console.log("=== unauthorized present ===", await p.evaluate(() =>
+                  !!document.querySelector("[data-memorist-unauthorized]")).catch(String));
+                console.log("=== memory-setup page present ===", await p.evaluate(() =>
+                  !!document.querySelector('[data-memorist-page="memory-setup"]')).catch(String));
+                console.log("=== node-setup host present ===", await p.evaluate(() =>
+                  !!document.querySelector("memorist-memory-node-setup")).catch(String));
+                console.log("=== node-setup h1 (shadow) ===", JSON.stringify(await p.evaluate(() => {
+                  const el = document.querySelector("memorist-memory-node-setup");
+                  return el && el.shadowRoot ? ((el.shadowRoot.querySelector("h1") || {}).textContent || "(no h1)") : "(no host/shadow)";
+                }).catch(String)));
+                console.log("=== body text 0..400 ===", JSON.stringify(await p.evaluate(() =>
+                  document.body.innerText.slice(0, 400)).catch(String)));
                 await b.close();
               })().catch((e) => console.log("dump err:", e.message));
             ' || true
