@@ -290,12 +290,24 @@ jobs:
             -f "${MEMORIST_PACKAGE_DIR}/runtime/openwebui-image/Dockerfile" \
             "${MEMORIST_PACKAGE_DIR}/runtime" \
             2>&1 | tee "${RUNNER_TEMP}/pr5g-docker-build.log"
-      - name: Start the deterministic local model stub on the host
+      - name: Start the deterministic local model stub as a networkable container
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/stub-logs"
-          REQUEST_LOG_PATH="${RUNNER_TEMP}/stub-logs/requests.jsonl" PORT=9800 \
-            nohup python3 tests/e2e/model-stub/server.py > "${RUNNER_TEMP}/stub-logs/server.log" 2>&1 &
+          stub_name="memorist-e2e-stub-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          provider_url="http://${stub_name}:9800/v1"
+          echo "MEMORIST_E2E_STUB_CONTAINER=${stub_name}" >> "$GITHUB_ENV"
+          echo "MEMORIST_E2E_PROVIDER_URL=${provider_url}" >> "$GITHUB_ENV"
+          docker rm -f "$stub_name" >/dev/null 2>&1 || true
+          docker run -d --name "$stub_name" \
+            -p 127.0.0.1:9800:9800 \
+            -e PORT=9800 \
+            -e REQUEST_LOG_PATH=/logs/requests.jsonl \
+            --mount "type=bind,src=${GITHUB_WORKSPACE}/tests/e2e/model-stub/server.py,dst=/stub/server.py,readonly" \
+            --mount "type=bind,src=${RUNNER_TEMP}/stub-logs,dst=/logs" \
+            --entrypoint python \
+            memorist/openwebui:0.2.0-beta.2 \
+            /stub/server.py
           for i in $(seq 1 20); do
             curl -sf http://localhost:9800/health && break || sleep 1
           done
@@ -311,7 +323,7 @@ jobs:
             printf 'MEMORIST_OPENWEBUI_WORKSPACE_UUID=%s\n' "$(python3 -c 'import uuid;print(uuid.uuid4())')"
             printf 'MEMORIST_POSTGRES_PASSWORD=%s\n' "$pg_password"
             printf 'MEMORIST_POSTGRES_DSN=postgresql://memorist:%s@postgres:5432/memorist\n' "$pg_password"
-            printf 'OPENAI_API_BASE_URL=http://host.docker.internal:9800/v1\n'
+            printf 'OPENAI_API_BASE_URL=%s\n' "$MEMORIST_E2E_PROVIDER_URL"
             printf 'OPENAI_API_KEY=%s\n' "$MEMORIST_E2E_STUB_KEY"
             printf 'MEMORIST_MEMORY_EXTRACTION_API_KEY=stub-extraction-env-value\n'
             printf 'OPEN_WEBUI_PORT=3000\n'
@@ -337,6 +349,20 @@ jobs:
           Set-Location $env:MEMORIST_PACKAGE_DIR
           ./Start-Memorist.ps1 -NoBrowser
           if ($LASTEXITCODE -ne 0) { throw "Start-Memorist failed with $LASTEXITCODE" }
+      - name: Attach the model stub and prove container-to-container reachability
+        run: |
+          set -euo pipefail
+          docker network connect \
+            --alias "$MEMORIST_E2E_STUB_CONTAINER" \
+            memorist_default \
+            "$MEMORIST_E2E_STUB_CONTAINER"
+          cd "${MEMORIST_PACKAGE_DIR}"
+          if [ -n "${MEMORIST_COMPOSE_BIN:-}" ]; then base="$MEMORIST_COMPOSE_BIN"; else base="docker compose"; fi
+          compose="$base -f compose.yml -f compose.full.yml"
+          $compose exec -T open-webui python -c \
+            "import json,urllib.request; data=json.load(urllib.request.urlopen('${MEMORIST_E2E_PROVIDER_URL}/models', timeout=5)); assert data['data'][0]['id']=='memorist-e2e-stub'"
+          $compose exec -T memorist-core python -c \
+            "import json,urllib.request; data=json.load(urllib.request.urlopen('${MEMORIST_E2E_PROVIDER_URL}/models', timeout=5)); assert data['data'][0]['id']=='memorist-e2e-stub'"
       - name: Composed artifact smoke (proxy 401 JSON, health, stub reachability)
         run: |
           set -euo pipefail
@@ -366,6 +392,7 @@ jobs:
           docker run --rm --network host --user "$(id -u):$(id -g)" -e HOME=/tmp \
             -e MEMORIST_E2E_BASE_URL=http://localhost:3000 \
             -e MEMORIST_E2E_STUB_URL=http://localhost:9800 \
+            -e MEMORIST_E2E_PROVIDER_URL="$MEMORIST_E2E_PROVIDER_URL" \
             -v "$PWD":/work -w /work \
             mcr.microsoft.com/playwright:v1.49.1-noble \
             npx playwright test --config tests/e2e/playwright.config.ts tests/e2e/product.spec.ts
@@ -439,16 +466,21 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Set-Location $env:MEMORIST_PACKAGE_DIR
+          & docker network disconnect memorist_default $env:MEMORIST_E2E_STUB_CONTAINER
+          if ($LASTEXITCODE -ne 0) { throw "Failed to detach the model stub before restart" }
           ./Stop-Memorist.ps1
           if ($LASTEXITCODE -ne 0) { throw "Stop-Memorist failed" }
           ./Start-Memorist.ps1 -NoBrowser
           if ($LASTEXITCODE -ne 0) { throw "Start-Memorist failed" }
+          & docker network connect --alias $env:MEMORIST_E2E_STUB_CONTAINER memorist_default $env:MEMORIST_E2E_STUB_CONTAINER
+          if ($LASTEXITCODE -ne 0) { throw "Failed to reattach the model stub after restart" }
       - name: Playwright product E2E — phase 2 (restart persistence, regeneration)
         run: |
           set -euo pipefail
           docker run --rm --network host --user "$(id -u):$(id -g)" -e HOME=/tmp \
             -e MEMORIST_E2E_BASE_URL=http://localhost:3000 \
             -e MEMORIST_E2E_STUB_URL=http://localhost:9800 \
+            -e MEMORIST_E2E_PROVIDER_URL="$MEMORIST_E2E_PROVIDER_URL" \
             -v "$PWD":/work -w /work \
             mcr.microsoft.com/playwright:v1.49.1-noble \
             npx playwright test --config tests/e2e/playwright.config.ts tests/e2e/post-restart.spec.ts
@@ -474,15 +506,23 @@ jobs:
                   -e 's/\(SECRET\|TOKEN\|PASSWORD\|API_KEY\)=[^ ]*/\1=[redacted]/g' \
             > "${RUNNER_TEMP}/pr5g-diagnostics/compose.log" || true
           cp "${RUNNER_TEMP}/stub-logs/requests.jsonl" "${RUNNER_TEMP}/pr5g-diagnostics/" 2>/dev/null || true
+          docker logs "$MEMORIST_E2E_STUB_CONTAINER" > "${RUNNER_TEMP}/pr5g-diagnostics/stub-server.log" 2>&1 || true
       - name: Stop the stack
         if: always()
         shell: pwsh
         run: |
           if ([string]::IsNullOrWhiteSpace($env:MEMORIST_PACKAGE_DIR)) { return }
           $envFile = Join-Path $env:MEMORIST_PACKAGE_DIR '.env'
-          if (-not (Test-Path -LiteralPath $envFile)) { return }
-          Set-Location $env:MEMORIST_PACKAGE_DIR
-          if (Test-Path .env) { ./Stop-Memorist.ps1 }
+          if (-not [string]::IsNullOrWhiteSpace($env:MEMORIST_E2E_STUB_CONTAINER)) {
+            try { & docker network disconnect memorist_default $env:MEMORIST_E2E_STUB_CONTAINER *> $null } catch {}
+          }
+          if (Test-Path -LiteralPath $envFile) {
+            Set-Location $env:MEMORIST_PACKAGE_DIR
+            ./Stop-Memorist.ps1
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:MEMORIST_E2E_STUB_CONTAINER)) {
+            try { & docker rm -f $env:MEMORIST_E2E_STUB_CONTAINER *> $null } catch {}
+          }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

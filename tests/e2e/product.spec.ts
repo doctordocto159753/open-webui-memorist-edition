@@ -23,6 +23,8 @@ import {
 const state = defaultState();
 const STUB_KEY_CANARY =
   process.env.MEMORIST_E2E_STUB_KEY || "sk-memorist-e2e-canary-000000000000";
+const STUB_PROVIDER_URL =
+  process.env.MEMORIST_E2E_PROVIDER_URL || "http://host.docker.internal:9800/v1";
 const CAPTURE_FACT = "My dog is named Alpha and her preferred food is chicken.";
 const RETRIEVAL_QUESTION = "What is my dog's name and preferred food?";
 const OFF_FACT = "My secret turtle is named Umbra and prefers dragonfruit.";
@@ -204,7 +206,7 @@ test("processing nodes: create, acknowledge, test, and assign a profile", async 
   await form.locator('[name="role"]').selectOption("memory_extraction");
   await form.locator('[name="provider_type"]').selectOption("openai_compatible");
   await form.locator('[name="model_name"]').fill("memorist-e2e-stub");
-  await form.locator('[name="endpoint_url"]').fill("http://host.docker.internal:9800/v1");
+  await form.locator('[name="endpoint_url"]').fill(STUB_PROVIDER_URL);
   // Declare the endpoint remote so the privacy boundary applies.
   await form.locator('[name="endpoint_is_local"]').uncheck();
   // Environment-variable NAME, never a key value.
