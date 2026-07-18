@@ -369,6 +369,32 @@ jobs:
             -v "$PWD":/work -w /work \
             mcr.microsoft.com/playwright:v1.49.1-noble \
             npx playwright test --config tests/e2e/playwright.config.ts tests/e2e/product.spec.ts
+      - name: Auth DOM diagnostic (only when the E2E failed)
+        if: failure()
+        run: |
+          set -uo pipefail
+          docker run --rm --network host --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$PWD":/work -w /work \
+            mcr.microsoft.com/playwright:v1.49.1-noble \
+            node -e '
+              const { chromium } = require("playwright-core");
+              (async () => {
+                const b = await chromium.launch();
+                const p = await b.newPage();
+                await p.goto("http://localhost:3000/auth", { waitUntil: "networkidle", timeout: 30000 })
+                  .catch((e) => console.log("goto:", e.message));
+                console.log("=== buttons (type:text) ===");
+                console.log(JSON.stringify(await p.evaluate(() =>
+                  Array.from(document.querySelectorAll("button")).map((x) => x.type + ":" + x.textContent.trim())).catch(String)));
+                console.log("=== links (text) ===");
+                console.log(JSON.stringify(await p.evaluate(() =>
+                  Array.from(document.querySelectorAll("a")).map((x) => x.textContent.trim()).filter(Boolean)).catch(String)));
+                console.log("=== inputs (id:type) ===");
+                console.log(JSON.stringify(await p.evaluate(() =>
+                  Array.from(document.querySelectorAll("input")).map((x) => x.id + ":" + x.type)).catch(String)));
+                await b.close();
+              })().catch((e) => console.log("dump err:", e.message));
+            ' || true
       - name: Database truth assertions (capture lineage, off suppression)
         run: |
           set -euo pipefail

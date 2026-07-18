@@ -47,23 +47,53 @@ export async function dismissOverlays(page: Page): Promise<void> {
   await page.keyboard.press("Escape").catch(() => undefined);
 }
 
+/**
+ * Put the Open WebUI auth screen into the requested mode. The screen toggles
+ * between sign-in and sign-up through a link or button; the presence of the
+ * ``#name`` field is what distinguishes sign-up from sign-in.
+ */
+async function ensureAuthMode(page: Page, mode: "signup" | "signin"): Promise<void> {
+  const wantName = mode === "signup";
+  const label = wantName ? /sign ?up|create/i : /sign ?in|log ?in/i;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const nameVisible = await page
+      .locator("#name")
+      .isVisible()
+      .catch(() => false);
+    if (nameVisible === wantName) return;
+    const toggle = page
+      .getByRole("button", { name: label })
+      .or(page.getByRole("link", { name: label }))
+      .last();
+    if (!(await toggle.isVisible().catch(() => false))) return;
+    await toggle.click().catch(() => undefined);
+    await page.waitForTimeout(300);
+  }
+}
+
+/**
+ * Submit the auth form. Open WebUI locks body scroll on this screen, so a
+ * below-the-fold submit button can report "outside of the viewport" and never
+ * pass the normal click actionability path. The element is already
+ * visible/enabled/stable, so a forced click is safe and viewport-independent.
+ */
+async function submitAuthForm(page: Page): Promise<void> {
+  await page.locator('button[type="submit"]').first().click({ force: true });
+}
+
 export async function signUp(
   page: Page,
   user: { name: string; email: string; password: string },
 ): Promise<void> {
   await page.goto("/auth");
+  await ensureAuthMode(page, "signup");
   const nameField = page.locator("#name");
-  if (!(await nameField.isVisible().catch(() => false))) {
-    // The form may default to sign-in; switch to sign-up when offered.
-    const switcher = page.getByRole("button", { name: /sign up/i }).first();
-    if (await switcher.isVisible().catch(() => false)) await switcher.click();
-  }
   if (await nameField.isVisible().catch(() => false)) {
     await nameField.fill(user.name);
   }
   await page.locator("#email").fill(user.email);
   await page.locator("#password").fill(user.password);
-  await page.locator('button[type="submit"]').first().click();
+  await submitAuthForm(page);
   await page.waitForURL((url) => !url.pathname.startsWith("/auth"), { timeout: 30_000 });
   await dismissOverlays(page);
 }
@@ -73,14 +103,10 @@ export async function signIn(
   user: { email: string; password: string },
 ): Promise<void> {
   await page.goto("/auth");
-  const nameField = page.locator("#name");
-  if (await nameField.isVisible().catch(() => false)) {
-    const switcher = page.getByRole("button", { name: /sign in/i }).first();
-    if (await switcher.isVisible().catch(() => false)) await switcher.click();
-  }
+  await ensureAuthMode(page, "signin");
   await page.locator("#email").fill(user.email);
   await page.locator("#password").fill(user.password);
-  await page.locator('button[type="submit"]').first().click();
+  await submitAuthForm(page);
   await page.waitForURL((url) => !url.pathname.startsWith("/auth"), { timeout: 30_000 });
   await dismissOverlays(page);
 }

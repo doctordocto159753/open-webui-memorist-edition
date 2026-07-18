@@ -14,6 +14,9 @@ export default defineConfig({
   ],
   use: {
     baseURL: process.env.MEMORIST_E2E_BASE_URL || "http://localhost:3000",
+    // Open WebUI locks body scroll on several screens; a taller viewport keeps
+    // controls (auth submit, settings actions) within the visible area.
+    viewport: { width: 1280, height: 1024 },
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
   },
