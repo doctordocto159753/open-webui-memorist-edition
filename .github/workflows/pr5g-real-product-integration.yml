@@ -317,6 +317,19 @@ jobs:
             printf 'OPEN_WEBUI_PORT=3000\n'
             printf 'MEMORIST_PORT=8777\n'
           } > "${MEMORIST_PACKAGE_DIR}/.env"
+      - name: Clear persisted stack state from previous runs
+        run: |
+          set -euo pipefail
+          cd "${MEMORIST_PACKAGE_DIR}"
+          if [ -n "${MEMORIST_COMPOSE_BIN:-}" ]; then base="$MEMORIST_COMPOSE_BIN"; else base="docker compose"; fi
+          # The self-hosted Docker daemon keeps named volumes across workflow
+          # runs, and Stop-Memorist intentionally preserves data volumes. Every
+          # run writes a fresh random Postgres password into .env, but an
+          # already-initialized postgres volume ignores POSTGRES_PASSWORD and
+          # keeps the old one, so memorist-core's DSN then fails authentication
+          # and the container exits(1). Start each acceptance run from a clean
+          # volume slate; the mid-test restart step keeps its data as designed.
+          $base -f compose.yml -f compose.full.yml down -v --remove-orphans 2>/dev/null || true
       - name: Start the release stack through the packaged lifecycle script
         shell: pwsh
         run: |
