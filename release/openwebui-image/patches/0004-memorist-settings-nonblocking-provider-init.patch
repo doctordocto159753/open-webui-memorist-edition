@@ -14,11 +14,13 @@
  	const setBanners = async () => {
  		const bannersData = await getBanners(localStorage.token);
  		banners.set(bannersData);
-@@ -89,15 +96,21 @@
+@@ -89,15 +96,23 @@
  			return;
  		}
  
-+		const isMemoristSettingsRoute = $page.url.pathname.startsWith('/settings/memorist/');
++		const isMemoristSettingsRoute =
++			$page.url.pathname === '/settings/memorist' ||
++			$page.url.pathname.startsWith('/settings/memorist/');
 +
  		clearChatInputStorage();
  		await Promise.all([
