@@ -229,7 +229,12 @@ def _content_text(content: Any) -> str:
 
 
 def _conversation_id(body: dict[str, Any], metadata: dict[str, Any]) -> str | None:
-    value = body.get("conversation_id") or body.get("chat_id") or metadata.get("conversation_id")
+    value = (
+        metadata.get("memorist_trusted_conversation_id")
+        or body.get("conversation_id")
+        or body.get("chat_id")
+        or metadata.get("conversation_id")
+    )
     return str(value) if value is not None else None
 
 
@@ -241,7 +246,8 @@ def _workspace_id(user: dict[str, Any] | None, metadata: dict[str, Any]) -> str 
 
 def _temporary_chat_id(body: dict[str, Any], metadata: dict[str, Any]) -> str | None:
     value = (
-        body.get("temporary_chat_id")
+        metadata.get("memorist_trusted_temporary_chat_id")
+        or body.get("temporary_chat_id")
         or body.get("temp_chat_id")
         or metadata.get("temporary_chat_id")
         or metadata.get("temp_chat_id")

@@ -75,6 +75,20 @@ def validate_rc_package() -> dict[str, Any]:
 
     with zipfile.ZipFile(ZIP_PATH) as package:
         names = package.namelist()
+        case_insensitive_names: dict[str, str] = {}
+        for name in names:
+            normalized = name.casefold()
+            previous = case_insensitive_names.get(normalized)
+            if previous is not None and previous != name:
+                issues.append(
+                    {
+                        "issue_code": "case_insensitive_path_collision",
+                        "path": name,
+                        "conflicts_with": previous,
+                    }
+                )
+            else:
+                case_insensitive_names[normalized] = name
         version_name = _find_suffix(names, VERSION_SUFFIX)
         manifest_name = _find_suffix(names, MANIFEST_SUFFIX)
         if version_name is None:

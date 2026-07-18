@@ -25,7 +25,7 @@ from typing import Any
 
 MEMORIST_FILTER_ID = "memorist_memory_filter"
 MEMORIST_FILTER_NAME = "Memorist Memory"
-MEMORIST_FILTER_CONTENT_VERSION = "pr5g-2"
+MEMORIST_FILTER_CONTENT_VERSION = "pr5g-3"
 
 _WRAPPER_TEMPLATE = '''"""Memorist managed chat filter (auto-provisioned; do not edit).
 
@@ -53,8 +53,12 @@ def _server_side_user(__user__):
 
 
 class Filter(_MemoristPackagedFilter):
-    def inlet(self, body, __user__=None):
-        return super().inlet(body, __user__=_server_side_user(__user__))
+    def inlet(self, body, __user__=None, __metadata__=None):
+        return super().inlet(
+            body,
+            __user__=_server_side_user(__user__),
+            __metadata__=__metadata__,
+        )
 
     def outlet(self, body, __user__=None):
         return super().outlet(body, __user__=_server_side_user(__user__))

@@ -475,7 +475,12 @@ function Test-MemoristComposeService {
     )
     $overlay = Get-MemoristComposeOverlay -Root (Split-Path -Parent $ComposeFile) -Mode $Mode
     $exe = $Compose[0]
-    $prefix = if ($Compose.Length -gt 1) { $Compose[1..($Compose.Length - 1)] } else { @() }
+    # Keep this as an array on Windows PowerShell 5.1. Assigning an `if`
+    # expression that emits one item produces a scalar string; adding the
+    # remaining argv array then concatenates everything into one malformed
+    # argument such as "compose-f ...".
+    $prefix = @()
+    if ($Compose.Length -gt 1) { $prefix = $Compose[1..($Compose.Length - 1)] }
     $full = $prefix + @('-f', $ComposeFile, '-f', $overlay) + $Arguments
     & $exe @full *> $null
     return ($LASTEXITCODE -eq 0)

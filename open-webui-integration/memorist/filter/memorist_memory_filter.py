@@ -40,8 +40,14 @@ class Filter:
         self.valves = self.Valves()
         self._completed_response_keys: set[str] = set()
 
-    def inlet(self, body: dict[str, Any], __user__: dict[str, Any] | None = None) -> dict[str, Any]:
+    def inlet(
+        self,
+        body: dict[str, Any],
+        __user__: dict[str, Any] | None = None,
+        __metadata__: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         config = _config_from_valves(self.valves)
+        _apply_trusted_host_metadata(body, __metadata__)
         remove_memory_attachments(body)
         if not config.enabled:
             return body
@@ -339,6 +345,29 @@ def _metadata(body: dict[str, Any]) -> dict[str, Any]:
         metadata = {}
         body["metadata"] = metadata
     return metadata
+
+
+def _apply_trusted_host_metadata(
+    body: dict[str, Any], host_metadata: dict[str, Any] | None
+) -> None:
+    """Expose only the host-authenticated chat identity to the payload parser.
+
+    Open WebUI passes its canonical chat ID through the filter's special
+    ``__metadata__`` argument, not through the browser-controlled request body.
+    Keep it in a separate trusted key so a forged top-level conversation ID
+    cannot bypass a persisted Memory Off ceiling.
+    """
+
+    if not isinstance(host_metadata, dict):
+        return
+    chat_id = host_metadata.get("chat_id")
+    if chat_id is None or not str(chat_id).strip():
+        return
+    metadata = _metadata(body)
+    if str(chat_id).startswith("local:"):
+        metadata["memorist_trusted_temporary_chat_id"] = str(chat_id)
+    else:
+        metadata["memorist_trusted_conversation_id"] = str(chat_id)
 
 
 def _config_from_valves(valves: Any) -> MemoristIntegrationConfig:

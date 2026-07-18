@@ -29,6 +29,8 @@ class FakeClient:
     last_assistant_attachment: str | None = None
     last_assistant_turn_policy: str | None = None
     last_capture_idempotency_key: str | None = None
+    last_policy_chat_id: str | None = None
+    last_session_conversation_id: str | None = None
     last_config: Any | None = None
 
     def __init__(self, _config: object) -> None:
@@ -47,6 +49,7 @@ class FakeClient:
         assert user_id
         assert workspace_uuid
         FakeClient.session_calls += 1
+        FakeClient.last_session_conversation_id = openwebui_conversation_id
         if self.fail:
             raise TimeoutError("timeout " + "token=" + "REDACTED_TEST_VALUE")
         return ResolvedSession("session-1", "workspace-1", "project-1")
@@ -67,6 +70,7 @@ class FakeClient:
     ) -> ResolvedTurnPolicy:
         assert user_id
         assert workspace_id
+        FakeClient.last_policy_chat_id = chat_id
         control = request_control or {}
         mode = str(control.get("turn_policy") or "full")
         return ResolvedTurnPolicy(
@@ -512,6 +516,26 @@ def test_private_workflow_clears_stale_context_and_skips_all_memory_calls(
         "memorist_session_uuid",
     ):
         assert key not in result["metadata"]
+
+
+def test_trusted_host_chat_id_overrides_browser_conversation_id(monkeypatch) -> None:
+    monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
+    FakeClient.last_policy_chat_id = None
+    FakeClient.last_session_conversation_id = None
+    body = {
+        "conversation_id": "browser-spoofed-chat",
+        "messages": [{"role": "user", "id": "user-1", "content": "hello"}],
+    }
+
+    _module().Filter().inlet(
+        body,
+        {"id": "user-1", "workspace_id": "workspace-1"},
+        {"chat_id": "host-canonical-chat"},
+    )
+
+    assert FakeClient.last_policy_chat_id == "host-canonical-chat"
+    assert FakeClient.last_session_conversation_id == "host-canonical-chat"
+    assert body["metadata"]["memorist_trusted_conversation_id"] == "host-canonical-chat"
 
 
 def test_stale_context_is_replaced_once_when_memory_is_on(monkeypatch) -> None:

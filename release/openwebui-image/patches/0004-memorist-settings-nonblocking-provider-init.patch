@@ -1,7 +1,6 @@
 --- a/src/routes/(app)/+layout.svelte
 +++ b/src/routes/(app)/+layout.svelte
-@@ -70,6 +70,13 @@
- 		}
+@@ -183,4 +183,11 @@
  	};
  
 +	const initializeProviderDependentState = async () => {
@@ -13,9 +12,7 @@
 +
  	const setBanners = async () => {
  		const bannersData = await getBanners(localStorage.token);
- 		banners.set(bannersData);
-@@ -89,15 +96,23 @@
- 			return;
+@@ -202,4 +209,8 @@
  		}
  
 +		const isMemoristSettingsRoute =
@@ -24,8 +21,7 @@
 +
  		clearChatInputStorage();
  		await Promise.all([
- 			checkLocalDBChats(),
- 			setBanners().catch((e) => console.error('Failed to load banners:', e)),
+@@ -208,8 +219,12 @@
  			setTools().catch((e) => console.error('Failed to load tools:', e)),
  			setUserSettings(async () => {
 -				await Promise.all([

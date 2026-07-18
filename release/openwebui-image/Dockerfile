@@ -50,6 +50,12 @@ RUN npm ci --force \
     && grep -rl "memorist-memory-workflow-toggle" build/_app >/dev/null
 
 FROM ${OPENWEBUI_BASE}
+# Open WebUI's generic system-message consolidation rebuilds even a single
+# message as role/content only. Preserve a named Memorist context message at
+# the provider boundary, with an exact upstream-file hash guard.
+COPY open-webui-integration/memorist/backend/patch_openwebui_backend.py /tmp/patch_openwebui_backend.py
+RUN python /tmp/patch_openwebui_backend.py /app/backend/open_webui/utils/misc.py \
+    && rm /tmp/patch_openwebui_backend.py
 # Replace the compiled frontend with the Memorist-integrated build.
 RUN rm -rf /app/build
 COPY --from=frontend /build/src-tree/build /app/build

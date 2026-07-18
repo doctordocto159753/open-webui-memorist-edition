@@ -11,6 +11,11 @@ proxy gate. No test talks to a real Docker daemon.
 BeforeAll {
     $script:packageRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
     $script:isUnix = -not ($env:OS -eq 'Windows_NT')
+    $script:powershellHost = if (Get-Command pwsh -ErrorAction SilentlyContinue) {
+        'pwsh'
+    } else {
+        'powershell.exe'
+    }
 
     function New-MemoristSandbox {
         param(
@@ -88,14 +93,21 @@ exit /b 0
         # Inject the controlled docker shim deterministically via
         # MEMORIST_DOCKER_CLI (honored by MemoristCommon's Get-MemoristDockerCli)
         # instead of relying on PATH ordering, which is not reliable across
-        # runners. The child pwsh inherits this process env var.
-        $pwshArgs = @('-NoProfile', '-File', (Join-Path $Sandbox.Root $Script)) + $Arguments
+        # runners. The child PowerShell host inherits this process env var.
+        $pwshArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Sandbox.Root $Script)) + $Arguments
         $previous = $env:MEMORIST_DOCKER_CLI
+        $previousErrorActionPreference = $ErrorActionPreference
         try {
             $env:MEMORIST_DOCKER_CLI = $Sandbox.Shim
-            $output = & pwsh @pwshArgs 2>&1 | Out-String
-            [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+            # A deliberately failing lifecycle script writes a native stderr
+            # record. Capture it as assertion input instead of letting the
+            # Pester process's Stop preference abort this helper.
+            $ErrorActionPreference = 'Continue'
+            $output = & $script:powershellHost @pwshArgs 2>&1 | Out-String
+            $exitCode = $LASTEXITCODE
+            [pscustomobject]@{ ExitCode = $exitCode; Output = $output }
         } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
             if ($null -eq $previous) {
                 Remove-Item Env:MEMORIST_DOCKER_CLI -ErrorAction SilentlyContinue
             } else {
@@ -112,31 +124,47 @@ exit /b 0
         )
         $job = Start-Job -ScriptBlock {
             param($WebPort, $CorePort, $ProxyBehavior)
-            $listener = [System.Net.HttpListener]::new()
-            $listener.Prefixes.Add("http://localhost:$WebPort/")
-            $listener.Prefixes.Add("http://localhost:$CorePort/")
-            $listener.Start()
-            while ($listener.IsListening) {
-                $context = $listener.GetContext()
-                $path = $context.Request.Url.AbsolutePath
-                $response = $context.Response
-                if ($path -eq '/api/v1/memorist/openwebui/status') {
-                    if ($ProxyBehavior -eq 'json401') {
-                        $response.StatusCode = 401
-                        $response.ContentType = 'application/json'
-                        $bytes = [Text.Encoding]::UTF8.GetBytes('{"detail":"authenticated Open WebUI actor required"}')
-                    } else {
-                        $response.StatusCode = 404
-                        $response.ContentType = 'text/html'
-                        $bytes = [Text.Encoding]::UTF8.GetBytes('<html>SPA fallback</html>')
+            $webListener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $WebPort)
+            $coreListener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $CorePort)
+            $listeners = @($webListener, $coreListener)
+            foreach ($listener in $listeners) { $listener.Start() }
+            while ($true) {
+                foreach ($listener in $listeners) {
+                    if (-not $listener.Pending()) { continue }
+                    $client = $listener.AcceptTcpClient()
+                    try {
+                        $stream = $client.GetStream()
+                        $reader = [IO.StreamReader]::new($stream, [Text.Encoding]::ASCII, $false, 1024, $true)
+                        $requestLine = $reader.ReadLine()
+                        while ($null -ne ($header = $reader.ReadLine()) -and $header -ne '') { }
+                        $path = if ($requestLine) { $requestLine.Split(' ')[1] } else { '/' }
+                        $status = '200 OK'
+                        $contentType = 'application/json'
+                        $body = '{"status":"ok"}'
+                        if (
+                            $listener.LocalEndpoint.Port -eq $WebPort -and
+                            $path -eq '/api/v1/memorist/openwebui/status'
+                        ) {
+                            if ($ProxyBehavior -eq 'json401') {
+                                $status = '401 Unauthorized'
+                                $body = '{"detail":"authenticated Open WebUI actor required"}'
+                            } else {
+                                $status = '404 Not Found'
+                                $contentType = 'text/html'
+                                $body = '<html>SPA fallback</html>'
+                            }
+                        }
+                        $bytes = [Text.Encoding]::UTF8.GetBytes($body)
+                        $head = "HTTP/1.1 $status`r`nContent-Type: $contentType`r`nContent-Length: $($bytes.Length)`r`nConnection: close`r`n`r`n"
+                        $headBytes = [Text.Encoding]::ASCII.GetBytes($head)
+                        $stream.Write($headBytes, 0, $headBytes.Length)
+                        $stream.Write($bytes, 0, $bytes.Length)
+                        $stream.Flush()
+                    } finally {
+                        $client.Close()
                     }
-                } else {
-                    $response.StatusCode = 200
-                    $response.ContentType = 'application/json'
-                    $bytes = [Text.Encoding]::UTF8.GetBytes('{"status":"ok"}')
                 }
-                $response.OutputStream.Write($bytes, 0, $bytes.Length)
-                $response.Close()
+                Start-Sleep -Milliseconds 10
             }
         } -ArgumentList $WebPort, $CorePort, $ProxyBehavior
         Start-Sleep -Seconds 1
@@ -157,7 +185,7 @@ Describe 'Installed-mode authority (executable)' {
         } finally { Remove-Item $sandbox.Root -Recurse -Force }
     }
 
-    It 'Start refuses lite→full bypass as well' {
+    It 'Start refuses lite-to-full bypass as well' {
         $sandbox = New-MemoristSandbox -Mode 'lite'
         try {
             $result = Invoke-MemoristScript -Sandbox $sandbox -Script 'Start-Memorist.ps1' -Arguments @('-Mode', 'full', '-NoBrowser')
@@ -186,6 +214,23 @@ Describe 'Installed-mode authority (executable)' {
 }
 
 Describe 'Compose failure semantics (executable)' {
+    It 'keeps the Docker Compose v2 prefix as a separate argv item for service probes' {
+        $sandbox = New-MemoristSandbox
+        try {
+            Import-Module (Join-Path $sandbox.Root 'scripts/MemoristCommon.psm1') -Force
+            $ok = Test-MemoristComposeService `
+                -Compose @($sandbox.Shim, 'compose') `
+                -ComposeFile (Join-Path $sandbox.Root 'compose.yml') `
+                -Mode 'lite' `
+                -Arguments @('exec', '-T', 'memorist-core', 'true')
+
+            $ok | Should -BeTrue
+            $invocation = Get-Content -LiteralPath $sandbox.Log -Raw
+            $invocation | Should -Match '^docker compose -f '
+            $invocation | Should -Match 'exec -T memorist-core true'
+        } finally { Remove-Item $sandbox.Root -Recurse -Force }
+    }
+
     It 'Stop exits non-zero when compose down fails' {
         $sandbox = New-MemoristSandbox -ComposeExit 7
         try {

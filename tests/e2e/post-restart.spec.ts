@@ -17,6 +17,18 @@ import {
 } from "./helpers";
 
 const state = loadState();
+const RETRIEVAL_QUESTION = "What is my dog's name and preferred food?";
+
+function primaryRetrievalRequestCount(
+  requests: Awaited<ReturnType<typeof stubRequests>>,
+): number {
+  return requests.filter((entry) =>
+    entry.messages.some(
+      (message) =>
+        message.role === "user" && message.content_excerpt.trim() === RETRIEVAL_QUESTION,
+    ),
+  ).length;
+}
 
 test.describe.configure({ mode: "serial" });
 
@@ -62,20 +74,26 @@ test("regeneration: idempotent, truthful, no duplicate capture", async ({ page, 
   await expect(page.locator("body")).toContainText(/Alpha/i, { timeout: 30_000 });
 
   const requestsBefore = await stubRequests(request);
+  const primaryRequestsBefore = primaryRetrievalRequestCount(requestsBefore);
 
   // Trigger regeneration of the last assistant response.
-  const regenerateButton = page
-    .locator(
-      'button[aria-label*="Regenerate" i], .regenerate-response-button, button:has-text("Regenerate")',
-    )
-    .last();
-  await regenerateButton.click({ force: true });
-  await waitForAssistantReply(page, /Alpha/i);
-  await page.waitForTimeout(3_000);
+  const regenerateMenu = page.locator('[aria-label="Regenerate"]:visible').last();
+  await expect(regenerateMenu).toBeVisible();
+  await regenerateMenu.click();
+  const tryAgain = page.getByRole("button", { name: "Try Again", exact: true });
+  await expect(tryAgain).toBeVisible();
+  await tryAgain.click();
 
-  // Exactly one new model request for the regenerated turn.
+  // Wait on the observable model-stub request, not elapsed wall-clock time.
+  await expect
+    .poll(async () => primaryRetrievalRequestCount(await stubRequests(request)))
+    .toBe(primaryRequestsBefore + 1);
+  await waitForAssistantReply(page, /Alpha/i);
+
+  // Exactly one new primary model request for the regenerated turn. Open
+  // WebUI may independently issue auxiliary follow-up/tag/title tasks.
   const requestsAfter = await stubRequests(request);
-  expect(requestsAfter.length).toBe(requestsBefore.length + 1);
+  expect(primaryRetrievalRequestCount(requestsAfter)).toBe(primaryRequestsBefore + 1);
 
   // The regenerated turn shows at most one truthful disclosure — never a
   // duplicated or stale one.

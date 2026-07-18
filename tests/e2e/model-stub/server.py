@@ -51,12 +51,84 @@ def _deterministic_answer(messages: list[dict]) -> str:
             else:
                 question = str(content or "")
             break
+    try:
+        provider_test = json.loads(question)
+    except (json.JSONDecodeError, TypeError):
+        provider_test = None
+    if isinstance(provider_test, dict) and provider_test.get("memorist_provider_test") == "ok":
+        return json.dumps({"memorist_provider_test": "ok"})
+    if isinstance(provider_test, dict) and isinstance(provider_test.get("sentences"), list):
+        return json.dumps(_jakobson_output(provider_test))
     lowered = (question + " " + context).lower()
     if "alpha" in lowered and "chicken" in lowered:
         return "Your dog is named Alpha and her preferred food is chicken."
     if "dog" in lowered:
         return "I do not have a remembered answer about your dog in this context."
     return f"Deterministic stub reply to: {question[:120]}"
+
+
+def _jakobson_output(input_payload: dict) -> dict:
+    sentences = []
+    for index, item in enumerate(input_payload.get("sentences") or [], start=1):
+        text = str(item.get("text") or "")
+        lowered = text.lower()
+        preference = "prefer" in lowered
+        dominant = (
+            "emotive"
+            if preference
+            else ("conative" if text.rstrip().endswith("?") else "referential")
+        )
+        context = "prefer" if preference else text
+        factor = lambda value, evidence: {  # noqa: E731 - compact deterministic fixture
+            "value": value,
+            "evidence": evidence,
+            "confidence": "high",
+        }
+        sentences.append(
+            {
+                "id": int(item.get("id") or index),
+                "text": text,
+                "six_factors": {
+                    "sender_addresser": factor("user", text),
+                    "receiver_addressee": factor("assistant", text),
+                    "message": factor(text, text),
+                    "context_referent": factor(context, text),
+                    "code": factor("English", text),
+                    "contact_channel": factor("chat", text),
+                },
+                "dominant_function": dominant,
+                "secondary_functions": ["referential"] if preference else [],
+                "function_reason": "Deterministic Memorist E2E analysis.",
+                "notes": "local deterministic stub",
+            }
+        )
+    dominant_overall = sentences[0]["dominant_function"] if sentences else "referential"
+    return {
+        "schema_version": "1.0",
+        "prompt_id": "memorist.jakobson_sentence_analysis",
+        "prompt_version": "2.0",
+        "status": "ok",
+        "warnings": [],
+        "items": [],
+        "analysis_level": "sentence",
+        "model": "jakobson_six_factor",
+        "input_language": "English",
+        "sentence_count": len(sentences),
+        "sentences": sentences,
+        "overall_summary": {
+            "dominant_overall_function": dominant_overall,
+            "secondary_overall_functions": [],
+            "main_sender": "user",
+            "main_receiver": "assistant",
+            "main_context": (
+                sentences[0]["six_factors"]["context_referent"]["value"]
+                if sentences
+                else "conversation"
+            ),
+            "main_code": "English",
+            "main_contact_channel": "chat",
+        },
+    }
 
 
 class Handler(BaseHTTPRequestHandler):

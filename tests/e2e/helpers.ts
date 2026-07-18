@@ -51,13 +51,101 @@ export function saveState(state: E2EState): void {
   fs.writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
 }
 
-export async function dismissOverlays(page: Page): Promise<void> {
+async function dismissUpdateNotification(page: Page): Promise<void> {
+  // Open WebUI's update notification uses an icon-only X button without an
+  // accessible name. Locate it by its stable product copy, use the real close
+  // control, and verify the pointer-blocking toast is gone before continuing.
+  const updateToast = page
+    .locator("div.absolute.bottom-8.right-8.z-50")
+    .filter({ hasText: "A new version" });
+
+  const updateExpected = await page.evaluate(async () => {
+    const dismissedAt = Number(window.localStorage.getItem("dismissedUpdateToast") || "0");
+    if (dismissedAt && Date.now() - dismissedAt <= 24 * 60 * 60 * 1000) return false;
+
+    const token = window.localStorage.getItem("token");
+    if (!token) return false;
+    const userResponse = await fetch("/api/v1/auths/", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!userResponse.ok) return false;
+    const user = (await userResponse.json()) as { role?: string };
+    if (user.role !== "admin") return false;
+
+    const configResponse = await fetch("/api/config");
+    if (!configResponse.ok) return false;
+    const config = (await configResponse.json()) as {
+      features?: { enable_version_update_check?: boolean };
+    };
+    if (!config.features?.enable_version_update_check) return false;
+
+    const versionResponse = await fetch("/api/version/updates", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!versionResponse.ok) return false;
+    const version = (await versionResponse.json()) as { current?: string; latest?: string };
+    return Boolean(version.current && version.latest && version.current !== version.latest);
+  });
+
+  if (updateExpected) {
+    await expect(updateToast).toBeVisible();
+  }
+  if (updateExpected || (await updateToast.isVisible().catch(() => false))) {
+    await updateToast.locator("button").click();
+    await expect(updateToast).toBeHidden();
+  }
+}
+
+export async function dismissOverlays(
+  page: Page,
+  options: { waitForChangelog?: boolean } = {},
+): Promise<void> {
+  const changelogDialog = page
+    .getByRole("dialog")
+    .filter({ hasText: "What's New in Open WebUI" });
+
+  if (options.waitForChangelog) {
+    const changelogExpected = await page.evaluate(async () => {
+      const token = window.localStorage.getItem("token");
+      if (!token) return false;
+
+      const [configResponse, settingsResponse] = await Promise.all([
+        fetch("/api/config"),
+        fetch("/api/v1/users/user/settings", {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      ]);
+      if (!configResponse.ok || !settingsResponse.ok) {
+        throw new Error(
+          `overlay readiness failed: config=${configResponse.status} settings=${settingsResponse.status}`,
+        );
+      }
+
+      const config = (await configResponse.json()) as { version?: string };
+      const userSettings = (await settingsResponse.json()) as {
+        ui?: { version?: string; showChangelog?: boolean };
+      } | null;
+      return (
+        (userSettings?.ui?.showChangelog ?? true) &&
+        userSettings?.ui?.version !== config.version
+      );
+    });
+
+    if (changelogExpected) {
+      await expect(changelogDialog).toBeVisible({ timeout: 30_000 });
+      await changelogDialog.getByRole("button", { name: "Okay, Let's Go!" }).click();
+      await expect(changelogDialog).toBeHidden();
+    }
+  }
+
   for (const label of ["Okay, Let's Go!", "Okay, Let’s Go!", "Close", "OK"]) {
     const button = page.getByRole("button", { name: label }).first();
     if (await button.isVisible().catch(() => false)) {
       await button.click().catch(() => undefined);
     }
   }
+
+  await dismissUpdateNotification(page);
   await page.keyboard.press("Escape").catch(() => undefined);
 }
 
@@ -112,7 +200,6 @@ export async function authenticate(page: Page, user: Credentials): Promise<strin
     .catch(() => undefined);
   await page.reload();
   await sessionReady;
-  await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => undefined);
   await dismissOverlays(page);
   return token;
 }
@@ -132,6 +219,9 @@ export async function sendChatMessage(page: Page, text: string): Promise<void> {
   await expect(input).toBeVisible({ timeout: 30_000 });
   await input.click();
   await input.fill(text);
+  // The update check is asynchronous and can finish after route-level overlay
+  // cleanup. Close its real control at the last safe point before Send.
+  await dismissUpdateNotification(page);
   await page.locator("#send-message-button").click();
 }
 

@@ -35,10 +35,127 @@ test.beforeEach(({ page }) => {
   page.on("console", (message) => consoleLines.push(message.text()));
 });
 
+test("direct Memorist settings load does not wait for model discovery", async ({ page }) => {
+  let releaseModels!: () => void;
+  let modelsReleased = false;
+  let modelsRequestHeld = false;
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  const modelsGate = new Promise<void>((resolve) => {
+    releaseModels = () => {
+      modelsReleased = true;
+      resolve();
+    };
+  });
+
+  await page.route("**/api/models*", async (route) => {
+    modelsRequestHeld = true;
+    await modelsGate;
+    await route.abort("failed");
+  });
+
+  const setupResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes("/api/v1/memorist/model-control/setup/status") &&
+      response.status() === 200,
+  );
+
+  try {
+    await page.goto("/settings/memorist/memory-setup", {
+      waitUntil: "domcontentloaded",
+    });
+
+    await expect.poll(() => modelsRequestHeld, { timeout: 10_000 }).toBe(true);
+    await expect(page.locator('[data-memorist-page="memory-setup"]')).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(page.locator("memorist-memory-node-setup h1")).toContainText(
+      /Memory processing nodes/i,
+      { timeout: 10_000 },
+    );
+    expect(modelsReleased).toBe(false);
+
+    expect((await setupResponse).status()).toBe(200);
+    await expect(page).not.toHaveURL(/\/auth(?:[/?]|$)/);
+    await expect(page.locator("[data-memorist-unauthorized]")).toHaveCount(0);
+
+    const modelFailure = page.waitForEvent(
+      "requestfailed",
+      (request) => request.url().includes("/api/models"),
+    );
+    releaseModels();
+    await modelFailure;
+
+    await expect(page.locator('[data-memorist-page="memory-setup"]')).toBeVisible();
+    expect(pageErrors).toEqual([]);
+    await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
+  } finally {
+    releaseModels();
+  }
+});
+
+test("absent session redirects before privileged Memorist content mounts", async ({ browser }) => {
+  const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+  const page = await context.newPage();
+  let privilegedApiRequested = false;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/v1/memorist/model-control/setup/status")) {
+      privilegedApiRequested = true;
+    }
+  });
+
+  try {
+    await page.goto("/settings/memorist/memory-setup", {
+      waitUntil: "domcontentloaded",
+    });
+
+    await expect(page).toHaveURL(/\/auth(?:[/?]|$)/);
+    await expect(page.locator('[data-memorist-page="memory-setup"]')).toHaveCount(0);
+    await expect(page.locator("memorist-memory-node-setup")).toHaveCount(0);
+    expect(privilegedApiRequested).toBe(false);
+  } finally {
+    await context.close();
+  }
+});
+
+test("non-Memorist routes retain provider-dependent initialization", async ({ page }) => {
+  let releaseModels!: () => void;
+  let modelsRequestHeld = false;
+  const modelsGate = new Promise<void>((resolve) => {
+    releaseModels = resolve;
+  });
+
+  await page.route("**/api/models*", async (route) => {
+    modelsRequestHeld = true;
+    await modelsGate;
+    await route.continue();
+  });
+
+  try {
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await expect.poll(() => modelsRequestHeld, { timeout: 10_000 }).toBe(true);
+    await expect(page.locator("#chat-input")).toHaveCount(0);
+
+    releaseModels();
+    await expect(page.locator("#chat-input")).toBeVisible();
+    await dismissOverlays(page, { waitForChangelog: true });
+    const modelSelector = page.locator("#model-selector-0-button");
+    await expect(modelSelector).toBeVisible();
+    await modelSelector.click();
+    await expect(page.getByRole("option", { name: /memorist-e2e-stub/i })).toBeVisible();
+
+    await page.goto("/admin/settings", { waitUntil: "domcontentloaded" });
+    await expect(page.locator('a[href="/settings/memorist/memory-setup"]')).toBeVisible();
+  } finally {
+    releaseModels();
+  }
+});
+
 test("first launch: admin signup and visible Memorist navigation", async ({ page }) => {
   await signUp(page, state.admin);
 
-  await page.goto("/admin/settings", { waitUntil: "networkidle" });
+  await page.goto("/admin/settings", { waitUntil: "domcontentloaded" });
+  await dismissOverlays(page, { waitForChangelog: true });
   const memoristNav = page.locator('a[href="/settings/memorist/memory-setup"]');
   await expect(memoristNav).toBeVisible();
   await expect(memoristNav).toContainText("Memorist");
@@ -148,9 +265,27 @@ test("memory retrieval: later chat attaches memory as data and disclosure appear
   page,
   request,
 }) => {
-  // Allow background processing to complete before the retrieval turn.
-  await page.waitForTimeout(5_000);
-  await page.goto("/");
+  // Establish the configured origin before reading the authenticated storage
+  // state. A fresh Playwright page is otherwise still an opaque about:blank
+  // document, where browsers correctly deny localStorage access.
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  // Wait on the actor-scoped durable worker state, rather than elapsed time.
+  await expect
+    .poll(
+      async () => {
+        const response = await apiFetch(page, "/api/v1/memorist/openwebui/status");
+        if (response.status !== 200) return 0;
+        const processing = (
+          response.body as {
+            memory_processing?: { available_messages?: number; candidates?: number };
+          }
+        ).memory_processing;
+        return Math.min(processing?.available_messages ?? 0, processing?.candidates ?? 0);
+      },
+      { timeout: 30_000 },
+    )
+    .toBeGreaterThan(0);
   await dismissOverlays(page);
   await sendChatMessage(page, RETRIEVAL_QUESTION);
   await waitForAssistantReply(page, /Alpha/i);
@@ -161,7 +296,10 @@ test("memory retrieval: later chat attaches memory as data and disclosure appear
   const retrievalRequest = requests
     .reverse()
     .find((entry) =>
-      entry.messages.some((message) => message.content_excerpt.includes("dog's name")),
+      entry.messages.some(
+        (message) =>
+          message.role === "user" && message.content_excerpt.trim() === RETRIEVAL_QUESTION,
+      ),
     );
   expect(retrievalRequest, "retrieval turn reached the model stub").toBeTruthy();
   const attachmentMessage = retrievalRequest?.messages.find(
@@ -238,7 +376,7 @@ test("memory off: server-side consent ceiling suppresses everything", async ({
     },
   });
   expect(forged.status).toBe(200);
-  expect((forged.body as { turn_policy?: string }).turn_policy).toBe("private");
+  expect((forged.body as { policy?: { mode?: string } }).policy?.mode).toBe("private");
 
   saveState(state);
 });
@@ -289,6 +427,10 @@ test("actor isolation: a second user cannot reach admin or foreign state", async
   browser,
   page,
 }) => {
+  // Give the default admin page a real application origin before apiFetch
+  // reads its authenticated localStorage state.
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
   // Admin creates the member account.
   const created = await apiFetch(page, "/api/v1/auths/add", {
     method: "POST",

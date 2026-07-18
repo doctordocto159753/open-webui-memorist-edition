@@ -45,14 +45,48 @@ cp -R "$IMAGE_DIR/frontend-overlay/src/." "$OUT/src/"
 echo "applying integration patches..."
 for patch_file in "$IMAGE_DIR"/patches/*.patch; do
     echo "  $(basename "$patch_file")"
-    patch -p1 -d "$OUT" --forward --fuzz=0 < "$patch_file"
+    if ! patch -p1 -d "$OUT" --forward --fuzz=0 < "$patch_file"; then
+        echo "patch failed: $patch_file" >&2
+
+        find "$OUT" -type f -name '*.rej' -print | while IFS= read -r reject; do
+            echo "===== $reject =====" >&2
+            cat "$reject" >&2
+        done
+
+        exit 1
+    fi
 done
+
+if find "$OUT" -type f -name '*.rej' -print -quit | grep -q .; then
+    echo "patch reject files remain in assembled tree" >&2
+    exit 1
+fi
 
 echo "verifying integration markers survived assembly..."
 grep -q "MemoristComposerToggle" "$OUT/src/lib/components/chat/MessageInput.svelte"
 grep -q "MemoristMessageDisclosure" "$OUT/src/lib/components/chat/Messages/ResponseMessage.svelte"
 grep -q "memorist" "$OUT/src/lib/components/admin/Settings.svelte"
-grep -q "initializeProviderDependentState" "$OUT/src/routes/(app)/+layout.svelte"
+
+APP_LAYOUT="$OUT/src/routes/(app)/+layout.svelte"
+require_app_layout_marker() {
+    marker="$1"
+    description="$2"
+    if ! grep -Fq "$marker" "$APP_LAYOUT"; then
+        echo "missing app-layout integration marker ($description): $marker" >&2
+        exit 1
+    fi
+}
+
+require_app_layout_marker "const initializeProviderDependentState = async () =>" \
+    "provider initializer"
+require_app_layout_marker "\$page.url.pathname === '/settings/memorist'" \
+    "exact Memorist settings index route"
+require_app_layout_marker "\$page.url.pathname.startsWith('/settings/memorist/')" \
+    "Memorist settings descendant routes"
+require_app_layout_marker "void initializeProviderDependentState();" \
+    "non-blocking Memorist initialization"
+require_app_layout_marker "await initializeProviderDependentState();" \
+    "blocking initialization retained for other routes"
 test -f "$OUT/src/routes/(app)/settings/memorist/+layout.svelte"
 test -f "$OUT/src/routes/(app)/settings/memorist/import/[runUuid]/+page.svelte"
 test -f "$OUT/src/lib/memorist/surfaces.ts"

@@ -2,6 +2,8 @@ import { defineConfig } from "@playwright/test";
 
 import { ADMIN_STORAGE_STATE, BASE_URL } from "./helpers";
 
+const browserExecutablePath = process.env.MEMORIST_E2E_BROWSER_EXECUTABLE?.trim();
+
 export default defineConfig({
   testDir: ".",
   timeout: 120_000,
@@ -27,5 +29,8 @@ export default defineConfig({
     viewport: { width: 1280, height: 1024 },
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
+    launchOptions: browserExecutablePath
+      ? { executablePath: browserExecutablePath }
+      : undefined,
   },
 });

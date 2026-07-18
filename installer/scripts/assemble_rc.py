@@ -175,7 +175,10 @@ def _copy_archive_docs() -> None:
         (ROOT / "SECURITY.md", Path("SECURITY.md")),
         (ROOT / "RELEASE_NOTES.md", Path("RELEASE_NOTES.md")),
         (ROOT / "docs" / "INSTALLATION.md", Path("docs/INSTALLATION.md")),
-        (ROOT / "docs" / "TROUBLESHOOTING.md", Path("docs/TROUBLESHOOTING.md")),
+        # The installer skeleton already contains docs/troubleshooting.md.
+        # Replace it with the canonical document using the same casing so the
+        # ZIP is byte-for-byte portable to Windows' case-insensitive filesystem.
+        (ROOT / "docs" / "TROUBLESHOOTING.md", Path("docs/troubleshooting.md")),
         (ROOT / "docs" / "ARCHITECTURE.md", Path("docs/ARCHITECTURE.md")),
         (ROOT / "docs" / "MEMORY_MACHINE.md", Path("docs/MEMORY_MACHINE.md")),
         (ROOT / "docs" / "DEVELOPMENT.md", Path("docs/DEVELOPMENT.md")),

@@ -5,10 +5,10 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
 from memorist.backend import import_proxy
 from memorist.backend.filter_provisioning import managed_filter_content
 from memorist.backend.router import OpenWebUIActor, require_openwebui_actor
+from memorist.filter.memorist_memory_filter import Filter as PackagedFilter
 
 
 class FakeResponse:
@@ -26,22 +26,18 @@ class FakeAsyncClient:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    async def __aenter__(self) -> "FakeAsyncClient":
+    async def __aenter__(self) -> FakeAsyncClient:
         return self
 
     async def __aexit__(self, *args: Any) -> None:
         return None
 
     async def request(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
-        self.calls.append(
-            {"kind": "request", "method": method, "url": url, **kwargs}
-        )
+        self.calls.append({"kind": "request", "method": method, "url": url, **kwargs})
         return FakeResponse()
 
     async def post(self, url: str, **kwargs: Any) -> FakeResponse:
-        self.calls.append(
-            {"kind": "upload", "method": "POST", "url": url, **kwargs}
-        )
+        self.calls.append({"kind": "upload", "method": "POST", "url": url, **kwargs})
         return FakeResponse()
 
 
@@ -90,10 +86,7 @@ def test_import_proxy_forwards_only_after_admin_auth(monkeypatch: Any) -> None:
     assert FakeMemoristClient.actor_calls == [
         ("GET", "/memcore/imports", "admin-user", "server-workspace")
     ]
-    assert (
-        FakeAsyncClient.calls[0]["url"]
-        == "http://memorist-core:8777/memcore/imports"
-    )
+    assert FakeAsyncClient.calls[0]["url"] == "http://memorist-core:8777/memcore/imports"
     assert FakeAsyncClient.calls[0]["params"] == [("limit", "10")]
 
 
@@ -133,3 +126,35 @@ def test_managed_filter_overwrites_browser_workspace(monkeypatch: Any) -> None:
     )
 
     assert actor["workspace_id"] == "server-workspace"
+
+
+def test_managed_filter_forwards_trusted_host_metadata(monkeypatch: Any) -> None:
+    monkeypatch.setenv("MEMORIST_OPENWEBUI_WORKSPACE_UUID", "server-workspace")
+    received: dict[str, Any] = {}
+
+    def fake_inlet(
+        _self: Any,
+        body: dict[str, Any],
+        __user__: dict[str, Any] | None = None,
+        __metadata__: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        received["user"] = __user__
+        received["metadata"] = __metadata__
+        return body
+
+    monkeypatch.setattr(PackagedFilter, "inlet", fake_inlet)
+    namespace: dict[str, Any] = {}
+    exec(managed_filter_content(), namespace)
+
+    result = namespace["Filter"]().inlet(
+        {"messages": []},
+        __user__={"id": "user-1", "workspace_id": "browser-workspace"},
+        __metadata__={"chat_id": "trusted-chat-id"},
+    )
+
+    assert result == {"messages": []}
+    assert received["user"] == {
+        "id": "user-1",
+        "workspace_id": "server-workspace",
+    }
+    assert received["metadata"] == {"chat_id": "trusted-chat-id"}
