@@ -356,8 +356,11 @@ jobs:
           set -euo pipefail
           npm ci
           npm install --no-save @playwright/test@1.49.1
-          # Install the Chromium browser + OS deps the runner needs to launch it.
-          npx playwright install --with-deps chromium
+          # Install the Chromium browser. Prefer pulling OS deps too, but this
+          # self-hosted runner's user cannot sudo without a password, so fall
+          # back to a browser-only install (the runner pool already carries the
+          # shared libraries Chromium needs to launch).
+          npx playwright install --with-deps chromium || npx playwright install chromium
       - name: Playwright product E2E — phase 1 (setup, capture, retrieval, off, security, isolation)
         env:
           MEMORIST_E2E_BASE_URL: http://localhost:3000
