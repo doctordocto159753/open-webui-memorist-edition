@@ -4,12 +4,8 @@ import { ADMIN_STORAGE_STATE, BASE_URL } from "./helpers";
 
 export default defineConfig({
   testDir: ".",
-  // A full page.reload() re-initializes the whole Open WebUI SPA (re-fetch
-  // session user + model lists) before route content renders; on a cold stack
-  // with unconfigured/slow provider discovery this can take well over 20s, so
-  // give assertions and tests headroom.
-  timeout: 180_000,
-  expect: { timeout: 40_000 },
+  timeout: 120_000,
+  expect: { timeout: 20_000 },
   fullyParallel: false,
   workers: 1,
   retries: 0,
