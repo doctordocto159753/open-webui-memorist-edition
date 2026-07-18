@@ -1,0 +1,42 @@
+--- a/src/routes/(app)/+layout.svelte
++++ b/src/routes/(app)/+layout.svelte
+@@ -70,6 +70,13 @@
+ 		}
+ 	};
+ 
++	const initializeProviderDependentState = async () => {
++		await Promise.all([
++			setModels().catch((e) => console.error('Failed to load models:', e)),
++			setToolServers().catch((e) => console.error('Failed to load tool servers:', e))
++		]);
++	};
++
+ 	const setBanners = async () => {
+ 		const bannersData = await getBanners(localStorage.token);
+ 		banners.set(bannersData);
+@@ -89,15 +96,21 @@
+ 			return;
+ 		}
+ 
++		const isMemoristSettingsRoute = $page.url.pathname.startsWith('/settings/memorist/');
++
+ 		clearChatInputStorage();
+ 		await Promise.all([
+ 			checkLocalDBChats(),
+ 			setBanners().catch((e) => console.error('Failed to load banners:', e)),
+ 			setTools().catch((e) => console.error('Failed to load tools:', e)),
+ 			setUserSettings(async () => {
+-				await Promise.all([
+-					setModels().catch((e) => console.error('Failed to load models:', e)),
+-					setToolServers().catch((e) => console.error('Failed to load tool servers:', e))
+-				]);
++				// First-run Memorist settings do not depend on Open WebUI model or
++				// tool-server discovery. Run those optional calls in the background so
++				// a slow or unavailable provider cannot block the settings route.
++				if (isMemoristSettingsRoute) {
++					void initializeProviderDependentState();
++					return;
++				}
++				await initializeProviderDependentState();
+ 			}).catch((e) => console.error('Failed to load user settings:', e))
+ 		]);
