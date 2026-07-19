@@ -31,6 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
+from installer.scripts.runtime_contexts import verify_runtime_contexts  # noqa: E402
 from release.scan_forbidden_files import scan_path  # noqa: E402
 
 REQUIRED_ROOT_ENTRIES = [
@@ -57,6 +58,11 @@ REQUIRED_RUNTIME_ENTRIES = [
     "runtime/open-webui-integration/memorist/backend/openwebui_entrypoint.py",
     "runtime/open-webui-integration/memorist/backend/route_order.py",
     "runtime/open-webui-integration/memorist/backend/filter_provisioning.py",
+    # The two build inputs whose absence produced the reported
+    # "COPY ... not found" Docker failures. They are COPY'd by
+    # runtime/openwebui-image/Dockerfile and must ship in the archive.
+    "runtime/open-webui-integration/memorist/backend/patch_openwebui_backend.py",
+    "runtime/open-webui-integration/memorist/ui/surfaces.ts",
     "runtime/openwebui-image/Dockerfile",
     "runtime/openwebui-image/source-pin.json",
     "runtime/openwebui-image/prepare_frontend_tree.sh",
@@ -124,6 +130,13 @@ def validate(zip_path: Path) -> dict[str, object]:
         for entry in REQUIRED_RUNTIME_ENTRIES:
             if not (package / entry).is_file():
                 _fail(f"required runtime file missing: {entry}")
+
+        # Drift guard: assert every COPY source in the shipped Dockerfiles
+        # resolves inside its build context, so the extracted package can
+        # actually run `docker compose build` without a "COPY ... not found".
+        runtime_issues = verify_runtime_contexts(package)
+        if runtime_issues:
+            _fail("incomplete runtime build contexts: " + "; ".join(runtime_issues[:10]))
 
         actual_files = {
             path.relative_to(package).as_posix(): path
