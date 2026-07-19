@@ -23,10 +23,20 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "memorist-core" / "src"))
 
+from installer.scripts.runtime_contexts import (  # noqa: E402
+    REQUIRED_RUNTIME_PATHS,
+    verify_runtime_contexts,
+)
 from release.package_manifest import build_package_manifest  # noqa: E402
 from release.scan_forbidden_files import scan_path  # noqa: E402
 
 from memcore.version import SCHEMA_VERSION, __version__  # noqa: E402
+
+# Fixed archive-entry timestamp so the ZIP is byte-reproducible across clean
+# checkouts. Git does not preserve file mtimes, so without this the embedded
+# per-entry timestamps (and therefore the archive digest) would vary run to run
+# even though the packaged contents are identical. 1980-01-01 is the ZIP epoch.
+DETERMINISTIC_DATE_TIME = (1980, 1, 1, 0, 0, 0)
 
 RC_ROOT = ROOT / "release" / "rc"
 TARGET = RC_ROOT / f"memorist-openwebui-{VERSION}"
@@ -85,6 +95,16 @@ def assemble() -> dict[str, str]:
     _copy_archive_docs()
     _normalize_text_files(TARGET)
 
+    # Fail before publishing: the archive is worthless if the Docker build
+    # contexts it ships are incomplete, so refuse to produce a manifest or ZIP
+    # for a package whose runtime trees regressed. This turns a
+    # "COPY ... not found" failure on the end user's machine into a build-time
+    # error here, at assembly time.
+    runtime_issues = verify_runtime_contexts(TARGET)
+    if runtime_issues:
+        detail = "; ".join(runtime_issues[:10])
+        raise RuntimeError(f"incomplete runtime build contexts in RC staging: {detail}")
+
     # Integrity layering (documented in release/packaging.md):
     #   1. checksums.sha256 covers every shipped file except itself and
     #      package-manifest.ijson (integrity metadata is excluded from the
@@ -95,6 +115,7 @@ def assemble() -> dict[str, str]:
     #   3. The ZIP's SHA-256 (sidecar .sha256) covers the whole archive.
     _refresh_installer_checksums()
     manifest = build_package_manifest(TARGET, exclude_names={"package-manifest.ijson"})
+    _assert_manifest_covers_runtime(manifest)
     (TARGET / "package-manifest.ijson").write_text(
         json.dumps(manifest, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
@@ -114,7 +135,7 @@ def assemble() -> dict[str, str]:
     with zipfile.ZipFile(ZIP_PATH, "w", zipfile.ZIP_DEFLATED) as package:
         for path in sorted(TARGET.rglob("*"), key=lambda p: p.relative_to(TARGET).as_posix()):
             if path.is_file():
-                package.write(path, path.relative_to(RC_ROOT).as_posix())
+                _write_deterministic(package, path, path.relative_to(RC_ROOT).as_posix())
 
     digest = hashlib.sha256(ZIP_PATH.read_bytes()).hexdigest()
     SHA_PATH.write_text(f"{digest}  {ZIP_PATH.name}\n", encoding="utf-8")
@@ -125,6 +146,19 @@ def assemble() -> dict[str, str]:
 
     shutil.rmtree(TARGET)
     return {"zip": str(ZIP_PATH), "sha256": str(SHA_PATH), "digest": digest}
+
+
+def _write_deterministic(package: zipfile.ZipFile, path: Path, arcname: str) -> None:
+    """Add ``path`` to the archive with a fixed timestamp for reproducibility.
+
+    Only the entry's stored mtime is normalized; file content and Unix mode
+    (git preserves the executable bit) are carried through unchanged, so the
+    integrity layers that hash file bytes are unaffected.
+    """
+    info = zipfile.ZipInfo(arcname, date_time=DETERMINISTIC_DATE_TIME)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.external_attr = (path.stat().st_mode & 0xFFFF) << 16
+    package.writestr(info, path.read_bytes())
 
 
 def _write_source_version_metadata() -> None:
@@ -192,6 +226,28 @@ def _copy_archive_docs() -> None:
         destination = TARGET / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
+
+
+def _assert_manifest_covers_runtime(manifest: dict[str, object]) -> None:
+    """Every required runtime path must be represented in the shipped manifest.
+
+    A required file must be declared verbatim; a required directory must have at
+    least one file declared beneath it. This keeps the manifest an honest
+    inventory of the build contexts even if a future exclusion rule is added.
+    """
+    declared = {item["path"] for item in manifest["files"]}  # type: ignore[index]
+    missing: list[str] = []
+    for rel in REQUIRED_RUNTIME_PATHS:
+        target = (TARGET / rel)
+        if target.is_dir():
+            prefix = f"{rel}/"
+            if not any(path.startswith(prefix) for path in declared):
+                missing.append(rel)
+        elif rel not in declared:
+            missing.append(rel)
+    if missing:
+        detail = "; ".join(sorted(missing)[:10])
+        raise RuntimeError(f"package manifest omits required runtime paths: {detail}")
 
 
 def _copy_installer_runtime() -> None:

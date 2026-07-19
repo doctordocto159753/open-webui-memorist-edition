@@ -14,6 +14,9 @@ if str(ROOT) not in sys.path:
 if str(CORE_SRC) not in sys.path:
     sys.path.insert(0, str(CORE_SRC))
 
+from installer.scripts.runtime_contexts import (  # noqa: E402
+    verify_runtime_contexts_in_zip_names,
+)
 from memcore.version import SCHEMA_VERSION  # noqa: E402
 from release.scan_forbidden_files import scan_path  # noqa: E402
 
@@ -75,6 +78,11 @@ def validate_rc_package() -> dict[str, Any]:
 
     with zipfile.ZipFile(ZIP_PATH) as package:
         names = package.namelist()
+        # The archive must carry every Docker build context the packaged
+        # compose files build from source; a missing runtime tree ships a
+        # package that cannot `docker compose build` on the user's machine.
+        for missing in verify_runtime_contexts_in_zip_names(names):
+            issues.append({"issue_code": "missing_runtime_context", "detail": missing})
         case_insensitive_names: dict[str, str] = {}
         for name in names:
             normalized = name.casefold()
