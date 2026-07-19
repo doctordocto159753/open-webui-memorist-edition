@@ -64,7 +64,11 @@ jobs:
           echo "OK: no agent artifacts in tracked files"
       - name: No obvious real secrets in tracked text files
         run: |
-          bad=$(git grep -nIE "sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|BEGIN (RSA |EC )?PRIVATE KEY" -- . || true)
+          # The legacy literal below is an explicit non-provider test canary kept
+          # in one E2E fallback. Exclude only that exact value; every other
+          # provider-shaped token remains release-blocking.
+          bad=$(git grep -nIE "sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|BEGIN (RSA |EC )?PRIVATE KEY" -- . \
+            | grep -vF 'sk-memorist-e2e-canary-000000000000' || true)
           if [ -n "$bad" ]; then echo "Secret-like content found:"; echo "$bad"; exit 1; fi
           echo "OK: no secret-like content"
 

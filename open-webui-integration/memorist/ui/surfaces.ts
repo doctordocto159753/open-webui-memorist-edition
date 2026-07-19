@@ -3,26 +3,28 @@ import "./memoryNodeSetup";
 import "./importWorkflow";
 import "./memoryAttachment";
 import "./memoryWorkflowToggle";
+import "./diagnostics";
+import "./messageDisclosure";
 
+import { MEMORIST_DIAGNOSTICS_ROUTE } from "./diagnostics";
 import { MEMORIST_MEMORY_NODE_SETUP_ROUTE } from "./memoryNodeSetup";
 import { MEMORIST_PROCESSING_NODES_ROUTE } from "./processingNodes";
 
+/**
+ * Surfaces that are implemented, mounted in the shipped Open WebUI frontend,
+ * and covered by integration tests. This list is a release claim: adding a
+ * name here without a mounted production component is a release defect.
+ * Former aspirational entries were removed in PR5-G (see ui/README.md) and
+ * remain future work; they must not be re-added until actually mounted.
+ */
 export const MEMORIST_UI_SURFACES = [
-  "MemoristPanel",
-  "FirstRunWizard",
-  "MemoryOverviewTab",
-  "ActiveBlocksTab",
-  "ImportTab",
-  "ExportTab",
-  "CostTab",
-  "ModelControlTab",
-  "PrivacyTab",
-  "DiagnosticsTab",
-  "SettingsTab",
-  "MemoristProcessingNodesSettings",
   "MemoryNodeSetup",
+  "MemoristProcessingNodesSettings",
+  "MemoristDiagnostics",
+  "ImportTab",
   "MemoryAttachment",
   "MemoryWorkflowToggle",
+  "MemoristMessageDisclosure",
 ] as const;
 
 export type MemoristSurface = typeof MEMORIST_UI_SURFACES[number];
@@ -40,18 +42,6 @@ export type MemoristSettingsRoute = {
   element: string;
 };
 
-export function firstRunWizardSteps() {
-  return [
-    "Local-only confirmation",
-    "Runtime check",
-    "Workspace and project",
-    "Configure Memorist model roles",
-    "Memory mode",
-    "Optional import",
-    "Finish smoke check",
-  ];
-}
-
 export function destructiveActionsRequireConfirmation(action: string): boolean {
   return ["import_commit", "forget_memory", "delete_session", "purge_project", "restore"].includes(action);
 }
@@ -63,6 +53,7 @@ export function sanitizeUiText(value: string): string {
 export const MEMORIST_SETTINGS_ROUTES = {
   memorySetup: MEMORIST_MEMORY_NODE_SETUP_ROUTE,
   processingNodes: MEMORIST_PROCESSING_NODES_ROUTE,
+  diagnostics: MEMORIST_DIAGNOSTICS_ROUTE,
   importWorkflow: "/settings/memorist/import",
 } as const;
 
@@ -79,6 +70,18 @@ export const MEMORIST_SETTINGS_NAVIGATION: readonly MemoristSettingsNavigationIt
     surface: "MemoristProcessingNodesSettings",
     adminOnly: true,
   },
+  {
+    label: "Diagnostics",
+    href: MEMORIST_SETTINGS_ROUTES.diagnostics,
+    surface: "MemoristDiagnostics",
+    adminOnly: true,
+  },
+  {
+    label: "Import",
+    href: MEMORIST_SETTINGS_ROUTES.importWorkflow,
+    surface: "ImportTab",
+    adminOnly: true,
+  },
 ] as const;
 
 export const MEMORIST_SETTINGS_ROUTE_MOUNTS: readonly MemoristSettingsRoute[] = [
@@ -91,6 +94,11 @@ export const MEMORIST_SETTINGS_ROUTE_MOUNTS: readonly MemoristSettingsRoute[] = 
     path: MEMORIST_SETTINGS_ROUTES.processingNodes,
     surface: "MemoristProcessingNodesSettings",
     element: "memorist-processing-nodes-settings",
+  },
+  {
+    path: MEMORIST_SETTINGS_ROUTES.diagnostics,
+    surface: "MemoristDiagnostics",
+    element: "memorist-diagnostics",
   },
   {
     path: MEMORIST_SETTINGS_ROUTES.importWorkflow,
@@ -113,3 +121,5 @@ export {
 } from "./memoryWorkflowToggle";
 
 export { mountMemoryNodeSetup } from "./memoryNodeSetup";
+export { mountMemoristDiagnostics } from "./diagnostics";
+export { mountMessageDisclosure } from "./messageDisclosure";

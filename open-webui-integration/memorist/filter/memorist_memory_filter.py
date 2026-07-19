@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -24,21 +25,29 @@ from shared.payload_parser import (  # noqa: E402
 
 class Filter:
     class Valves:
-        memorist_core_url: str = "http://localhost:8777"
+        # Defaults come from the trusted container environment so the
+        # auto-provisioned filter works without manual valve editing.
+        memorist_core_url: str = os.getenv("MEMORIST_CORE_URL", "http://localhost:8777")
         enabled: bool = True
         preflight_enabled: bool = True
         fail_open: bool = True
         debug: bool = False
-        retrieval_mode: str = "standard"
-        token_budget: int = 1800
-        timeout_ms: int = 1200
+        retrieval_mode: str = os.getenv("MEMORIST_RETRIEVAL_MODE", "standard")
+        token_budget: int = int(os.getenv("MEMORIST_ATTACHMENT_TOKEN_BUDGET", "1800"))
+        timeout_ms: int = int(os.getenv("MEMORIST_PREFLIGHT_TIMEOUT_MS", "1200"))
 
     def __init__(self) -> None:
         self.valves = self.Valves()
         self._completed_response_keys: set[str] = set()
 
-    def inlet(self, body: dict[str, Any], __user__: dict[str, Any] | None = None) -> dict[str, Any]:
+    def inlet(
+        self,
+        body: dict[str, Any],
+        __user__: dict[str, Any] | None = None,
+        __metadata__: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         config = _config_from_valves(self.valves)
+        _apply_trusted_host_metadata(body, __metadata__)
         remove_memory_attachments(body)
         if not config.enabled:
             return body
@@ -336,6 +345,29 @@ def _metadata(body: dict[str, Any]) -> dict[str, Any]:
         metadata = {}
         body["metadata"] = metadata
     return metadata
+
+
+def _apply_trusted_host_metadata(
+    body: dict[str, Any], host_metadata: dict[str, Any] | None
+) -> None:
+    """Expose only the host-authenticated chat identity to the payload parser.
+
+    Open WebUI passes its canonical chat ID through the filter's special
+    ``__metadata__`` argument, not through the browser-controlled request body.
+    Keep it in a separate trusted key so a forged top-level conversation ID
+    cannot bypass a persisted Memory Off ceiling.
+    """
+
+    if not isinstance(host_metadata, dict):
+        return
+    chat_id = host_metadata.get("chat_id")
+    if chat_id is None or not str(chat_id).strip():
+        return
+    metadata = _metadata(body)
+    if str(chat_id).startswith("local:"):
+        metadata["memorist_trusted_temporary_chat_id"] = str(chat_id)
+    else:
+        metadata["memorist_trusted_conversation_id"] = str(chat_id)
 
 
 def _config_from_valves(valves: Any) -> MemoristIntegrationConfig:

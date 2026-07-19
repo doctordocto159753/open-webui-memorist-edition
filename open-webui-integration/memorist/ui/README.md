@@ -1,30 +1,39 @@
 ﻿# Memorist UI Surface Contract
 
-Phase 7 ships the minimum product UI contract for an Open WebUI fork/add-on without replacing Open WebUI branding.
+PR5-G ships the first fully integrated Memorist product UI: every surface
+listed in `MEMORIST_UI_SURFACES` (`surfaces.ts`) is implemented as a web
+component in this folder, compiled into the derivative Open WebUI frontend
+(`release/openwebui-image/`), mounted in production navigation, and covered by
+integration tests. The list is a release claim — a name may only appear there
+once its component is actually reachable in the shipped product.
 
-Required surfaces:
+Shipped surfaces:
 
-- MemoristPanel
-- FirstRunWizard
-- MemoryOverviewTab
-- ActiveBlocksTab
-- ImportTab
-- ExportTab
-- CostTab
-- PrivacyTab
-- DiagnosticsTab
-- SettingsTab
+- `MemoryNodeSetup` — `/settings/memorist/memory-setup` (admin)
+- `MemoristProcessingNodesSettings` — `/settings/memorist/processing-nodes` (admin)
+- `MemoristDiagnostics` — `/settings/memorist/diagnostics` (admin)
+- `ImportTab` — `/settings/memorist/import` (admin)
+- `MemoryWorkflowToggle` — mounted beside the chat composer
+- `MemoryAttachment` + `MemoristMessageDisclosure` — mounted in the
+  assistant-message renderer; the disclosure queries persisted delivery truth
+  through `/api/v1/memorist/memory-control/messages/{id}/attachment` and stays
+  silent for turns without a delivered attachment
+
+Former aspirational surface names (MemoristPanel, FirstRunWizard,
+MemoryOverviewTab, ActiveBlocksTab, ExportTab, CostTab, ModelControlTab,
+PrivacyTab, DiagnosticsTab, SettingsTab) were removed from the contract in
+PR5-G. They remain future work and must not be advertised until mounted.
 
 The TypeScript files in this folder describe the typed Core client and UI behavior invariants. They intentionally avoid external scripts and never render imported HTML directly.
 
 ## Processing Nodes settings page
 
 The admin/settings surface for the Model Control Plane is implemented by the
-`memorist-processing-nodes-settings` web component in `processingNodes.ts` and is
-intended to be mounted at `/settings/memorist/processing-nodes`. It calls the
-live `/memcore/model-control/profiles`, `/memcore/model-control/defaults`,
-`/memcore/model-control/health`, and `/memcore/model-control/privacy/acknowledge`
-endpoints so backend validation and operational errors remain visible inline.
+`memorist-processing-nodes-settings` web component in `processingNodes.ts`,
+mounted at `/settings/memorist/processing-nodes`. It uses the authenticated
+`/api/v1/memorist` proxy for profiles, defaults, health, role-aware provider
+tests, and privacy acknowledgement, so backend validation and operational
+errors remain visible inline.
 
 ## Memory used in chat
 

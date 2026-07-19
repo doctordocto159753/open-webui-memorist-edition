@@ -21,6 +21,7 @@ from memcore.api.routes_scheduler import router as scheduler_router
 from memcore.config import get_settings
 from memcore.imports.runtime import initialize_runtime_storage
 from memcore.imports.worker import ImportReconstructionWorkerService
+from memcore.memory_worker.service import MemoryJobWorkerService
 from memcore.observability.logging import configure_logging
 from memcore.security.actor import MemoristActorMiddleware
 from memcore.version import __version__
@@ -29,13 +30,17 @@ from memcore.version import __version__
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
-    worker = ImportReconstructionWorkerService(settings)
-    app.state.import_reconstruction_worker = worker
-    worker.start()
+    import_worker = ImportReconstructionWorkerService(settings)
+    memory_worker = MemoryJobWorkerService(settings)
+    app.state.import_reconstruction_worker = import_worker
+    app.state.memory_job_worker = memory_worker
+    import_worker.start()
+    memory_worker.start()
     try:
         yield
     finally:
-        worker.stop()
+        memory_worker.stop()
+        import_worker.stop()
 
 
 def create_app() -> FastAPI:

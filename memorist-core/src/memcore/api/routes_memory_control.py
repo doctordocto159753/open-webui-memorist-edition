@@ -241,6 +241,52 @@ def update_memory_workflow(
         )
 
 
+@router.get("/messages/{openwebui_message_id}/attachment", response_model=None)
+def message_attachment_disclosure(
+    openwebui_message_id: str,
+    x_memorist_user_id: str | None = Header(default=None),
+    x_memorist_workspace_id: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Read-only adapter: truthful attachment state for one captured chat turn.
+
+    The Open WebUI frontend only knows Open WebUI message identifiers. This
+    endpoint maps the captured input message to its newest context attachment
+    so the assistant-turn disclosure reflects persisted delivery truth instead
+    of browser-side assumptions. Actor scoping is mandatory; turns without an
+    attachment stay quiet via ``{"status": "none"}``.
+    """
+    actor_user, actor_workspace = _actor(x_memorist_user_id, x_memorist_workspace_id)
+    if not actor_user or not actor_workspace:
+        raise HTTPException(status_code=401, detail="authenticated Memorist actor required")
+    settings = get_settings()
+    with memory_control_connection(settings) as connection:
+        row = connection.execute(
+            """
+            SELECT a.attachment_uuid, a.lifecycle_status, a.created_at
+            FROM memory_context_attachments a
+            JOIN openwebui_message_captures c ON c.message_uuid = a.input_message_uuid
+            WHERE c.openwebui_message_id = ?
+              AND a.owner_user_uuid = ?
+              AND a.owner_user_uuid IS NOT NULL
+              AND a.workspace_uuid = ?
+              AND a.workspace_uuid IS NOT NULL
+            ORDER BY a.created_at DESC, a.attachment_uuid DESC
+            LIMIT 1
+            """,
+            (openwebui_message_id, actor_user, actor_workspace),
+        ).fetchone()
+    if row is None:
+        return {"status": "none", "attachment_uuid": None, "disclose": False}
+    record = dict(row)
+    lifecycle = str(record.get("lifecycle_status") or "prepared")
+    disclose = lifecycle in {"delivered", "used_for_response"}
+    return {
+        "status": lifecycle,
+        "attachment_uuid": record.get("attachment_uuid") if disclose else None,
+        "disclose": disclose,
+    }
+
+
 @router.get("/attachments/{attachment_uuid}/preview", response_model=None)
 def preview_attachment(
     attachment_uuid: str,

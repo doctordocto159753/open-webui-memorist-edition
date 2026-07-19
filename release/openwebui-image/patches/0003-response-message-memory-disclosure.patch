@@ -1,0 +1,23 @@
+--- a/src/lib/components/chat/Messages/ResponseMessage.svelte	2020-02-02 00:00:00.000000000 +0000
++++ b/src/lib/components/chat/Messages/ResponseMessage.svelte	2026-07-16 23:31:47.118216495 +0000
+@@ -53,6 +53,7 @@
+ 
+ 	import Error from './Error.svelte';
+ 	import Citations from './Citations.svelte';
++	import MemoristMessageDisclosure from '$lib/components/memorist/MemoristMessageDisclosure.svelte';
+ 	import CodeExecutions from './CodeExecutions.svelte';
+ 	import ContentRenderer from './ContentRenderer.svelte';
+ 	import { KokoroWorker } from '$lib/workers/KokoroWorker';
+@@ -886,6 +887,12 @@
+ 							{#if message.code_executions}
+ 								<CodeExecutions codeExecutions={message.code_executions} />
+ 							{/if}
++
++							<MemoristMessageDisclosure
++								messageId={message.id}
++								parentMessageId={message.parentId ?? ''}
++								done={message.done === true}
++							/>
+ 						</div>
+ 					</div>
+ 				</div>

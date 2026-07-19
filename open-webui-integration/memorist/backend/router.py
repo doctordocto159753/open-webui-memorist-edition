@@ -171,6 +171,64 @@ def openwebui_status(actor: AuthenticatedActor) -> dict[str, Any]:
     )
 
 
+_SAFE_CORE_HEALTH_FIELDS = (
+    "status",
+    "service",
+    "local_only",
+    "runtime_profile",
+    "canonical_store",
+    "graph_backend",
+    "graph_status",
+    "scheduler",
+    "hot_scheduler",
+    "profile_warnings",
+    "full_mode_certification",
+)
+
+
+@router.get("/openwebui/diagnostics")
+def openwebui_diagnostics(request: Request, actor: AuthenticatedAdmin) -> dict[str, Any]:
+    """Administrator diagnostics: safe core health plus host integration state.
+
+    Only allow-listed core health fields are forwarded; DSNs, secrets, and
+    raw configuration never cross this boundary. ``full_mode_certification``
+    is annotated so ``not_run`` reads as pending evidence, not a failure.
+    """
+    health = MemoristClient().health()
+    safe_health = {key: health.get(key) for key in _SAFE_CORE_HEALTH_FIELDS if key in health}
+    certification = safe_health.get("full_mode_certification")
+    if certification == "not_run":
+        safe_health["full_mode_certification_note"] = (
+            "Full-mode certification has not been executed on this installation "
+            "yet. This is an evidence gap, not a runtime failure; run "
+            "Test-Memorist-Full.ps1 to record it."
+        )
+    try:
+        from .openwebui_entrypoint import detect_openwebui_versions
+
+        host_version = next(iter(detect_openwebui_versions()), "unknown")
+    except Exception:  # pragma: no cover - only outside the real host app
+        host_version = "unknown"
+    integration = getattr(request.app.state, "memorist_integration", None) or {}
+    return {
+        "core_health": safe_health,
+        "integration": integration,
+        "openwebui_version": host_version,
+    }
+
+
+@router.get("/memory-control/messages/{openwebui_message_id}/attachment")
+def message_attachment_disclosure(
+    openwebui_message_id: str,
+    actor: AuthenticatedActor,
+) -> dict[str, Any]:
+    return _call(
+        actor,
+        "GET",
+        f"/memory-control/messages/{quote(openwebui_message_id, safe='')}/attachment",
+    )
+
+
 @router.post("/memory-control/review/prepare")
 async def prepare_attachment_review(request: Request, actor: AuthenticatedActor) -> dict[str, Any]:
     payload = await _object_body(request)

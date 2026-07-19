@@ -39,6 +39,8 @@ services:
       MEMORIST_IMPORT_RECONSTRUCTION_API_KEY: ${MEMORIST_IMPORT_RECONSTRUCTION_API_KEY:-}
     ports:
       - "127.0.0.1:${MEMORIST_PORT:-8777}:8777"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - memorist-objects:/objects
       - memorist-import-staging:/imports

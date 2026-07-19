@@ -51,3 +51,8 @@ release/source/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# PR5-G E2E artifacts
+tests/e2e/.state/
+playwright-report/
+playwright-results.json

@@ -17,6 +17,18 @@
 
 Set-StrictMode -Version Latest
 
+function Get-MemoristDockerCli {
+    <#
+        The docker executable to invoke. Production always uses 'docker' on
+        PATH. Behavioral tests set MEMORIST_DOCKER_CLI to a controlled shim so
+        Docker/Compose readiness and failures can be simulated deterministically
+        without relying on PATH ordering. This never affects a real install
+        (the variable is unset there).
+    #>
+    if ($env:MEMORIST_DOCKER_CLI) { return $env:MEMORIST_DOCKER_CLI }
+    return 'docker'
+}
+
 # ---------------------------------------------------------------------------
 # Constants shared across the installer surface.
 # ---------------------------------------------------------------------------
@@ -90,10 +102,11 @@ function Get-MemoristComposeCommand {
         ("docker compose") and falls back to the legacy "docker-compose".
         Returns $null when neither is available.
     #>
-    if (Get-Command docker -ErrorAction SilentlyContinue) {
-        & docker compose version *> $null
+    $dockerCli = Get-MemoristDockerCli
+    if (Get-Command $dockerCli -ErrorAction SilentlyContinue) {
+        & $dockerCli compose version *> $null
         if ($LASTEXITCODE -eq 0) {
-            return @('docker', 'compose')
+            return @($dockerCli, 'compose')
         }
     }
     if (Get-Command docker-compose -ErrorAction SilentlyContinue) {
@@ -115,13 +128,14 @@ function Test-MemoristDocker {
         Ready         = $false
     }
 
-    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+    $dockerCli = Get-MemoristDockerCli
+    if (-not (Get-Command $dockerCli -ErrorAction SilentlyContinue)) {
         $result.Message = 'Docker CLI not found. Install Docker Desktop and reopen this window.'
         return [pscustomobject]$result
     }
     $result.CliPresent = $true
 
-    & docker info *> $null
+    & $dockerCli info *> $null
     if ($LASTEXITCODE -ne 0) {
         $result.Message = 'Docker is installed but the daemon is not reachable. Start Docker Desktop and wait for it to report "Running".'
         return [pscustomobject]$result
@@ -320,6 +334,33 @@ function Test-MemoristHttp {
     }
 }
 
+function Test-MemoristProxyRoutes {
+    <#
+        Verifies the authenticated Memorist proxy is actually mounted inside
+        Open WebUI. An unauthenticated probe of a known Memorist API path must
+        return HTTP 401 JSON. A 404, HTML, or 2xx response means the SPA
+        catch-all swallowed the API route: the product would look healthy while
+        the entire Memorist surface is unreachable, so Start must fail.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][int]$WebPort,
+        [int]$TimeoutSec = 5
+    )
+    $url = "http://localhost:$WebPort/api/v1/memorist/openwebui/status"
+    try {
+        # Portable across Windows PowerShell 5.1 and PowerShell 7: a
+        # successful (2xx/3xx) unauthenticated response means the SPA
+        # catch-all swallowed the API path, which is a failure.
+        $null = Invoke-WebRequest -Uri $url -TimeoutSec $TimeoutSec -UseBasicParsing -ErrorAction Stop
+        return $false
+    } catch {
+        $response = $_.Exception.Response
+        if ($null -eq $response) { return $false }
+        $status = [int]$response.StatusCode
+        return ($status -eq 401 -or $status -eq 403)
+    }
+}
+
 function Wait-MemoristService {
     <#
         Polls a health URL until healthy or the deadline passes. Prints a single
@@ -434,7 +475,12 @@ function Test-MemoristComposeService {
     )
     $overlay = Get-MemoristComposeOverlay -Root (Split-Path -Parent $ComposeFile) -Mode $Mode
     $exe = $Compose[0]
-    $prefix = if ($Compose.Length -gt 1) { $Compose[1..($Compose.Length - 1)] } else { @() }
+    # Keep this as an array on Windows PowerShell 5.1. Assigning an `if`
+    # expression that emits one item produces a scalar string; adding the
+    # remaining argv array then concatenates everything into one malformed
+    # argument such as "compose-f ...".
+    $prefix = @()
+    if ($Compose.Length -gt 1) { $prefix = $Compose[1..($Compose.Length - 1)] }
     $full = $prefix + @('-f', $ComposeFile, '-f', $overlay) + $Arguments
     & $exe @full *> $null
     return ($LASTEXITCODE -eq 0)

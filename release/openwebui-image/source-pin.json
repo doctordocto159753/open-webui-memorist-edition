@@ -1,0 +1,21 @@
+{
+  "openwebui_version": "0.9.6",
+  "source_snapshot": {
+    "kind": "pypi_sdist",
+    "url": "https://files.pythonhosted.org/packages/3a/c7/3d5d4465e7bb7fc1832f0e63eaf988d847af5c8dbc9595d342fc681dbfdf/open_webui-0.9.6.tar.gz",
+    "sha256": "91b38fa35917bb7d2f645d030ed3b9544d35b72354bce3098d059899fd7f688b",
+    "extracted_root": "open_webui-0.9.6"
+  },
+  "base_image": {
+    "reference": "ghcr.io/open-webui/open-webui:v0.9.6",
+    "digest": "sha256:90eae5b419e40b4c3dd684582b2c83440b36f9ae2f6532c09639b2ba4ee65158"
+  },
+  "frontend_builder_image": {
+    "reference": "docker.io/library/node:22-alpine3.20",
+    "digest": "sha256:2289fb1fba0f4633b08ec47b94a89c7e20b829fc5679f9b7b298eaa2f1ed8b7e"
+  },
+  "memorist_image": {
+    "name": "memorist/openwebui",
+    "tag": "0.2.0-beta.2"
+  }
+}

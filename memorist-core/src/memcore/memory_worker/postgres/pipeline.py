@@ -927,6 +927,7 @@ class PostgresMemoryWorkerPipeline:
         prompt_execution_uuid: str,
     ) -> int:
         created = 0
+        scope_type, scope_uuid = _scope_for_message(message)
         for candidate in candidates:
             if str(candidate.get("status")) != "accepted":
                 continue
@@ -936,16 +937,17 @@ class PostgresMemoryWorkerPipeline:
                 f"message:{message['message_uuid']}:candidate:{candidate['candidate_uuid']}"
             )
             existing = self.connection.execute(
-                "SELECT memory_uuid FROM memories WHERE scope_type = 'session' AND scope_uuid = %s AND canonical_key = %s",
-                (message["session_uuid"], canonical_key),
+                "SELECT memory_uuid FROM memories WHERE scope_type = %s AND scope_uuid = %s AND canonical_key = %s",
+                (scope_type, scope_uuid, canonical_key),
             ).fetchone()
             if existing:
                 continue
             self.connection.execute(
-                "INSERT INTO memories (memory_uuid, scope_type, scope_uuid, canonical_key, current_version_uuid, status, created_at, updated_at, schema_version) VALUES (%s,'session',%s,%s,%s,'active',%s,%s,1)",
+                "INSERT INTO memories (memory_uuid, scope_type, scope_uuid, canonical_key, current_version_uuid, status, created_at, updated_at, schema_version) VALUES (%s,%s,%s,%s,%s,'active',%s,%s,1)",
                 (
                     memory_uuid,
-                    message["session_uuid"],
+                    scope_type,
+                    scope_uuid,
                     canonical_key,
                     version_uuid,
                     utc_now(),
@@ -1032,3 +1034,11 @@ class PostgresMemoryWorkerPipeline:
             (processing_run_uuid,),
         ).fetchone()
         return int(row["count"])
+
+
+def _scope_for_message(message: dict[str, Any]) -> tuple[str, str]:
+    if message.get("project_uuid"):
+        return "project", str(message["project_uuid"])
+    if message.get("workspace_uuid"):
+        return "workspace", str(message["workspace_uuid"])
+    return "session", str(message["session_uuid"])

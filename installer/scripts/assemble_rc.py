@@ -8,8 +8,12 @@ import sys
 import zipfile
 from pathlib import Path
 
-VERSION = "0.2.0-beta.1"
-OPENWEBUI_BASE_IMAGE = "ghcr.io/open-webui/open-webui:v0.9.6"
+VERSION = "0.2.0-beta.2"
+OPENWEBUI_BASE_IMAGE = (
+    "ghcr.io/open-webui/open-webui:v0.9.6@sha256:"
+    "90eae5b419e40b4c3dd684582b2c83440b36f9ae2f6532c09639b2ba4ee65158"
+)
+MEMORIST_OPENWEBUI_IMAGE = f"memorist/openwebui:{VERSION}"
 POSTGRES_IMAGE = "postgres:16.9-alpine3.22"
 FALKORDB_IMAGE = (
     "falkordb/falkordb@sha256:"
@@ -81,9 +85,16 @@ def assemble() -> dict[str, str]:
     _copy_archive_docs()
     _normalize_text_files(TARGET)
 
-    # Write package metadata before the installer checksum manifest so the
-    # extracted-package integrity check covers the metadata itself.
-    manifest = build_package_manifest(TARGET)
+    # Integrity layering (documented in release/packaging.md):
+    #   1. checksums.sha256 covers every shipped file except itself and
+    #      package-manifest.ijson (integrity metadata is excluded from the
+    #      inner layer so no self-hashing cycle exists);
+    #   2. package-manifest.ijson is generated LAST over the final tree and
+    #      covers everything including checksums.sha256, excluding only
+    #      itself. Nothing may be written into TARGET after this point.
+    #   3. The ZIP's SHA-256 (sidecar .sha256) covers the whole archive.
+    _refresh_installer_checksums()
+    manifest = build_package_manifest(TARGET, exclude_names={"package-manifest.ijson"})
     (TARGET / "package-manifest.ijson").write_text(
         json.dumps(manifest, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
@@ -92,8 +103,6 @@ def assemble() -> dict[str, str]:
         json.dumps(manifest, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
     )
-    _refresh_installer_checksums()
-    _write_checksums(TARGET / "CHECKSUMS")
 
     issues = scan_path(TARGET)
     if issues:
@@ -121,11 +130,12 @@ def assemble() -> dict[str, str]:
 def _write_source_version_metadata() -> None:
     payload = {
         "package": "memorist-openwebui",
-        "target_label": "v0.2.0-beta.1 candidate",
+        "target_label": f"v{VERSION} candidate",
         "memorist_core_version": __version__,
         "schema_version": SCHEMA_VERSION,
         "openwebui_base": OPENWEBUI_BASE_IMAGE,
-        "openwebui_integration_version": "0.2.0-beta.1",
+        "memorist_openwebui_image": MEMORIST_OPENWEBUI_IMAGE,
+        "openwebui_integration_version": VERSION,
         "postgres_image": POSTGRES_IMAGE,
         "falkordb_image": FALKORDB_IMAGE,
     }
@@ -165,7 +175,10 @@ def _copy_archive_docs() -> None:
         (ROOT / "SECURITY.md", Path("SECURITY.md")),
         (ROOT / "RELEASE_NOTES.md", Path("RELEASE_NOTES.md")),
         (ROOT / "docs" / "INSTALLATION.md", Path("docs/INSTALLATION.md")),
-        (ROOT / "docs" / "TROUBLESHOOTING.md", Path("docs/TROUBLESHOOTING.md")),
+        # The installer skeleton already contains docs/troubleshooting.md.
+        # Replace it with the canonical document using the same casing so the
+        # ZIP is byte-for-byte portable to Windows' case-insensitive filesystem.
+        (ROOT / "docs" / "TROUBLESHOOTING.md", Path("docs/troubleshooting.md")),
         (ROOT / "docs" / "ARCHITECTURE.md", Path("docs/ARCHITECTURE.md")),
         (ROOT / "docs" / "MEMORY_MACHINE.md", Path("docs/MEMORY_MACHINE.md")),
         (ROOT / "docs" / "DEVELOPMENT.md", Path("docs/DEVELOPMENT.md")),
@@ -200,6 +213,14 @@ def _copy_installer_runtime() -> None:
             name for name in names if name in {"tests", "__pycache__", ".pytest_cache"}
         },
     )
+    # The derivative Open WebUI image build context (Dockerfile, pinned source
+    # manifest, frontend overlay, patch layer). Compose builds it with
+    # context ./runtime so the package stays self-contained.
+    shutil.copytree(
+        ROOT / "release" / "openwebui-image",
+        runtime / "openwebui-image",
+        ignore=_ignore,
+    )
 
 
 def _refresh_installer_checksums() -> None:
@@ -227,15 +248,6 @@ def _normalize_text_files(root: Path) -> None:
         normalized = text.replace("\r\n", "\n")
         if normalized != text:
             path.write_bytes(normalized.encode("utf-8"))
-
-
-def _write_checksums(output: Path) -> None:
-    lines = []
-    for path in sorted(TARGET.rglob("*"), key=lambda p: p.relative_to(TARGET).as_posix()):
-        if path.is_file() and path.name != "CHECKSUMS":
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            lines.append(f"{digest}  {path.relative_to(TARGET).as_posix()}")
-    output.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

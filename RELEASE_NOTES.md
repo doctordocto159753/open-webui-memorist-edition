@@ -1,6 +1,32 @@
 # Release Notes
 
-## v0.2.0 — early public alpha (current)
+## v0.2.0-beta.2 — PR5-G integrated product candidate (current)
+
+The first release candidate in which the packaged Open WebUI application
+itself exposes the Memorist product:
+
+- **Derivative Open WebUI image** — pinned upstream v0.9.6 (base image by
+  digest, frontend rebuilt from the hash-verified source snapshot) with the
+  Memorist settings pages, composer Memory On/Off control, and truthful
+  "Memory used" disclosure compiled into the production bundle
+  (`release/openwebui-image/`).
+- **Authenticated proxy reachable** — `/api/v1/memorist/*` routes are
+  deterministically ordered ahead of the SPA catch-all with a fail-closed
+  startup assertion; known paths answer 401/403/200, never 404.
+- **Automatic chat integration** — the managed Memorist chat filter is
+  provisioned into Open WebUI's Functions table at every startup; no manual
+  Filter or Function installation exists in the product.
+- **Truthful packaging** — `package-manifest.ijson` is generated last over
+  the final tree with a documented integrity layering, plus an extraction
+  validator, upgrade-compatibility contract (stable volumes, reusable
+  `.env`), and installed-mode authority in Start/Restart.
+- **Real product gates** — pytest against the imported Open WebUI
+  application, production-frontend build with bundle inspection, executable
+  installer behavioral tests, and Playwright E2E (capture → retrieval →
+  disclosure → Memory Off → restart persistence → regeneration) against the
+  extracted final ZIP.
+
+## v0.2.0 — early public alpha
 
 Memorist's first public-ready candidate: a local-first memory layer for
 Open WebUI with a transparent, inspectable memory pipeline.

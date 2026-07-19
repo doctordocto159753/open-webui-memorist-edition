@@ -17,10 +17,15 @@ if str(CORE_SRC) not in sys.path:
 from memcore.version import SCHEMA_VERSION  # noqa: E402
 from release.scan_forbidden_files import scan_path  # noqa: E402
 
-ZIP_PATH = ROOT / "release" / "rc" / "memorist-openwebui-0.2.0-beta.1.zip"
-SHA_PATH = ROOT / "release" / "rc" / "memorist-openwebui-0.2.0-beta.1.sha256"
-VERSION_SUFFIX = "release/memorist-openwebui/VERSION.ijson"
-MANIFEST_SUFFIX = "release/package-manifest.ijson"
+sys.path.insert(0, str(ROOT / "installer" / "scripts"))
+from assemble_rc import VERSION as RC_VERSION  # noqa: E402
+
+ZIP_PATH = ROOT / "release" / "rc" / f"memorist-openwebui-{RC_VERSION}.zip"
+SHA_PATH = ROOT / "release" / "rc" / f"memorist-openwebui-{RC_VERSION}.sha256"
+# The user-facing archive is flat: Memorist.cmd and the integrity metadata
+# live directly under the single extracted root directory.
+VERSION_SUFFIX = f"memorist-openwebui-{RC_VERSION}/VERSION.ijson"
+MANIFEST_SUFFIX = f"memorist-openwebui-{RC_VERSION}/package-manifest.ijson"
 
 
 def run() -> dict[str, Any]:
@@ -70,6 +75,20 @@ def validate_rc_package() -> dict[str, Any]:
 
     with zipfile.ZipFile(ZIP_PATH) as package:
         names = package.namelist()
+        case_insensitive_names: dict[str, str] = {}
+        for name in names:
+            normalized = name.casefold()
+            previous = case_insensitive_names.get(normalized)
+            if previous is not None and previous != name:
+                issues.append(
+                    {
+                        "issue_code": "case_insensitive_path_collision",
+                        "path": name,
+                        "conflicts_with": previous,
+                    }
+                )
+            else:
+                case_insensitive_names[normalized] = name
         version_name = _find_suffix(names, VERSION_SUFFIX)
         manifest_name = _find_suffix(names, MANIFEST_SUFFIX)
         if version_name is None:

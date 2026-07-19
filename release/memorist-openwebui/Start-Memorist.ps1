@@ -22,7 +22,13 @@ if (-not (Test-Path (Join-Path $root '.env'))) {
     Write-MemoristLog 'No .env found. Run Install-Memorist.ps1 first.' 'FAIL'
     exit 1
 }
-if ([string]::IsNullOrWhiteSpace($Mode)) { $Mode = Get-MemoristInstalledMode -Root $root }
+$installedMode = Get-MemoristInstalledMode -Root $root
+if (-not [string]::IsNullOrWhiteSpace($Mode) -and $Mode -ne $installedMode) {
+    Write-MemoristLog ("This installation is configured for '{0}' mode; refusing to start in '{1}' mode." -f $installedMode, $Mode) 'FAIL'
+    Write-MemoristLog ("Switching modes is a data migration, not a start-time flag. Run Install-Memorist.ps1 -Mode {0} to migrate explicitly; your existing data volumes are preserved until you do." -f $Mode) 'INFO'
+    exit 1
+}
+$Mode = $installedMode
 Show-MemoristBanner -Subtitle ("Start  -  mode: {0}" -f $Mode)
 $docker = Test-MemoristDocker
 if (-not $docker.Ready) {
@@ -43,6 +49,17 @@ $webPort = if ($webPortValue) { [int]$webPortValue } else { 3000 }
 $corePort = if ($corePortValue) { [int]$corePortValue } else { 8777 }
 $coreOk = Wait-MemoristService -Name 'Memorist Core' -Url ("http://localhost:{0}/memcore/health" -f $corePort) -TimeoutSec 180
 $webOk = Wait-MemoristService -Name 'Open WebUI' -Url ("http://localhost:{0}/health" -f $webPort) -TimeoutSec 180
+
+if ($webOk) {
+    # A healthy Open WebUI without reachable Memorist proxy routes is a broken
+    # product pretending to be fine. Fail Start loudly in that case.
+    if (-not (Test-MemoristProxyRoutes -WebPort $webPort)) {
+        Write-MemoristLog 'Open WebUI is healthy but the Memorist proxy routes (/api/v1/memorist) are not reachable.' 'FAIL'
+        Write-MemoristLog 'The Memorist integration failed to mount. Run Show-Memorist-Logs.ps1 and inspect the open-webui service log.' 'INFO'
+        exit 1
+    }
+    Write-MemoristLog 'Memorist proxy routes verified (/api/v1/memorist responds with authenticated-API status).' 'OK'
+}
 
 if ($Mode -eq 'full' -and $coreOk) {
     $coreOk = Test-MemoristFullReadiness -Url ("http://localhost:{0}/memcore/config/effective" -f $corePort)

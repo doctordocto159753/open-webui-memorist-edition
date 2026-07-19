@@ -329,6 +329,25 @@ def integration_status() -> dict[str, Any]:
                 """,
                 (actor.user_uuid, actor.workspace_uuid) if actor is not None else (None, None),
             ).fetchone()
+            memory_processing = connection.execute(
+                """
+                SELECT
+                  COUNT(DISTINCT m.message_uuid) FILTER (
+                    WHERE m.processing_status = 'pending'
+                  ) AS pending_messages,
+                  COUNT(DISTINCT m.message_uuid) FILTER (
+                    WHERE m.processing_status = 'available'
+                  ) AS available_messages,
+                  COUNT(DISTINCT candidate.candidate_uuid) AS candidates
+                FROM memorist_session_actors actor_scope
+                JOIN messages m ON m.session_uuid = actor_scope.session_uuid
+                LEFT JOIN memory_processing_runs run ON run.message_uuid = m.message_uuid
+                LEFT JOIN memory_candidates candidate
+                  ON candidate.processing_run_uuid = run.processing_run_uuid
+                WHERE actor_scope.user_uuid = %s AND actor_scope.workspace_uuid = %s
+                """,
+                (actor.user_uuid, actor.workspace_uuid) if actor is not None else (None, None),
+            ).fetchone()
             return {
                 "memorist_core": "connected",
                 "version": __version__,
@@ -337,6 +356,7 @@ def integration_status() -> dict[str, Any]:
                 "graph_backend": settings.graph_backend,
                 "memory_mode": settings.retrieval_mode,
                 "preflight": "enabled" if settings.preflight_enabled else "disabled",
+                "memory_processing": _jsonable_dict(memory_processing),
                 "last_attachment": _jsonable_dict(last_attachment) if last_attachment else None,
                 "last_error": None,
             }

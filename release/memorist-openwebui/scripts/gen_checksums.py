@@ -27,7 +27,11 @@ EXCLUDE_DIR_NAMES = {
     "__pycache__",
     ".pytest_cache",
 }
-EXCLUDE_FILE_NAMES = {"checksums.sha256", "CHECKSUMS", ".env", ".DS_Store"}
+# Integrity metadata is layered (see release/packaging.md): checksums.sha256
+# is the inner layer and must not cover itself or the outer
+# package-manifest.ijson, which is generated after this file and covers
+# everything else including this file.
+EXCLUDE_FILE_NAMES = {"checksums.sha256", "CHECKSUMS", "package-manifest.ijson", ".env", ".DS_Store"}
 EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".pyd", ".sqlite", ".log"}
 
 

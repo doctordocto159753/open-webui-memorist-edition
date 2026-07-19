@@ -1,0 +1,542 @@
+name: PR5-G Real OpenWebUI Product Integration
+
+"on":
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr5g-real-product-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  MEMORIST_E2E_STUB_KEY: memorist-e2e-secret-canary-000000000000
+
+jobs:
+  backend-route-integration:
+    name: Open WebUI backend route integration
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          clean: true
+          persist-credentials: false
+          show-progress: false
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+      - name: Install the real pinned Open WebUI host
+        run: |
+          set -euo pipefail
+          uv venv --python 3.11 .venv-owui
+          uv pip install --python .venv-owui/bin/python open-webui==0.9.6 pytest pyyaml
+      - name: Real imported application tests (401/403/200, route order, filter provisioning)
+        env:
+          MEMORIST_REQUIRE_REAL_OPENWEBUI: "1"
+          RAG_EMBEDDING_ENGINE: ollama
+        run: |
+          set -euo pipefail
+          cd open-webui-integration
+          ../.venv-owui/bin/python -m pytest memorist/tests -q \
+            --junit-xml="${RUNNER_TEMP}/pr5g-backend-results.xml"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: pr5g-backend-route-results
+          path: ${{ runner.temp }}/pr5g-backend-results.xml
+
+  frontend-product-build:
+    name: Production frontend build and bundle inspection
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          clean: true
+          persist-credentials: false
+          show-progress: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+      - name: Memorist UI dependency install, typecheck, lint, unit tests
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run typecheck
+          npm run lint
+          npx vitest run --reporter=junit --outputFile="${RUNNER_TEMP}/pr5g-vitest-results.xml"
+      - name: Fetch and verify the pinned Open WebUI source snapshot
+        run: |
+          set -euo pipefail
+          url=$(python3 -c "import json;print(json.load(open('release/openwebui-image/source-pin.json'))['source_snapshot']['url'])")
+          sha=$(python3 -c "import json;print(json.load(open('release/openwebui-image/source-pin.json'))['source_snapshot']['sha256'])")
+          curl -sSL --retry 4 -o "${RUNNER_TEMP}/openwebui-src.tar.gz" "$url"
+          echo "$sha  ${RUNNER_TEMP}/openwebui-src.tar.gz" | sha256sum -c -
+      - name: Assemble the patched frontend tree
+        run: |
+          set -euo pipefail
+          sh release/openwebui-image/prepare_frontend_tree.sh \
+            "${RUNNER_TEMP}/openwebui-src.tar.gz" \
+            "${RUNNER_TEMP}/src-tree" \
+            "$(pwd)/release/openwebui-image" \
+            "$(pwd)/open-webui-integration/memorist/ui"
+      - name: Build the production frontend (the same one that ships)
+        env:
+          APP_BUILD_HASH: pr5g-${{ github.sha }}
+          NODE_OPTIONS: --max-old-space-size=8192
+          CYPRESS_INSTALL_BINARY: "0"
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+          npm_config_onnxruntime_node_install_cuda: skip
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}/src-tree"
+          npm ci --force --fetch-retries=5
+          npm run build
+      - name: Bundle inspection (stable Memorist identifiers in shipped assets)
+        run: |
+          set -euo pipefail
+          build="${RUNNER_TEMP}/src-tree/build"
+          test -f "$build/index.html"
+          for marker in "Memory Setup" "Processing Nodes" "Memory used" \
+            "memorist-memory-workflow-toggle" "memorist-message-disclosure" \
+            "memorist-diagnostics" "/api/v1/memorist"; do
+            grep -rl --include='*.js' -- "$marker" "$build/_app" > /dev/null \
+              || { echo "MISSING BUNDLE MARKER: $marker"; exit 1; }
+            echo "bundle marker ok: $marker"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: pr5g-frontend-results
+          path: ${{ runner.temp }}/pr5g-vitest-results.xml
+
+  authenticated-proxy-contract:
+    name: Authenticated proxy contract and core adapter
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          clean: true
+          persist-credentials: false
+          show-progress: false
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+      - name: Memorist Core suite (includes message-attachment disclosure adapter)
+        run: |
+          set -euo pipefail
+          cd memorist-core
+          uv sync --python 3.12
+          uv run pytest -q --junit-xml="${RUNNER_TEMP}/pr5g-core-results.xml"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: pr5g-core-results
+          path: ${{ runner.temp }}/pr5g-core-results.xml
+
+  installer-behavioral:
+    name: Installer behavioral tests (executable, mocked Compose)
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          clean: true
+          persist-credentials: false
+          show-progress: false
+      - name: Require PowerShell
+        run: bash .github/scripts/ensure-pwsh.sh
+      - name: Run behavioral and static Pester suites
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Prefer an already-installed Pester (self-hosted runners often ship
+          # one and cannot always reach the PowerShell Gallery); only register
+          # the gallery and install when a compatible version is genuinely
+          # missing.
+          $pester = Get-Module -ListAvailable -Name Pester |
+            Where-Object { $_.Version -ge [version]'5.5.0' } |
+            Sort-Object Version -Descending | Select-Object -First 1
+          if (-not $pester) {
+            if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
+              Register-PSRepository -Default
+            }
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+            Install-Module Pester -RequiredVersion 5.6.1 -Force -Scope CurrentUser -AllowClobber
+          } else {
+            Write-Host "Using preinstalled Pester $($pester.Version)"
+          }
+          Import-Module Pester -MinimumVersion 5.5 -Force
+          $configuration = New-PesterConfiguration
+          $configuration.Run.Path = @(
+            'release/memorist-openwebui/tests/Lifecycle.Behavioral.Tests.ps1',
+            'release/memorist-openwebui/tests/Installer.Tests.ps1'
+          )
+          $configuration.Run.Exit = $true
+          $configuration.TestResult.Enabled = $true
+          $configuration.TestResult.OutputPath = "$env:RUNNER_TEMP/pr5g-installer-results.xml"
+          $configuration.TestResult.OutputFormat = 'NUnitXml'
+          $configuration.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $configuration
+      - name: Reported totals match discovered tests
+        shell: pwsh
+        run: |
+          [xml]$results = Get-Content "$env:RUNNER_TEMP/pr5g-installer-results.xml"
+          $total = [int]$results.'test-results'.total
+          $failures = [int]$results.'test-results'.failures
+          Write-Host "Discovered $total tests, $failures failures"
+          if ($total -lt 20) { throw "Expected at least 20 discovered installer tests, found $total" }
+          if ($failures -ne 0) { throw "$failures installer tests failed" }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: pr5g-installer-results
+          path: ${{ runner.temp }}/pr5g-installer-results.xml
+
+  package-manifest-validation:
+    name: Package manifest validation
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          clean: true
+          persist-credentials: false
+          show-progress: false
+      - name: Committed source-package checksums are current
+        run: |
+          python3 release/memorist-openwebui/scripts/gen_checksums.py
+          git diff --exit-code -- release/memorist-openwebui/checksums.sha256
+      - name: Assemble the user-facing ZIP
+        run: python3 installer/scripts/assemble_rc.py
+      - name: Validate manifest truthfulness against the final archive
+        run: |
+          set -euo pipefail
+          zip=$(ls release/rc/memorist-openwebui-*.zip)
+          python3 installer/scripts/validate_package.py "$zip"
+      - name: RC package schema
+        run: |
+          set -o pipefail
+          python3 release/tests/rc_package_schema.py | tee "${RUNNER_TEMP}/rc-package-schema.json"
+      - name: Version consistency
+        run: |
+          set -o pipefail
+          python3 release/tests/version_consistency.py | tee "${RUNNER_TEMP}/version-consistency.json"
+      - name: Upgrade contract
+        run: |
+          set -o pipefail
+          python3 release/tests/upgrade_contract.py | tee "${RUNNER_TEMP}/upgrade-contract.json"
+      - name: Mutation check — validator must fail on a tampered archive
+        run: |
+          set -euo pipefail
+          zip=$(ls release/rc/memorist-openwebui-*.zip)
+          cp "$zip" "${RUNNER_TEMP}/tampered.zip"
+          python3 -c "import sys, zipfile; a = zipfile.ZipFile(sys.argv[1], 'a'); root = a.namelist()[0].split('/')[0]; a.writestr(root + '/undeclared-smuggled-file.txt', 'not in the manifest'); a.close()" "${RUNNER_TEMP}/tampered.zip"
+          if python3 installer/scripts/validate_package.py "${RUNNER_TEMP}/tampered.zip"; then
+            echo "validator accepted a tampered archive"; exit 1
+          fi
+          echo "validator correctly rejected the tampered archive"
+      - name: Compute artifact digest
+        run: |
+          set -euo pipefail
+          sha256sum release/rc/memorist-openwebui-*.zip | tee "${RUNNER_TEMP}/zip-digest.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: pr5g-package-validation
+          path: |
+            release/rc/memorist-openwebui-*.zip
+            release/rc/memorist-openwebui-*.sha256
+            release/package-manifest.ijson
+            ${{ runner.temp }}/rc-package-schema.json
+            ${{ runner.temp }}/version-consistency.json
+            ${{ runner.temp }}/upgrade-contract.json
+            ${{ runner.temp }}/zip-digest.txt
+
+  composed-product-e2e:
+    name: Real composed artifact smoke and Playwright product E2E
+    runs-on: [self-hosted, linux, x64, memorist-ci]
+    timeout-minutes: 120
+    env:
+      MEMORIST_E2E_WORKDIR: ${{ github.workspace }}/.pr5g-e2e
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          clean: true
+          persist-credentials: false
+          show-progress: false
+      - name: Require Docker and Compose
+        run: bash .github/scripts/ensure-compose.sh --require-docker
+      - name: Require PowerShell
+        run: bash .github/scripts/ensure-pwsh.sh
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+      - name: Assemble and extract the final ZIP into a path containing spaces
+        run: |
+          set -euo pipefail
+          python3 installer/scripts/assemble_rc.py
+          zip=$(ls release/rc/memorist-openwebui-*.zip)
+          target="${RUNNER_TEMP}/Memorist Final Test"
+          rm -rf "$target" && mkdir -p "$target"
+          python3 -c "import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$zip" "$target"
+          package_dir=$(find "$target" -maxdepth 1 -mindepth 1 -type d)
+          echo "MEMORIST_PACKAGE_DIR=$package_dir" >> "$GITHUB_ENV"
+      - name: Build the derivative Open WebUI image from the extracted package
+        env:
+          CYPRESS_INSTALL_BINARY: "0"
+        run: |
+          set -o pipefail
+          # The runner uses the legacy Docker builder (no buildx), which does not
+          # support --progress; output is captured via tee instead.
+          docker build \
+            -t memorist/openwebui:0.2.0-beta.2 \
+            -f "${MEMORIST_PACKAGE_DIR}/runtime/openwebui-image/Dockerfile" \
+            "${MEMORIST_PACKAGE_DIR}/runtime" \
+            2>&1 | tee "${RUNNER_TEMP}/pr5g-docker-build.log"
+      - name: Start the deterministic local model stub as a networkable container
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/stub-logs"
+          stub_name="memorist-e2e-stub-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          provider_url="http://${stub_name}:9800/v1"
+          echo "MEMORIST_E2E_STUB_CONTAINER=${stub_name}" >> "$GITHUB_ENV"
+          echo "MEMORIST_E2E_PROVIDER_URL=${provider_url}" >> "$GITHUB_ENV"
+          docker rm -f "$stub_name" >/dev/null 2>&1 || true
+          docker run -d --name "$stub_name" \
+            -p 127.0.0.1:9800:9800 \
+            -e PORT=9800 \
+            -e REQUEST_LOG_PATH=/logs/requests.jsonl \
+            --mount "type=bind,src=${GITHUB_WORKSPACE}/tests/e2e/model-stub/server.py,dst=/stub/server.py,readonly" \
+            --mount "type=bind,src=${RUNNER_TEMP}/stub-logs,dst=/logs" \
+            --entrypoint python \
+            memorist/openwebui:0.2.0-beta.2 \
+            /stub/server.py
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:9800/health && break || sleep 1
+          done
+      - name: Configure the extracted package (.env, full mode)
+        run: |
+          set -euo pipefail
+          pg_password=$(openssl rand -hex 16)
+          {
+            printf 'MEMORIST_MODE=full\n'
+            printf 'WEBUI_SECRET_KEY=%s\n' "$(openssl rand -hex 32)"
+            printf 'MEMORIST_ACTOR_ASSERTION_SECRET=%s\n' "$(openssl rand -hex 32)"
+            printf 'MEMORIST_ACTOR_SERVICE_TOKEN=%s\n' "$(openssl rand -hex 32)"
+            printf 'MEMORIST_OPENWEBUI_WORKSPACE_UUID=%s\n' "$(python3 -c 'import uuid;print(uuid.uuid4())')"
+            printf 'MEMORIST_POSTGRES_PASSWORD=%s\n' "$pg_password"
+            printf 'MEMORIST_POSTGRES_DSN=postgresql://memorist:%s@postgres:5432/memorist\n' "$pg_password"
+            printf 'OPENAI_API_BASE_URL=%s\n' "$MEMORIST_E2E_PROVIDER_URL"
+            printf 'OPENAI_API_KEY=%s\n' "$MEMORIST_E2E_STUB_KEY"
+            # This acceptance stack intentionally has one deterministic
+            # OpenAI-compatible provider and no Ollama server. Disable the
+            # optional Ollama discovery branch so /api/models tests exactly
+            # that configured provider without an unrelated network timeout.
+            printf 'ENABLE_OLLAMA_API=false\n'
+            printf 'MEMORIST_MEMORY_EXTRACTION_API_KEY=stub-extraction-env-value\n'
+            printf 'OPEN_WEBUI_PORT=3000\n'
+            printf 'MEMORIST_PORT=8777\n'
+          } > "${MEMORIST_PACKAGE_DIR}/.env"
+      - name: Clear persisted stack state from previous runs
+        run: |
+          set -euo pipefail
+          cd "${MEMORIST_PACKAGE_DIR}"
+          if [ -n "${MEMORIST_COMPOSE_BIN:-}" ]; then base="$MEMORIST_COMPOSE_BIN"; else base="docker compose"; fi
+          # The self-hosted Docker daemon keeps named volumes across workflow
+          # runs, and Stop-Memorist intentionally preserves data volumes. Every
+          # run writes a fresh random Postgres password into .env, but an
+          # already-initialized postgres volume ignores POSTGRES_PASSWORD and
+          # keeps the old one, so memorist-core's DSN then fails authentication
+          # and the container exits(1). Start each acceptance run from a clean
+          # volume slate; the mid-test restart step keeps its data as designed.
+          $base -f compose.yml -f compose.full.yml down -v --remove-orphans 2>/dev/null || true
+      - name: Start the release stack through the packaged lifecycle script
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location $env:MEMORIST_PACKAGE_DIR
+          ./Start-Memorist.ps1 -NoBrowser
+          if ($LASTEXITCODE -ne 0) { throw "Start-Memorist failed with $LASTEXITCODE" }
+      - name: Attach the model stub and prove container-to-container reachability
+        run: |
+          set -euo pipefail
+          docker network connect \
+            --alias "$MEMORIST_E2E_STUB_CONTAINER" \
+            memorist_default \
+            "$MEMORIST_E2E_STUB_CONTAINER"
+          cd "${MEMORIST_PACKAGE_DIR}"
+          if [ -n "${MEMORIST_COMPOSE_BIN:-}" ]; then base="$MEMORIST_COMPOSE_BIN"; else base="docker compose"; fi
+          compose="$base -f compose.yml -f compose.full.yml"
+          $compose exec -T open-webui python -c \
+            "import json,urllib.request; data=json.load(urllib.request.urlopen('${MEMORIST_E2E_PROVIDER_URL}/models', timeout=5)); assert data['data'][0]['id']=='memorist-e2e-stub'"
+          $compose exec -T memorist-core python -c \
+            "import json,urllib.request; data=json.load(urllib.request.urlopen('${MEMORIST_E2E_PROVIDER_URL}/models', timeout=5)); assert data['data'][0]['id']=='memorist-e2e-stub'"
+      - name: Composed artifact smoke (proxy 401 JSON, health, stub reachability)
+        run: |
+          set -euo pipefail
+          curl -sf http://localhost:3000/health
+          code=$(curl -s -o /tmp/memorist-status.json -w "%{http_code}" -H "Accept: application/json" http://localhost:3000/api/v1/memorist/openwebui/status)
+          # The proxy route must exist and require auth: 401 JSON, never 404 or
+          # SPA HTML. The exact detail text depends on which auth layer rejects
+          # first (Open WebUI session auth vs the Memorist actor guard), so we
+          # assert the contract — JSON body with a detail field, no SPA markup.
+          test "$code" = "401" || { echo "expected 401, got $code"; cat /tmp/memorist-status.json; exit 1; }
+          python3 -c "import json,sys; d=json.load(open('/tmp/memorist-status.json')); assert 'detail' in d, d" \
+            || { echo "status body was not the expected JSON error"; cat /tmp/memorist-status.json; exit 1; }
+          ! grep -qi "<html" /tmp/memorist-status.json
+          curl -sf http://localhost:8777/memcore/health | python3 -m json.tool
+      - name: Install Playwright test runner
+        run: |
+          set -euo pipefail
+          npm ci
+          npm install --no-save @playwright/test@1.49.1
+          # Browsers and their system libraries come from the pinned official
+          # Playwright image (this self-hosted runner's user cannot sudo/apt to
+          # install them). Pre-pull once so both phases start fast.
+          docker pull mcr.microsoft.com/playwright:v1.49.1-noble
+      - name: Playwright product E2E — phase 1 (setup, capture, retrieval, off, security, isolation)
+        run: |
+          set -euo pipefail
+          docker run --rm --network host --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -e MEMORIST_E2E_BASE_URL=http://localhost:3000 \
+            -e MEMORIST_E2E_STUB_URL=http://localhost:9800 \
+            -e MEMORIST_E2E_PROVIDER_URL="$MEMORIST_E2E_PROVIDER_URL" \
+            -v "$PWD":/work -w /work \
+            mcr.microsoft.com/playwright:v1.49.1-noble \
+            npx playwright test --config tests/e2e/playwright.config.ts tests/e2e/product.spec.ts
+      - name: Authenticated product DOM diagnostic (only when the E2E failed)
+        if: failure()
+        run: |
+          set -uo pipefail
+          docker run --rm --network host --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$PWD":/work -w /work \
+            mcr.microsoft.com/playwright:v1.49.1-noble \
+            node -e '
+              const { chromium } = require("playwright-core");
+              const BASE = "http://localhost:3000";
+              (async () => {
+                const b = await chromium.launch();
+                const ctx = await b.newContext();
+                const p = await ctx.newPage();
+                let token = "";
+                try {
+                  const r = await ctx.request.post(BASE + "/api/v1/auths/signin", {
+                    data: { email: "admin@memorist.local", password: "memorist-admin-pass-1" } });
+                  token = (await r.json()).token || "";
+                  console.log("signin status:", r.status());
+                } catch (e) { console.log("signin err:", e.message); }
+                await p.goto(BASE + "/", { waitUntil: "domcontentloaded", timeout: 30000 })
+                  .catch((e) => console.log("goto / err:", e.message));
+                if (token) await p.evaluate((t) => window.localStorage.setItem("token", t), token);
+                // Reproduce the failing scenario: a direct load + reload of the
+                // memory-setup route (the test fails re-asserting after reload).
+                await p.goto(BASE + "/settings/memorist/memory-setup", { waitUntil: "domcontentloaded", timeout: 60000 })
+                  .catch((e) => console.log("goto memory-setup err:", e.message));
+                await p.reload({ waitUntil: "domcontentloaded", timeout: 60000 })
+                  .catch((e) => console.log("reload err:", e.message));
+                console.log("=== url after reload ===", p.url());
+                console.log("=== unauthorized present ===", await p.evaluate(() =>
+                  !!document.querySelector("[data-memorist-unauthorized]")).catch(String));
+                console.log("=== memory-setup page present ===", await p.evaluate(() =>
+                  !!document.querySelector("[data-memorist-page=\"memory-setup\"]")).catch(String));
+                console.log("=== node-setup host present ===", await p.evaluate(() =>
+                  !!document.querySelector("memorist-memory-node-setup")).catch(String));
+                console.log("=== node-setup h1 (shadow) ===", JSON.stringify(await p.evaluate(() => {
+                  const el = document.querySelector("memorist-memory-node-setup");
+                  return el && el.shadowRoot ? ((el.shadowRoot.querySelector("h1") || {}).textContent || "(no h1)") : "(no host/shadow)";
+                }).catch(String)));
+                console.log("=== body text 0..400 ===", JSON.stringify(await p.evaluate(() =>
+                  document.body.innerText.slice(0, 400)).catch(String)));
+                await b.close();
+              })().catch((e) => console.log("dump err:", e.message));
+            ' || true
+      - name: Database truth assertions (capture lineage, off suppression)
+        run: |
+          set -euo pipefail
+          cd "${MEMORIST_PACKAGE_DIR}"
+          if [ -n "${MEMORIST_COMPOSE_BIN:-}" ]; then base="$MEMORIST_COMPOSE_BIN"; else base="docker compose"; fi
+          compose="$base -f compose.yml -f compose.full.yml"
+          captured=$($compose exec -T postgres psql -U memorist -d memorist -tA -c \
+            "SELECT count(*) FROM openwebui_message_captures WHERE role='user' AND message_uuid IN (SELECT message_uuid FROM messages WHERE raw_text LIKE '%Alpha%')")
+          test "$captured" = "1" || { echo "expected exactly 1 capture lineage for the fact, got $captured"; exit 1; }
+          off=$($compose exec -T postgres psql -U memorist -d memorist -tA -c \
+            "SELECT count(*) FROM messages WHERE raw_text LIKE '%Umbra%'")
+          test "$off" = "0" || { echo "Memory Off turn leaked into capture: $off rows"; exit 1; }
+          candidates=$($compose exec -T postgres psql -U memorist -d memorist -tA -c \
+            "SELECT count(*) FROM memory_candidates")
+          echo "memory_candidates rows: $candidates"
+          test "$candidates" != "0" || { echo "no memory candidate was persisted"; exit 1; }
+          secrets=$($compose exec -T postgres psql -U memorist -d memorist -tA -c \
+            "SELECT count(*) FROM model_profiles WHERE model_profiles::text LIKE '%${MEMORIST_E2E_STUB_KEY}%'")
+          test "$secrets" = "0" || { echo "raw provider key persisted in profiles"; exit 1; }
+      - name: Restart through the packaged lifecycle scripts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location $env:MEMORIST_PACKAGE_DIR
+          & docker network disconnect memorist_default $env:MEMORIST_E2E_STUB_CONTAINER
+          if ($LASTEXITCODE -ne 0) { throw "Failed to detach the model stub before restart" }
+          ./Stop-Memorist.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Stop-Memorist failed" }
+          ./Start-Memorist.ps1 -NoBrowser
+          if ($LASTEXITCODE -ne 0) { throw "Start-Memorist failed" }
+          & docker network connect --alias $env:MEMORIST_E2E_STUB_CONTAINER memorist_default $env:MEMORIST_E2E_STUB_CONTAINER
+          if ($LASTEXITCODE -ne 0) { throw "Failed to reattach the model stub after restart" }
+      - name: Playwright product E2E — phase 2 (restart persistence, regeneration)
+        run: |
+          set -euo pipefail
+          docker run --rm --network host --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -e MEMORIST_E2E_BASE_URL=http://localhost:3000 \
+            -e MEMORIST_E2E_STUB_URL=http://localhost:9800 \
+            -e MEMORIST_E2E_PROVIDER_URL="$MEMORIST_E2E_PROVIDER_URL" \
+            -v "$PWD":/work -w /work \
+            mcr.microsoft.com/playwright:v1.49.1-noble \
+            npx playwright test --config tests/e2e/playwright.config.ts tests/e2e/post-restart.spec.ts
+      - name: Post-restart duplicate checks
+        run: |
+          set -euo pipefail
+          cd "${MEMORIST_PACKAGE_DIR}"
+          if [ -n "${MEMORIST_COMPOSE_BIN:-}" ]; then base="$MEMORIST_COMPOSE_BIN"; else base="docker compose"; fi
+          compose="$base -f compose.yml -f compose.full.yml"
+          captured=$($compose exec -T postgres psql -U memorist -d memorist -tA -c \
+            "SELECT count(*) FROM openwebui_message_captures WHERE role='user' AND message_uuid IN (SELECT message_uuid FROM messages WHERE raw_text LIKE '%Alpha%')")
+          test "$captured" = "1" || { echo "duplicate capture after restart/regeneration: $captured"; exit 1; }
+      - name: Redact and collect diagnostics
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/pr5g-diagnostics"
+          cp "${RUNNER_TEMP}/pr5g-docker-build.log" "${RUNNER_TEMP}/pr5g-diagnostics/" 2>/dev/null || true
+          cd "${MEMORIST_PACKAGE_DIR}" || exit 0
+          if [ -n "${MEMORIST_COMPOSE_BIN:-}" ]; then base="$MEMORIST_COMPOSE_BIN"; else base="docker compose"; fi
+          $base -f compose.yml -f compose.full.yml logs --no-color 2>/dev/null \
+            | sed -e "s/${MEMORIST_E2E_STUB_KEY}/[redacted-canary]/g" \
+                  -e 's/\(SECRET\|TOKEN\|PASSWORD\|API_KEY\)=[^ ]*/\1=[redacted]/g' \
+            > "${RUNNER_TEMP}/pr5g-diagnostics/compose.log" || true
+          cp "${RUNNER_TEMP}/stub-logs/requests.jsonl" "${RUNNER_TEMP}/pr5g-diagnostics/" 2>/dev/null || true
+          docker logs "$MEMORIST_E2E_STUB_CONTAINER" > "${RUNNER_TEMP}/pr5g-diagnostics/stub-server.log" 2>&1 || true
+      - name: Stop the stack
+        if: always()
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:MEMORIST_PACKAGE_DIR)) { return }
+          $envFile = Join-Path $env:MEMORIST_PACKAGE_DIR '.env'
+          if (-not [string]::IsNullOrWhiteSpace($env:MEMORIST_E2E_STUB_CONTAINER)) {
+            try { & docker network disconnect memorist_default $env:MEMORIST_E2E_STUB_CONTAINER *> $null } catch {}
+          }
+          if (Test-Path -LiteralPath $envFile) {
+            Set-Location $env:MEMORIST_PACKAGE_DIR
+            ./Stop-Memorist.ps1
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:MEMORIST_E2E_STUB_CONTAINER)) {
+            try { & docker rm -f $env:MEMORIST_E2E_STUB_CONTAINER *> $null } catch {}
+          }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: pr5g-playwright-report
+          # Playwright resolves reporter/output paths relative to the config
+          # directory (tests/e2e), so the report, JSON result, and per-test
+          # screenshots/traces live there — not at the repo root.
+          path: |
+            tests/e2e/playwright-report
+            tests/e2e/playwright-results.json
+            tests/e2e/test-results
+            ${{ runner.temp }}/pr5g-diagnostics

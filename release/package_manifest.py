@@ -31,7 +31,15 @@ FORBIDDEN_FILE_SUFFIXES = {
 def build_package_manifest(
     root: str | Path,
     output_path: str | Path | None = None,
+    exclude_names: set[str] | frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
+    """Describe every file under ``root``.
+
+    ``exclude_names`` exists for exactly one purpose: leaving the manifest
+    file itself out of its own content listing. The manifest must be
+    generated last, over the final tree, so every other shipped file —
+    including checksums.sha256 — is truthfully covered.
+    """
     package_root = Path(root)
     files = []
     # Sort by POSIX relative path for byte-stable ordering across platforms.
@@ -39,6 +47,8 @@ def build_package_manifest(
         package_root.rglob("*"), key=lambda p: p.relative_to(package_root).as_posix()
     ):
         if not path.is_file():
+            continue
+        if path.name in exclude_names:
             continue
         relative_path = path.relative_to(package_root).as_posix()
         files.append(

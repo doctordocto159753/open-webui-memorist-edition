@@ -939,8 +939,11 @@ def test_ui_model_settings_contract() -> None:
     assert "memory_extraction" in model_control
     assert "FIRST_RUN_MODEL_DEFAULTS" in model_control
     assert "ROLE_MATRIX_COLUMNS" in model_control
-    assert "ModelControlTab" in surfaces
-    assert "Configure Memorist model roles" in surfaces
+    # PR5-G: the surface inventory only advertises mounted production
+    # surfaces; model-role configuration ships as the Processing Nodes page.
+    assert "MemoristProcessingNodesSettings" in surfaces
+    assert "ModelControlTab" not in surfaces
+    assert '"Processing Nodes"' in surfaces
     assert "modelControlProfiles" in client
     assert "/model-control/privacy" in client
     assert "/costs/model-roles" in client
