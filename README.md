@@ -5,6 +5,10 @@ Storage schema version: `18`
 
 **Memorist is an independent community project built on Open WebUI. It is not affiliated with or endorsed by the Open WebUI team.
 ******
+
+<img width="1280" height="640" alt="d171baab-80d9-4496-86b3-800da42faf51" src="https://github.com/user-attachments/assets/484864e3-fac7-4a78-a44e-7a82c7495dd2" />
+
+
 **Remember with consent, recall with provenance.**
 
 Memorist is a local-first memory layer for [Open WebUI](https://github.com/open-webui/open-webui)
