@@ -3,6 +3,8 @@
 Package version: `0.2.0-beta.1`<br>
 Storage schema version: `18`
 
+**Memorist is an independent community project built on Open WebUI. It is not affiliated with or endorsed by the Open WebUI team.
+******
 **Remember with consent, recall with provenance.**
 
 Memorist is a local-first memory layer for [Open WebUI](https://github.com/open-webui/open-webui)
