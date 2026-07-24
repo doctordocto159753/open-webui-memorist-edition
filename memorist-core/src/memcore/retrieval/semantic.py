@@ -4,7 +4,16 @@ from hashlib import sha256
 from math import sqrt
 from typing import Any, Protocol
 
-from memcore.models import MemoryVersionEmbedding, RetrievalPlan, RetrievalScopeType
+from memcore.model_control.registry import provider_for_profile
+from memcore.model_control.repository import ModelControlRepository
+from memcore.model_control.resolution import RoleResolutionService
+from memcore.model_control.schemas import UsageEventCreate
+from memcore.models import (
+    MemoryVersionEmbedding,
+    ModelRole,
+    RetrievalPlan,
+    RetrievalScopeType,
+)
 from memcore.repositories.retrieval import RetrievalRepository
 from memcore.validators.ijson import dump_ijson, load_ijson
 
@@ -24,6 +33,54 @@ class DeterministicEmbeddingProvider:
         for char in text.lower():
             buckets[ord(char) % len(buckets)] += 1.0
         return buckets
+
+
+class ModelControlEmbeddingProvider:
+    """Retrieval adapter for the effective embedding processing node."""
+
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        profile: dict[str, Any],
+        *,
+        workspace_uuid: str | None,
+        project_uuid: str | None,
+    ) -> None:
+        self.repository = ModelControlRepository(connection)
+        self.provider = provider_for_profile(profile)
+        self.model_profile_uuid = str(profile["model_profile_uuid"])
+        self.provider_type = str(profile["provider_type"])
+        self.model_name = str(profile["model_name"])
+        self.workspace_uuid = workspace_uuid
+        self.project_uuid = project_uuid
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        response = self.provider.embed(texts, timeout_seconds=8.0)
+        self._usage(len(response.vectors), response.input_tokens, response.latency_ms)
+        return response.vectors
+
+    def embed_query(self, text: str) -> list[float]:
+        vectors = self.embed_documents([text])
+        if len(vectors) != 1 or not vectors[0]:
+            raise ValueError("embedding processing node returned an invalid query vector")
+        return vectors[0]
+
+    def _usage(self, count: int, input_tokens: int, latency_ms: int) -> None:
+        self.repository.record_usage_event(
+            UsageEventCreate(
+                role=ModelRole.EMBEDDING,
+                stage="retrieval_query_embedding",
+                model_profile_uuid=self.model_profile_uuid,
+                provider_type=self.provider_type,
+                model_name=self.model_name,
+                workspace_uuid=self.workspace_uuid,
+                project_uuid=self.project_uuid,
+                input_tokens=input_tokens,
+                embedding_count=count,
+                latency_ms=latency_ms,
+                status="ok",
+            )
+        )
 
 
 def cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
@@ -58,7 +115,7 @@ class SemanticGenerator:
         embedding_version: str = "1",
     ) -> None:
         self.connection = connection
-        self.provider = provider or DeterministicEmbeddingProvider()
+        self.provider = provider
         self.top_k = top_k
         self.embedding_model = embedding_model
         self.embedding_version = embedding_version
@@ -68,15 +125,21 @@ class SemanticGenerator:
         if not rows:
             return []
 
-        query_vector = self.provider.embed_query(plan.original_query)
+        provider, embedding_model = self._effective_provider(plan)
+        query_vector = provider.embed_query(plan.original_query)
         expected_dimension = len(query_vector)
         scored: list[dict[str, Any]] = []
         for row in rows:
-            stored_vector = self._embedding_for_row(row, expected_dimension)
+            stored_vector = self._embedding_for_row(
+                row,
+                expected_dimension,
+                provider,
+                embedding_model,
+            )
             score = compare_embeddings(
-                self.embedding_model,
+                embedding_model,
                 query_vector,
-                self.embedding_model,
+                embedding_model,
                 stored_vector,
             )
             scored.append(
@@ -99,7 +162,39 @@ class SemanticGenerator:
             item["rank"] = index
         return ranked
 
-    def _embedding_for_row(self, row: sqlite3.Row, expected_dimension: int) -> list[float]:
+    def _effective_provider(self, plan: RetrievalPlan) -> tuple[EmbeddingProvider, str]:
+        if self.provider is not None:
+            return self.provider, self.embedding_model
+        workspace_uuid, project_uuid = _scope_ids(plan)
+        repository = ModelControlRepository(self.connection)
+        resolution = RoleResolutionService(repository).resolve(
+            ModelRole.EMBEDDING,
+            workspace_uuid=workspace_uuid,
+            project_uuid=project_uuid,
+        )
+        if resolution.model_profile_uuid is None or resolution.provider_type == "disabled":
+            return DeterministicEmbeddingProvider(), self.embedding_model
+        profile = repository.get_profile(resolution.model_profile_uuid)
+        if profile is None:
+            return DeterministicEmbeddingProvider(), self.embedding_model
+        payload = profile.model_dump(mode="json")
+        return (
+            ModelControlEmbeddingProvider(
+                self.connection,
+                payload,
+                workspace_uuid=workspace_uuid,
+                project_uuid=project_uuid,
+            ),
+            profile.model_name,
+        )
+
+    def _embedding_for_row(
+        self,
+        row: sqlite3.Row,
+        expected_dimension: int,
+        provider: EmbeddingProvider,
+        embedding_model: str,
+    ) -> list[float]:
         text = str(row["normalized_text"])
         content_hash = _content_hash(text)
         existing = self.connection.execute(
@@ -110,7 +205,7 @@ class SemanticGenerator:
               AND embedding_model = ?
               AND embedding_version = ?
             """,
-            (row["memory_version_uuid"], self.embedding_model, self.embedding_version),
+            (row["memory_version_uuid"], embedding_model, self.embedding_version),
         ).fetchone()
         if existing is not None:
             if int(existing["embedding_dimension"]) != expected_dimension:
@@ -118,13 +213,13 @@ class SemanticGenerator:
             if existing["content_hash"] == content_hash:
                 return [float(value) for value in load_ijson(existing["embedding_ijson"])]
 
-        vector = self.provider.embed_query(text)
+        vector = provider.embed_query(text)
         if len(vector) != expected_dimension:
             raise ValueError("embedding provider returned inconsistent dimensions")
         RetrievalRepository(self.connection).upsert_embedding(
             MemoryVersionEmbedding(
                 memory_version_uuid=str(row["memory_version_uuid"]),
-                embedding_model=self.embedding_model,
+                embedding_model=embedding_model,
                 embedding_dimension=expected_dimension,
                 embedding_version=self.embedding_version,
                 content_hash=content_hash,
@@ -136,6 +231,17 @@ class SemanticGenerator:
 
 def _content_hash(text: str) -> str:
     return sha256(text.encode("utf-8")).hexdigest()
+
+
+def _scope_ids(plan: RetrievalPlan) -> tuple[str | None, str | None]:
+    workspace_uuid: str | None = None
+    project_uuid: str | None = None
+    for scope in plan.scopes:
+        if scope.scope_type.value == "workspace":
+            workspace_uuid = scope.scope_uuid
+        elif scope.scope_type.value == "project":
+            project_uuid = scope.scope_uuid
+    return workspace_uuid, project_uuid
 
 
 def _scoped_memory_versions(

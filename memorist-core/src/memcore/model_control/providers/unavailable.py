@@ -32,7 +32,10 @@ class UnavailableProvider:
             model_name=self.model_name,
             latency_ms=_elapsed_ms(started),
             local_only_safe=True,
-            detail=self.detail,
+            role_compatibility_status="incompatible",
+            overall_status="misconfigured",
+            detail_sanitized=self.detail,
+            recommended_action="Select a supported provider type.",
         )
 
     def estimate_tokens(self, input_text: str = "", output_text: str = "") -> TokenEstimate:

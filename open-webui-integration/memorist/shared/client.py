@@ -281,6 +281,7 @@ class MemoristClient:
         if not (
             path.startswith("/memcore/memory-control/")
             or path.startswith("/memcore/model-control/")
+            or path.startswith("/memcore/memory-processing/runs/")
             or path == "/memcore/openwebui/status"
         ):
             raise MemoristCoreUnavailable("backend actor proxy path is not allowed")

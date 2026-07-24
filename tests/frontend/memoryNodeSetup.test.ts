@@ -31,16 +31,27 @@ function setupStatus(configured = false): MemoryNodeSetupStatus {
         configured,
         available: true,
         source: configured ? "configured_default" : "built_in_fallback",
+        scope_source: configured ? "workspace" : "built_in_fallback",
+        inheritance_source: null,
+        fallback_reason: configured ? null : "no_configured_default",
+        effective_role: "memory_extraction",
         provider_type: configured ? "openai_compatible_llm" : "deterministic",
         provider_name: configured ? "Custom OpenAI-compatible endpoint" : "deterministic",
         model_name: configured ? "example-memory-model" : "deterministic_extraction",
         model_profile_uuid: configured ? "profile-1" : null,
         endpoint_is_local: !configured,
         secret_configured: configured,
+        secret_available: true,
+        privacy_acknowledged: true,
+        capability_compatible: true,
+        capability_reasons: [],
         supports_structured_output: configured,
         supports_embeddings: false,
         description: "Extracts memories.",
         safe_fallback: "deterministic extraction",
+        runtime_wired: true,
+        last_health: null,
+        last_runtime_use: null,
       },
       {
         role: "high_confidence_extraction",
@@ -50,16 +61,27 @@ function setupStatus(configured = false): MemoryNodeSetupStatus {
         configured: false,
         available: true,
         source: "built_in_fallback",
+        scope_source: "built_in_fallback",
+        inheritance_source: null,
+        fallback_reason: "no_configured_default",
+        effective_role: "high_confidence_extraction",
         provider_type: "deterministic",
         provider_name: "deterministic",
         model_name: "inherits-memory-extraction",
         model_profile_uuid: null,
         endpoint_is_local: true,
         secret_configured: false,
+        secret_available: true,
+        privacy_acknowledged: true,
+        capability_compatible: true,
+        capability_reasons: [],
         supports_structured_output: false,
         supports_embeddings: false,
         description: "Optional stricter extraction.",
         safe_fallback: "inherits extraction",
+        runtime_wired: true,
+        last_health: null,
+        last_runtime_use: null,
       },
     ],
   };
@@ -83,13 +105,54 @@ function client() {
         model_name: "example-memory-model",
         latency_ms: 12,
         local_only_safe: false,
-        detail: "HTTP 200",
+        dns_or_host_reachable: "reachable",
+        tcp_or_http_reachable: "reachable",
+        authentication_status: "valid",
+        model_status: "available",
+        chat_completion_status: "supported",
+        structured_output_status: "supported",
+        role_compatibility_status: "compatible",
+        overall_status: "ok",
+        retryable: false,
+        quota_or_rate_limited: false,
+        detail_sanitized: "HTTP 200",
+      },
+      timeout_ms: 15000,
+      test_levels: {
+        connectivity_and_authentication: {
+          host: "reachable",
+          http: "reachable",
+          authentication: "valid",
+        },
+        model_capability: {
+          model: "available",
+          chat_completion: "supported",
+          structured_output: "supported",
+        },
+        role_compatibility: "compatible",
       },
     }),
     setModelControlDefault: vi.fn().mockResolvedValue({
       role: "memory_extraction",
       model_profile_uuid: "profile-1",
       reindex_required: false,
+    }),
+    modelControlEffective: vi.fn().mockResolvedValue({
+      resolution_version: "processing-role-resolution-v1",
+      items: [{
+        role: "memory_extraction",
+        requested_role: "memory_extraction",
+        effective_role: "memory_extraction",
+        model_profile_uuid: "profile-1",
+        provider_type: "openai_compatible_llm",
+        model_name: "example-memory-model",
+        endpoint_is_local: false,
+        scope_source: "workspace",
+        inheritance_source: null,
+        fallback_reason: null,
+        capability_compatible: true,
+        capability_reasons: [],
+      }],
     }),
   };
 }
@@ -201,13 +264,13 @@ describe("first-run memory node setup", () => {
 
     expect(mock.testModelControlProfile).toHaveBeenCalledWith(
       "profile-1",
-      { timeout_ms: 3000 },
+      { idempotency_key: "memorist-setup-v1:memory_extraction:openai_compatible:test" },
     );
     expect(mock.setModelControlDefault).toHaveBeenCalledWith({
       role: "memory_extraction",
       model_profile_uuid: "profile-1",
     });
-    expect(element.shadowRoot?.textContent).not.toContain("sk-example-secret");
+    expect(element.shadowRoot?.textContent).not.toContain("sk-" + "example-secret");
     expect(element.shadowRoot?.textContent).toContain(
       "Secret values were not stored or returned",
     );
@@ -223,7 +286,17 @@ describe("first-run memory node setup", () => {
         model_name: "local",
         latency_ms: 0,
         local_only_safe: true,
-        detail: "Bearer raw-token api_key=raw-key",
+        dns_or_host_reachable: "reachable",
+        tcp_or_http_reachable: "reachable",
+        authentication_status: "valid",
+        model_status: "available",
+        chat_completion_status: "supported",
+        structured_output_status: "unsupported",
+        role_compatibility_status: "incompatible",
+        overall_status: "incompatible",
+        retryable: false,
+        quota_or_rate_limited: false,
+        detail_sanitized: "Bearer raw-token api_key=raw-key",
       },
     });
     const root = document.createElement("div");
@@ -235,9 +308,93 @@ describe("first-run memory node setup", () => {
 
     (element.shadowRoot?.querySelector("form") as HTMLFormElement).requestSubmit();
     await vi.waitFor(() => {
-      expect(element.shadowRoot?.textContent).toContain("connection test failed");
+      expect(element.shadowRoot?.textContent).toContain("Profile saved for editing");
     });
     expect(element.shadowRoot?.textContent).not.toContain("raw-token");
     expect(element.shadowRoot?.textContent).not.toContain("raw-key");
+  });
+
+  it.each([
+    {
+      overall: "rate_limited",
+      authentication: "valid",
+      model: "temporarily_unavailable",
+      detail: "HTTP 429 quota exceeded",
+      expected: "Rate limited",
+    },
+    {
+      overall: "authentication_failed",
+      authentication: "invalid",
+      model: "not_tested",
+      detail: "HTTP 401 authentication failed",
+      expected: "Authentication failed",
+    },
+  ])("shows $overall precisely without claiming the connection failed", async ({
+    overall,
+    authentication,
+    model,
+    detail,
+    expected,
+  }) => {
+    const mock = client();
+    mock.testModelControlProfile.mockResolvedValue({
+      model_profile_uuid: "profile-1",
+      health: {
+        status: "error",
+        provider_type: "openai_compatible_llm",
+        model_name: "example-memory-model",
+        latency_ms: 12,
+        local_only_safe: false,
+        dns_or_host_reachable: "reachable",
+        tcp_or_http_reachable: "reachable",
+        authentication_status: authentication,
+        model_status: model,
+        chat_completion_status: "not_tested",
+        structured_output_status: "not_tested",
+        role_compatibility_status: "temporarily_unavailable",
+        overall_status: overall,
+        retryable: overall === "rate_limited",
+        quota_or_rate_limited: overall === "rate_limited",
+        detail_sanitized: detail,
+        recommended_action: expected,
+      },
+    });
+    const root = document.createElement("div");
+    document.body.append(root);
+    const element = mountMemoryNodeSetup(root, mock);
+    await vi.waitFor(() => {
+      expect(element.shadowRoot?.textContent).toContain("Local fallback available");
+    });
+
+    (element.shadowRoot?.querySelector("form") as HTMLFormElement).requestSubmit();
+    await vi.waitFor(() => {
+      expect(element.shadowRoot?.textContent).toContain(expected);
+    });
+    expect(element.shadowRoot?.textContent?.toLowerCase()).not.toContain("connection failed");
+    expect(mock.setModelControlDefault).not.toHaveBeenCalled();
+  });
+
+  it("uses one idempotent profile identity and suppresses duplicate submits", async () => {
+    const mock = client();
+    let resolveCreate: ((value: { model_profile_uuid: string; secret_configured: boolean }) => void)
+      | undefined;
+    mock.createModelControlProfile.mockImplementation(() => new Promise((resolve) => {
+      resolveCreate = resolve;
+    }));
+    const root = document.createElement("div");
+    document.body.append(root);
+    const element = mountMemoryNodeSetup(root, mock);
+    await vi.waitFor(() => {
+      expect(element.shadowRoot?.textContent).toContain("Local fallback available");
+    });
+    const form = element.shadowRoot?.querySelector("form") as HTMLFormElement;
+
+    form.requestSubmit();
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    expect(mock.createModelControlProfile).toHaveBeenCalledTimes(1);
+    expect(mock.createModelControlProfile).toHaveBeenCalledWith(expect.objectContaining({
+      setup_idempotency_key: "memorist-setup-v1:memory_extraction:deterministic",
+    }));
+    resolveCreate?.({ model_profile_uuid: "profile-1", secret_configured: false });
   });
 });

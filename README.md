@@ -1,7 +1,7 @@
 # Memorist — Open WebUI Memorist Edition
 
-Package version: `0.2.0-beta.1`<br>
-Storage schema version: `18`
+Package version: `0.2.0-beta.3`<br>
+Storage schema version: `21`
 
 **Memorist is an independent community project built on Open WebUI. It is not affiliated with or endorsed by the Open WebUI team.
 ******
@@ -147,6 +147,12 @@ container environment**, written once by the installer and never echoed,
 logged, or returned by any API. Remote endpoints require an explicit privacy
 acknowledgement before they become role defaults.
 
+Role resolution is explicit and inspectable: project → workspace → global →
+documented role inheritance → built-in local fallback. The UI shows both the
+configured role and the profile actually effective at runtime. See the
+[processing-node runtime guide](docs/reference/model-control-plane.md) for the
+stage graph, health contract, diagnostics, and failure handling.
+
 ## Privacy and security model
 
 - Local-first by default; `MEMORIST_LOCAL_ONLY=false` is rejected; no
@@ -175,6 +181,7 @@ installer gets you to a live instance in a few minutes.)*
 | [docs/INSTALLATION.md](docs/INSTALLATION.md) | Windows one-click install, Docker Desktop, Lite/Full, `.env` and API keys, lifecycle scripts, backup/upgrade |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | components, runtimes, storage split, recall path, Model Control Plane, installer/release architecture, CI |
 | [docs/MEMORY_MACHINE.md](docs/MEMORY_MACHINE.md) | capture → analysis → gate → route → candidate → consolidation → retrieval → attachment → display, and the consent boundary |
+| [docs/reference/model-control-plane.md](docs/reference/model-control-plane.md) | per-role processing nodes, resolution/inheritance, provider tests, runtime traces, and troubleshooting |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | dev setup, tests, workflows, packaging, release checklist |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Docker/WSL2, ports, provider tests, memory behavior questions, reset/recovery |
 | [SECURITY.md](SECURITY.md) | trust model, secrets, remote-provider privacy, what is not guaranteed |

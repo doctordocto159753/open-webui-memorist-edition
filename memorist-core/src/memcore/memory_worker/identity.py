@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass
+from typing import Any
 
 from memcore.memory_worker.contracts import PIPELINE_VERSION, PROMPT_BUNDLE_VERSION
 from memcore.memory_worker.prompts.versions import (
@@ -61,3 +62,44 @@ def build_processing_identity(
         prompt_id=prompt_id,
         prompt_version=prompt_version,
     )
+
+
+def execution_profile_fingerprint(target: dict[str, Any] | None) -> str:
+    """Hash only execution-relevant, non-secret profile metadata."""
+
+    values = target or {}
+    fields = (
+        "model_role",
+        "role",
+        "requested_role",
+        "effective_role",
+        "scope_source",
+        "inheritance_source",
+        "fallback_reason",
+        "model_profile_uuid",
+        "provider_type",
+        "provider",
+        "model_name",
+        "endpoint_url",
+        "endpoint_is_local",
+        "secret_env_var_name",
+        "supports_structured_output",
+        "supports_json_mode",
+        "supports_embeddings",
+        "embedding_dimension",
+        "is_enabled",
+        "requires_privacy_acknowledgement",
+        "privacy_acknowledged_at",
+        "prompt_version",
+        "schema_version",
+        "updated_at",
+    )
+    material = {field: values.get(field) for field in fields if field in values}
+    encoded = json.dumps(
+        material,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()

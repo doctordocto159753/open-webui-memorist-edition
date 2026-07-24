@@ -28,6 +28,11 @@ _REVIEW_ROUTES = {
     MemorySignalRouteType.MANUAL_REVIEW,
     MemorySignalRouteType.PRIVACY_REVIEW,
 }
+_ASSISTANT_ARTIFACT_ROUTES = {
+    MemorySignalRouteType.PROJECT_CONTEXT,
+    MemorySignalRouteType.PROCESS_FACT,
+    MemorySignalRouteType.RESOURCE_REFERENCE,
+}
 
 
 @dataclass(frozen=True)
@@ -60,9 +65,16 @@ def decide_candidate_provenance(
     elif message_role == "assistant":
         authority = SourceAuthority.ASSISTANT_CLAIM
         explicitness = Explicitness.INFERRED
-        status = CandidateStatus.REJECTED
-        allows_memory = False
-        reasons.append("assistant_claim_not_user_authoritative")
+        if route_type in _ASSISTANT_ARTIFACT_ROUTES:
+            # Earlier assistant output can be a useful project artifact without
+            # becoming a user fact, identity claim, preference, or directive.
+            # Retrieval keeps the assistant_claim label and lower authority score.
+            allows_memory = status is CandidateStatus.READY_FOR_CONSOLIDATION
+            reasons.append("assistant_project_artifact")
+        else:
+            status = CandidateStatus.REJECTED
+            allows_memory = False
+            reasons.append("assistant_claim_not_user_authoritative")
     elif message_role == "tool":
         authority = SourceAuthority.TOOL_OBSERVATION
         explicitness = Explicitness.EXPLICIT

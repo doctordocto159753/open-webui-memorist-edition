@@ -1,6 +1,6 @@
 # SQLite Runtime
 
-SQLite is the authoritative local store for `v0.2.0-beta.1`. The default runtime does not require FalkorDB, Qdrant, cloud queues, or external storage.
+SQLite is the authoritative local store for `v0.2.0-beta.3`. The default runtime does not require FalkorDB, Qdrant, cloud queues, or external storage.
 
 ## Connection Policy
 

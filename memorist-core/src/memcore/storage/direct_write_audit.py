@@ -17,6 +17,9 @@ ALLOWED_DIRECT_WRITE_PATHS = {
     "memcore/active_memory/repositories.py": (
         "active-memory repository writes are bounded block metadata operations"
     ),
+    "memcore/active_memory/compaction/compactor.py": (
+        "compaction marks a rejected stage result inside the same fenced write boundary"
+    ),
     "memcore/repositories/retrieval.py": (
         "retrieval repository writes are bounded query/candidate audit rows"
     ),
@@ -34,6 +37,17 @@ ALLOWED_DIRECT_WRITE_PATHS = {
         "model-control writes are bounded local role/profile/default/usage metadata operations"
     ),
     "memcore/api/routes_retrieval.py": "retrieval route creates bounded read-run audit rows",
+    "memcore/api/routes_memory.py": (
+        "Full-mode processing endpoints use explicit PostgreSQL transactions; "
+        "Lite writes are delegated to repositories/pipelines"
+    ),
+    "memcore/api/routes_memory_control.py": (
+        "memory-control mutations are bounded policy transitions"
+    ),
+    "memcore/api/routes_openwebui.py": (
+        "Open WebUI handlers execute short commands through the write gateway or "
+        "explicit Full-mode transactions"
+    ),
     "memcore/security/reports.py": "security report writes bounded local audit reports",
     "memcore/reliability/storage_maintenance.py": (
         "maintenance writes only SQLite checkpoint/vacuum metadata"
@@ -56,6 +70,10 @@ ALLOWED_DIRECT_WRITE_PATHS = {
         "static audit utility contains SQL keywords only as data"
     ),
     "memcore/imports/repositories.py": "staging metadata writes are short-lived",
+    "memcore/imports/processing.py": (
+        "import reconstruction persists bounded stage and prompt audit records "
+        "inside the import worker transaction"
+    ),
     "memcore/imports/commit_batches.py": (
         "import commit batch records are bounded low-priority actor batch metadata"
     ),
@@ -70,6 +88,33 @@ ALLOWED_DIRECT_WRITE_PATHS = {
     "memcore/reliability/recovery.py": "recovery only marks interrupted operations resumable/dead",
     "memcore/retrieval/lexical.py": ("FTS maintenance is a local index projection"),
     "memcore/heritage/package.py": "restore internals can run inside HeritageRestoreCommand",
+    "memcore/memory_control/full_retrieval.py": (
+        "Full-mode retrieval writes bounded PostgreSQL run/candidate/attachment audit rows"
+    ),
+    "memcore/memory_control/repository.py": (
+        "memory-control repository owns bounded policy and turn-state writes"
+    ),
+    "memcore/memory_worker/pipeline.py": (
+        "Lite memory worker owns one serialized processing transaction"
+    ),
+    "memcore/memory_worker/postgres/pipeline.py": (
+        "Full memory worker owns explicit short PostgreSQL processing transactions"
+    ),
+    "memcore/memory_worker/postgres/routing_policy_adapter.py": (
+        "Full routing adapter persists one bounded canonical routing decision"
+    ),
+    "memcore/memory_worker/service.py": (
+        "memory job service owns serialized Lite job claims and lifecycle transitions"
+    ),
+    "memcore/model_control/postgres_repository.py": (
+        "PostgreSQL model-control repository owns bounded profile/default/usage writes"
+    ),
+    "memcore/model_control/stage_invocation.py": (
+        "shared stage boundary persists idempotent execution and prompt audit rows"
+    ),
+    "memcore/security/actor.py": (
+        "actor middleware writes bounded nonce records for replay protection"
+    ),
 }
 
 

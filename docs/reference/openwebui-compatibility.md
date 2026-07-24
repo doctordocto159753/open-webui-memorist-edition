@@ -4,7 +4,7 @@ Memorist integrates with Open WebUI through local server-side Filter and Functio
 
 `ghcr.io/open-webui/open-webui:v0.9.6`
 
-The release gate is contract-based: it runs the Memorist payload parser, inlet/outlet lifecycle tests, fail-open tests, idempotency tests, fixture payloads, and model control plane tests. A full Open WebUI version matrix is not claimed for v0.2.0-beta.1.
+The release gate is contract-based: it runs the Memorist payload parser, inlet/outlet lifecycle tests, fail-open tests, idempotency tests, fixture payloads, and model control plane tests. A full Open WebUI version matrix is not claimed for v0.2.0-beta.3.
 
 ## Compatibility Levels
 

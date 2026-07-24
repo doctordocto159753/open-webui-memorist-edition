@@ -16,7 +16,7 @@ check:
 	cd $(CORE_DIR) && $(UV) run pytest -q
 
 release-check: check model-control-tests memory-worker-prompt-pack-test smoke-daily smoke-import-heavy-ci heritage-roundtrip forget-residue consistency-check recovery-tests openwebui-contract-tests assemble-rc rc-schema-test version-consistency source-package source-tree-scan
-	$(PYTHON) -m release.scan_forbidden_files release/rc/memorist-openwebui-0.2.0-beta.1.zip
+	$(PYTHON) -m release.scan_forbidden_files release/rc/memorist-openwebui-0.2.0-beta.3.zip
 	$(RELEASE_REPORT) --manifest release/test_manifest.ijson --external-gates-passed
 
 dev:

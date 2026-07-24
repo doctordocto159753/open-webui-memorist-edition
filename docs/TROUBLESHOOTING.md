@@ -20,6 +20,7 @@ Common failures, in the order people usually hit them.
 | No Memorist features in the UI | Confirm the integration is mounted (the release compose does this) and `memorist-core` is healthy: `http://localhost:8777/memcore/health`. |
 | `memorist-core` unreachable | `Show-Memorist-Logs.ps1 memorist-core`; check that `MEMORIST_ACTOR_ASSERTION_SECRET`/`MEMORIST_ACTOR_SERVICE_TOKEN` are set in `.env` (the installer generates them). |
 | Chat works but never attaches memory | That's the fail-open design when memory is degraded. Check `http://localhost:8777/memcore/diagnostics/daily`, then preflight settings (`MEMORIST_PREFLIGHT_ENABLED`, `MEMORIST_FAIL_OPEN`). |
+| A message was captured but created no memory | Open `/memcore/memory-processing/runs/<run-uuid>/stages`; `no_memory_reason` distinguishes no eligible signal, review, rejection, and consolidation with no result. |
 
 ## Provider / API key setup
 
@@ -31,6 +32,10 @@ Common failures, in the order people usually hit them.
 | "Privacy acknowledgement required" | Open the processing node, review the remote data disclosure, and acknowledge it before assigning the profile as a role default. |
 | Connection refused/timeout on Test | The base URL must be reachable **from the memorist-core container**, not just from your browser. For a service on the host, use `host.docker.internal` instead of `localhost`. |
 | No API key at all | That's fine — local deterministic mode runs the whole memory pipeline without any remote provider. |
+| Profile is saved but a fallback is effective | Open Processing Nodes or `GET /memcore/model-control/effective`; inspect `scope_source`, `inheritance_source`, and `fallback_reason`. |
+| 401/403 on Test | The endpoint is reachable; verify the secret env-var name/value and provider permissions. |
+| 429 on Test | The endpoint is reachable but rate limited. Wait/retry or check quota; this is not an authentication or connection failure. |
+| Wrong embedding dimension | Set the profile's real vector dimension, retest, and rebuild stale embeddings. |
 
 ## Memory behavior questions
 
@@ -72,7 +77,9 @@ Common failures, in the order people usually hit them.
 
 - Live logs: `Show-Memorist-Logs.ps1 [service]` or `scripts/logs.sh`.
 - Diagnostics endpoints: `/memcore/diagnostics/daily`,
-  `/memcore/diagnostics/write-actor`.
+  `/memcore/diagnostics/write-actor`,
+  `/memcore/model-control/effective`, and
+  `/memcore/memory-processing/runs/<run-uuid>/stages`.
 
 Still stuck? Open an issue with the installer/doctor output and the first
 error from the logs — with any API keys redacted.

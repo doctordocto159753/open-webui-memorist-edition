@@ -1,4 +1,4 @@
-import { MemoristClient, type ModelControlDefault, type ModelControlHealthEvent, type ModelControlProfileCreate, type ModelControlRoleDefaultSet, type PrivacyAcknowledgementRequest } from "./memoristClient";
+import { MemoristClient, type ModelControlDefault, type ModelControlEffectiveRole, type ModelControlHealthEvent, type ModelControlProfileCreate, type ModelControlProfileTestResponse, type ModelControlRoleDefaultSet, type PrivacyAcknowledgementRequest } from "./memoristClient";
 import { MEMORIST_MODEL_ROLES, PROVIDER_TYPES, type MemoristModelRole, type ModelControlProfile, roleHelpText, rolePrivacyBadge } from "./modelControl";
 
 export const MEMORIST_PROCESSING_NODES_ROUTE = "/settings/memorist/processing-nodes";
@@ -26,12 +26,14 @@ type ProcessingNodesState = {
   profiles: ModelControlProfile[];
   defaults: ModelControlDefault[];
   health: HealthByProfile;
+  effective: ModelControlEffectiveRole[];
   loading: boolean;
   saving: boolean;
   error: string | null;
   form: Partial<ModelControlProfile> & { endpoint_url?: string | null; secret_env_var_name?: string | null; secret_strategy?: string };
   editingProfileUuid: string | null;
   testState: Record<string, string>;
+  testResults: Record<string, ModelControlProfileTestResponse | undefined>;
 };
 
 const EMPTY_FORM: ProcessingNodesState["form"] = {
@@ -56,12 +58,14 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
     profiles: [],
     defaults: [],
     health: {},
+    effective: [],
     loading: true,
     saving: false,
     error: null,
     form: { ...EMPTY_FORM },
     editingProfileUuid: null,
     testState: {},
+    testResults: {},
   };
 
   connectedCallback(): void {
@@ -71,10 +75,11 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
   async refresh(): Promise<void> {
     this.setState({ loading: true, error: null });
     try {
-      const [profilesResponse, defaultsResponse, healthResponse] = await Promise.all([
+      const [profilesResponse, defaultsResponse, healthResponse, effectiveResponse] = await Promise.all([
         this.client.modelControlProfiles(),
         this.client.modelControlDefaults(),
         this.client.modelControlHealth(),
+        this.client.modelControlEffective(),
       ]);
       const latestHealth = (healthResponse.latest_health_events || []).reduce<HealthByProfile>((acc, event) => {
         acc[event.model_profile_uuid] = event;
@@ -84,6 +89,7 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
         profiles: profilesResponse.items || [],
         defaults: defaultsResponse.items || [],
         health: latestHealth,
+        effective: effectiveResponse.items || [],
         loading: false,
       });
     } catch (error) {
@@ -94,6 +100,12 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
   render(): void {
     const processingNodeProfiles = this.state.profiles.filter(isProcessingNodeProfile);
     const rows = processingNodeProfiles.map((profile) => this.profileRow(profile)).join("");
+    const effectiveCards = this.state.effective.map((item) => `
+      <article class="effective-role">
+        <strong>${escapeHtml(item.role)}</strong>
+        <span>${escapeHtml(item.provider_type)} · ${escapeHtml(item.model_name)}</span>
+        <small>${escapeHtml(effectiveState(item))}; ${item.endpoint_is_local ? "local" : "remote"}${item.fallback_reason ? `; fallback: ${escapeHtml(item.fallback_reason)}` : ""}</small>
+      </article>`).join("");
     this.innerHTML = `
       <section class="memorist-processing-nodes" data-route="${MEMORIST_PROCESSING_NODES_ROUTE}">
         <header>
@@ -106,6 +118,7 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
           <button type="button" data-action="refresh" ${this.state.loading ? "disabled" : ""}>${this.state.loading ? "Loading…" : "Refresh"}</button>
           <button type="button" data-action="new">New profile</button>
         </div>
+        <section class="effective-grid" aria-label="Effective processing roles">${effectiveCards}</section>
         <div class="grid-wrap">
           <table>
             <thead><tr>${["Profile", "Role", "Provider", "Endpoint", "Model", "Local/Remote", "Privacy", "Secret", "Enabled", "Default", "Health", "Actions"].map((heading) => `<th>${heading}</th>`).join("")}</tr></thead>
@@ -132,13 +145,35 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
       <td>${profile.secret_configured ? "Env var configured" : "No secret configured"}</td>
       <td>${profile.is_enabled ? "Enabled" : "Disabled"}</td>
       <td>${isDefaultFor.length ? isDefaultFor.map(escapeHtml).join(", ") : "—"}</td>
-      <td>${health ? `${escapeHtml(health.status)}${health.latency_ms == null ? "" : ` (${health.latency_ms} ms)`}` : escapeHtml(this.state.testState[profile.model_profile_uuid] || "Not tested")}</td>
+      <td>${this.healthCell(profile, health)}</td>
       <td>
         <button type="button" data-action="edit" data-profile="${profile.model_profile_uuid}">Edit</button>
         <button type="button" data-action="test" data-profile="${profile.model_profile_uuid}">Test</button>
         ${profile.endpoint_is_local || profile.privacy_acknowledged_at ? "" : `<button type="button" data-action="ack" data-profile="${profile.model_profile_uuid}">Acknowledge privacy</button>`}
       </td>
     </tr>`;
+  }
+
+  private healthCell(
+    profile: ModelControlProfile,
+    health: ModelControlHealthEvent | undefined,
+  ): string {
+    const result = this.state.testResults[profile.model_profile_uuid]?.health;
+    if (result) {
+      return [
+        `Connection: ${result.tcp_or_http_reachable}`,
+        `Authentication: ${result.authentication_status}`,
+        `Model: ${result.model_status}`,
+        `Role: ${result.role_compatibility_status}`,
+        `Overall: ${result.overall_status}`,
+        result.quota_or_rate_limited ? "Rate/quota limited" : "",
+        result.detail_sanitized || "",
+        result.recommended_action || "",
+      ].filter(Boolean).map((value) => escapeHtml(value)).join("<br>");
+    }
+    return health
+      ? `${escapeHtml(health.status)}${health.latency_ms == null ? "" : ` (${health.latency_ms} ms)`}${health.detail_sanitized ? `<br>${escapeHtml(health.detail_sanitized)}` : ""}`
+      : escapeHtml(this.state.testState[profile.model_profile_uuid] || "Not tested");
   }
 
   private formHtml(): string {
@@ -241,19 +276,39 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
       this.setState({ error: PRIVACY_ACK_REQUIRED_ERROR });
       return;
     }
+    const tested = this.state.testResults[modelProfileUuid];
+    if (
+      !tested
+      || tested.health.overall_status !== "ok"
+      || tested.health.role_compatibility_status !== "compatible"
+    ) {
+      this.setState({
+        error: "Test this exact profile successfully for role compatibility before setting it as default.",
+      });
+      return;
+    }
     try {
       await this.client.setModelControlDefault({ role, model_profile_uuid: modelProfileUuid } satisfies ModelControlRoleDefaultSet);
       await this.refresh();
+      const active = this.state.effective.find((item) => item.role === role);
+      if (active?.model_profile_uuid !== modelProfileUuid) {
+        this.setState({ error: "The server did not confirm the intended profile as effective." });
+      }
     } catch (error) {
       this.setState({ error: errorMessage(error) });
     }
   }
 
   private async testProfile(profileUuid: string): Promise<void> {
-    this.state.testState[profileUuid] = "Testing…";
+    if (this.state.testState[profileUuid] === "testing") return;
+    this.state.testState[profileUuid] = "testing";
     this.render();
     try {
-      await this.client.testModelControlProfile(profileUuid, { timeout_ms: 1000 });
+      const result = await this.client.testModelControlProfile(profileUuid, {
+        idempotency_key: `processing-nodes-test:${profileUuid}:${Date.now()}`,
+      });
+      this.state.testResults[profileUuid] = result;
+      this.state.testState[profileUuid] = result.health.overall_status;
       await this.refresh();
     } catch (error) {
       this.state.testState[profileUuid] = errorMessage(error);
@@ -300,6 +355,13 @@ function numberOrNull(value: FormDataEntryValue | null): number | null {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function effectiveState(item: ModelControlEffectiveRole): string {
+  if (!item.capability_compatible) return "configured but incompatible";
+  if (item.inheritance_source) return `inherited from ${item.inheritance_source}`;
+  if (item.scope_source === "built_in_fallback") return "built-in fallback";
+  return `configured and active (${item.scope_source})`;
 }
 
 function escapeHtml(value: string): string {

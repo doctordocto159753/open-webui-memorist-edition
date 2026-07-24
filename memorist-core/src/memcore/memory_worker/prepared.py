@@ -15,6 +15,7 @@ class PreparedJakobsonInference:
     model_name: str
     processing_identity_hash: str
     input_content_hash: str
+    profile_fingerprint: str
     output: dict[str, Any]
     input_tokens: int
     output_tokens: int

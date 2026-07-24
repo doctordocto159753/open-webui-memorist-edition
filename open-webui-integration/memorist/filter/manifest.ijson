@@ -1,6 +1,6 @@
 ﻿{
   "name": "memorist-memory-filter",
-  "version": "0.2.0-beta.1",
+  "version": "0.2.0-beta.3",
   "type": "openwebui-filter",
   "local_only": true,
   "entrypoint": "memorist_memory_filter.py",

@@ -1,6 +1,6 @@
 # Memorist OpenWebUI Local Package
 
-Package version: `0.2.0-beta.1`  
+Package version: `0.2.0-beta.3`
 Status: early public alpha.
 
 This self-contained package runs Open WebUI with Memorist Core. Lite uses SQLite.

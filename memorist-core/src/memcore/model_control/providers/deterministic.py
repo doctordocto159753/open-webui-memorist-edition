@@ -26,7 +26,16 @@ class DeterministicProvider:
             model_name=self.model_name,
             latency_ms=_elapsed_ms(started),
             local_only_safe=True,
-            detail="deterministic local provider",
+            dns_or_host_reachable="not_applicable",
+            tcp_or_http_reachable="not_applicable",
+            authentication_status="not_applicable",
+            model_status="available",
+            chat_completion_status="supported",
+            structured_output_status="supported",
+            role_compatibility_status="compatible",
+            overall_status="ok",
+            detail_sanitized="deterministic local provider",
+            recommended_action="No action required.",
         )
 
     def estimate_tokens(self, input_text: str = "", output_text: str = "") -> TokenEstimate:

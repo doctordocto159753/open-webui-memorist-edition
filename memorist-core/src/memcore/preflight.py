@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from memcore.attachments.budget import compute_attachment_budget
 from memcore.attachments.builder import AttachmentBuilder
 from memcore.config import Settings
+from memcore.memory_worker.identity import execution_profile_fingerprint
 from memcore.memory_worker.prompts.registry import (
     PromptExecutionRepository,
     PromptValidationError,
@@ -15,6 +16,7 @@ from memcore.memory_worker.prompts.registry import (
 )
 from memcore.model_control.registry import provider_for_profile
 from memcore.model_control.repository import ModelControlRepository
+from memcore.model_control.resolution import RoleResolutionService
 from memcore.model_control.schemas import UsageEventCreate
 from memcore.model_control.security import sanitize_error_message
 from memcore.models import ModelRole, PreflightResponse, PreflightStatus
@@ -276,14 +278,30 @@ class PreflightService:
         effective_token_budget: int,
     ) -> None:
         repository = ModelControlRepository(self.connection)
-        resolved = repository.resolve_default(ModelRole.PREFLIGHT)
+        scope = self.connection.execute(
+            "SELECT workspace_uuid, project_uuid FROM sessions WHERE session_uuid = ?",
+            (request.session_uuid,),
+        ).fetchone()
+        resolution = RoleResolutionService(repository).resolve(
+            ModelRole.PREFLIGHT,
+            workspace_uuid=(
+                str(scope["workspace_uuid"]) if scope and scope["workspace_uuid"] else None
+            ),
+            project_uuid=(
+                str(scope["project_uuid"]) if scope and scope["project_uuid"] else None
+            ),
+        )
         profile = (
-            repository.get_profile(str(resolved["model_profile_uuid"]))
-            if resolved is not None and resolved.get("model_profile_uuid") is not None
+            repository.get_profile(resolution.model_profile_uuid)
+            if resolution.model_profile_uuid is not None
             else None
         )
         profile_uuid = profile.model_profile_uuid if profile else None
-        provider = provider_for_profile(profile)
+        provider = provider_for_profile(profile or resolution.runtime_profile())
+        execution_profile = (
+            profile.model_dump(mode="json") if profile else resolution.runtime_profile()
+        )
+        expected_profile_fingerprint = execution_profile_fingerprint(execution_profile)
         self.events.record_preflight_event(
             "preflight_model_started",
             {
@@ -311,6 +329,7 @@ class PreflightService:
                 input_tokens = request.estimated_recent_conversation_tokens or 0
                 output_tokens = 16
             else:
+                self.connection.commit()
                 response = provider.complete_structured(
                     _preflight_prompt(input_payload),
                     timeout_seconds=self.settings.preflight_model_timeout_ms / 1000,
@@ -319,6 +338,29 @@ class PreflightService:
                 input_tokens = response.input_tokens
                 output_tokens = response.output_tokens
                 status = "ok"
+                current_resolution = RoleResolutionService(repository).resolve(
+                    ModelRole.PREFLIGHT,
+                    workspace_uuid=(
+                        str(scope["workspace_uuid"])
+                        if scope and scope["workspace_uuid"]
+                        else None
+                    ),
+                    project_uuid=(
+                        str(scope["project_uuid"]) if scope and scope["project_uuid"] else None
+                    ),
+                )
+                current_profile = (
+                    repository.get_profile(current_resolution.model_profile_uuid)
+                    if current_resolution.model_profile_uuid
+                    else None
+                )
+                current_values = (
+                    current_profile.model_dump(mode="json")
+                    if current_profile
+                    else current_resolution.runtime_profile()
+                )
+                if execution_profile_fingerprint(current_values) != expected_profile_fingerprint:
+                    raise RuntimeError("preflight processing profile changed during provider call")
             raw_output = dict(output)
             validate_prompt_execution(
                 "memorist.preflight_planning",
@@ -434,12 +476,20 @@ class PreflightService:
     ) -> PreflightResponse:
         try:
             repository = ModelControlRepository(self.connection)
-            resolved = repository.resolve_default(ModelRole.PREFLIGHT)
-            model_profile_uuid = (
-                str(resolved["model_profile_uuid"])
-                if resolved is not None and resolved.get("model_profile_uuid") is not None
-                else None
+            scope = self.connection.execute(
+                "SELECT workspace_uuid, project_uuid FROM sessions WHERE session_uuid = ?",
+                (request.session_uuid,),
+            ).fetchone()
+            resolution = RoleResolutionService(repository).resolve(
+                ModelRole.PREFLIGHT,
+                workspace_uuid=(
+                    str(scope["workspace_uuid"]) if scope and scope["workspace_uuid"] else None
+                ),
+                project_uuid=(
+                    str(scope["project_uuid"]) if scope and scope["project_uuid"] else None
+                ),
             )
+            model_profile_uuid = resolution.model_profile_uuid
             repository.record_usage_event(
                 UsageEventCreate(
                     role=ModelRole.PREFLIGHT,

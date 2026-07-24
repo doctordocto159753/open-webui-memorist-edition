@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     enable_openwebui_adapter: bool = True
     enable_graph_projection: bool = False
     enable_memory_worker: bool = False
+    memory_worker_lease_seconds: int = Field(default=300, ge=1, le=3600)
     enable_import_system: bool = False
     enable_memory_context_attachment: bool = False
     enable_active_memory_blocks: bool = False
@@ -57,6 +58,7 @@ class Settings(BaseSettings):
     preflight_enabled: bool = True
     preflight_timeout_ms: int = Field(default=500, ge=1)
     preflight_model_timeout_ms: int = Field(default=800, ge=1)
+    provider_test_timeout_ms: int = Field(default=15_000, ge=250, le=60_000)
     preflight_fail_open: bool = True
     default_turn_policy: TurnPolicySetting = "full"
     retrieval_mode: RetrievalModeSetting = "standard"

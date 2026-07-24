@@ -183,6 +183,7 @@ export type ModelControlProfileCreate = {
   secret_env_var_name?: string | null;
   is_enabled?: boolean;
   privacy_acknowledged?: boolean;
+  setup_idempotency_key?: string;
 };
 
 export type ModelControlProfilePatch = Partial<ModelControlProfileCreate>;
@@ -227,17 +228,36 @@ export type MemoryNodeSetupRole = {
   recommended: boolean;
   configured: boolean;
   available: boolean;
-  source: "configured_default" | "built_in_fallback";
+  source: string;
+  scope_source: "project" | "workspace" | "global" | "built_in_fallback";
+  inheritance_source?: MemoristModelRole | null;
+  fallback_reason?: string | null;
+  effective_role: MemoristModelRole;
   provider_type: string | null;
   provider_name: string | null;
   model_name: string | null;
   model_profile_uuid: string | null;
   endpoint_is_local: boolean;
   secret_configured: boolean;
+  secret_available: boolean;
+  privacy_acknowledged: boolean;
+  capability_compatible: boolean;
+  capability_reasons: string[];
   supports_structured_output: boolean;
   supports_embeddings: boolean;
   description: string;
   safe_fallback: string;
+  runtime_wired: boolean;
+  last_health?: ModelControlHealthEvent | null;
+  last_runtime_use?: {
+    role: MemoristModelRole;
+    provider_type: string;
+    model_name: string;
+    count: number;
+    error_count: number;
+    p95_latency_ms?: number | null;
+    last_used_at?: string | null;
+  } | null;
 };
 
 export type MemoryNodeSetupStatus = {
@@ -263,16 +283,65 @@ export type ModelControlProviderHealth = {
   model_name: string;
   latency_ms: number;
   local_only_safe: boolean;
+  dns_or_host_reachable: string;
+  tcp_or_http_reachable: string;
+  authentication_status: string;
+  model_status: string;
+  chat_completion_status: string;
+  structured_output_status: string;
+  role_compatibility_status: string;
+  overall_status: string;
+  http_status?: number | null;
+  retryable: boolean;
+  quota_or_rate_limited: boolean;
+  detail_sanitized?: string | null;
+  recommended_action?: string | null;
   detail?: string | null;
 };
 
 export type ModelControlProfileTestRequest = {
   timeout_ms?: number;
+  idempotency_key?: string;
 };
 
 export type ModelControlProfileTestResponse = {
   model_profile_uuid: string;
   health: ModelControlProviderHealth;
+  timeout_ms: number;
+  test_levels: {
+    connectivity_and_authentication: {
+      host: string;
+      http: string;
+      authentication: string;
+    };
+    model_capability: {
+      model: string;
+      chat_completion: string;
+      structured_output: string;
+    };
+    role_compatibility: string;
+  };
+};
+
+export type ModelControlEffectiveRole = {
+  role: MemoristModelRole;
+  requested_role: MemoristModelRole;
+  effective_role: MemoristModelRole;
+  model_profile_uuid?: string | null;
+  provider_type: string;
+  model_name: string;
+  endpoint_is_local: boolean;
+  scope_source: string;
+  inheritance_source?: MemoristModelRole | null;
+  fallback_reason?: string | null;
+  capability_compatible: boolean;
+  capability_reasons: string[];
+  effective_profile?: ModelControlProfile | null;
+};
+
+export type ModelControlEffectiveResponse = {
+  resolution_version: string;
+  items: ModelControlEffectiveRole[];
 };
 
 export type PrivacyAcknowledgementRequest = {
@@ -344,6 +413,7 @@ export class MemoristClient {
   async modelControlRoles(): Promise<unknown> { return this.controlGet("/model-control/roles"); }
   async modelControlProfiles(): Promise<ModelControlProfileList> { return this.controlGet("/model-control/profiles"); }
   async modelControlDefaults(): Promise<ModelControlDefaultsResponse> { return this.controlGet("/model-control/defaults"); }
+  async modelControlEffective(): Promise<ModelControlEffectiveResponse> { return this.controlGet("/model-control/effective"); }
   async modelControlUsage(): Promise<unknown> { return this.get("/model-control/usage"); }
   async modelControlPrivacy(): Promise<unknown> { return this.controlGet("/model-control/privacy"); }
   async modelControlHealth(): Promise<ModelControlHealthResponse> { return this.controlGet("/model-control/health"); }

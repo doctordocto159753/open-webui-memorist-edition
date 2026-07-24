@@ -18,6 +18,7 @@ from memcore.main import create_app
 from memcore.memory_control.policy import normalize_turn_policy
 from memcore.memory_control.repository import MemoryControlRepository, ResolvedTurnPolicy
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
+from memcore.memory_worker.prompts.schemas import valid_jakobson_output
 from memcore.model_control.providers.openai_compatible import (
     OpenAICompatibleEmbeddingProvider,
     OpenAICompatibleLLMProvider,
@@ -636,6 +637,11 @@ def test_memory_worker_uses_tested_memory_extraction_profile(
     assert health["health"]["status"] == "ok"
     assert _OpenAICompatibleHandler.post_paths == ["/v1/chat/completions"]
     assert _OpenAICompatibleHandler.last_payload["model"] == "mock-chat"
+    provider_output = valid_jakobson_output()
+    provider_output["sentences"][0]["text"] = (
+        "The user prefers local OpenAI-compatible memory extraction tests."
+    )
+    _OpenAICompatibleHandler.response_content = json.dumps(provider_output)
 
     _assert_ok(
         client.post(
@@ -1048,6 +1054,86 @@ def test_openai_compatible_health_check_rejects_malformed_json() -> None:
     assert "Malformed JSON" in health.detail
 
 
+def test_openai_compatible_health_check_accepts_fenced_json() -> None:
+    class FencedJSONHandler(_HealthCheckHandler):
+        response_content = '```json\n{"memorist_provider_test":"ok"}\n```'
+
+    with _served(FencedJSONHandler) as endpoint_url:
+        health = OpenAICompatibleLLMProvider(
+            endpoint_url,
+            "mock-chat",
+            supports_json_mode=True,
+        ).health_check()
+
+    assert health.overall_status == "ok"
+    assert health.structured_output_status == "supported"
+    assert health.role_compatibility_status == "compatible"
+
+
+@pytest.mark.parametrize(
+    (
+        "status_code",
+        "overall_status",
+        "authentication_status",
+        "model_status",
+        "retryable",
+        "rate_limited",
+    ),
+    [
+        (403, "authentication_failed", "invalid", "unknown", False, False),
+        (404, "incompatible", "valid", "not_found", False, False),
+        (429, "rate_limited", "valid", "unknown", True, True),
+        (500, "unknown_error", "valid", "unknown", True, False),
+    ],
+)
+def test_openai_compatible_health_distinguishes_reachable_http_failures(
+    status_code: int,
+    overall_status: str,
+    authentication_status: str,
+    model_status: str,
+    retryable: bool,
+    rate_limited: bool,
+) -> None:
+    _ProviderStatusHandler.status_code = status_code
+    with _served(_ProviderStatusHandler) as endpoint_url:
+        health = OpenAICompatibleLLMProvider(endpoint_url, "mock-chat").health_check()
+
+    assert health.status == "error"
+    assert health.http_status == status_code
+    assert health.tcp_or_http_reachable == "reachable"
+    assert health.overall_status == overall_status
+    assert health.authentication_status == authentication_status
+    assert health.model_status == model_status
+    assert health.retryable is retryable
+    assert health.quota_or_rate_limited is rate_limited
+
+
+def test_openai_compatible_health_reports_missing_secret_without_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MEMORIST_TEST_MISSING_PROVIDER_KEY", raising=False)
+    with _served(_HealthCheckHandler) as endpoint_url:
+        health = OpenAICompatibleLLMProvider(
+            endpoint_url,
+            "mock-chat",
+            secret_env_var_name="MEMORIST_TEST_MISSING_PROVIDER_KEY",
+        ).health_check()
+
+    assert health.overall_status == "misconfigured"
+    assert health.authentication_status == "missing_secret_reference"
+    assert health.http_status is None
+
+
+def test_openai_compatible_health_distinguishes_dropped_connection() -> None:
+    with _served(_DroppedConnectionHandler) as endpoint_url:
+        health = OpenAICompatibleLLMProvider(endpoint_url, "mock-chat").health_check()
+
+    assert health.status == "error"
+    assert health.overall_status == "unreachable"
+    assert health.tcp_or_http_reachable == "unreachable"
+    assert health.retryable is True
+
+
 def test_openai_compatible_health_check_reports_wrong_model() -> None:
     with _served(_HealthCheckHandler) as endpoint_url:
         health = OpenAICompatibleLLMProvider(endpoint_url, "wrong-chat").health_check()
@@ -1410,6 +1496,34 @@ class _AuthFailureHandler(_OpenAICompatibleHandler):
             return
         self.send_response(404)
         self.end_headers()
+
+
+class _ProviderStatusHandler(BaseHTTPRequestHandler):
+    status_code = 500
+
+    def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("Content-Length", "0"))
+        self.rfile.read(length)
+        body = json.dumps(
+            {"error": {"message": f"provider status {type(self).status_code}"}}
+        ).encode("utf-8")
+        self.send_response(type(self).status_code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        return
+
+
+class _DroppedConnectionHandler(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:  # noqa: N802
+        self.connection.shutdown(2)
+        self.connection.close()
+
+    def log_message(self, format: str, *args: Any) -> None:
+        return
 
 
 def _assert_no_auth_failure_secret_material(text: str) -> None:

@@ -35,6 +35,20 @@ class ModelControlRepository:
         self.sqlite = SQLiteRepository(connection)
 
     def create_profile(self, request: ModelProfileCreate) -> ModelProfile:
+        if request.setup_idempotency_key:
+            existing = self.connection.execute(
+                "SELECT model_profile_uuid FROM model_profiles WHERE setup_idempotency_key = ?",
+                (request.setup_idempotency_key,),
+            ).fetchone()
+            if existing is not None:
+                patch_values = request.model_dump(
+                    exclude={"setup_idempotency_key"},
+                    exclude_unset=True,
+                )
+                return self.patch_profile(
+                    str(existing["model_profile_uuid"]),
+                    ModelProfilePatch.model_validate(patch_values),
+                )
         endpoint_local = _effective_endpoint_is_local(
             request.provider_type.value,
             request.endpoint_url,
@@ -85,6 +99,12 @@ class ModelControlRepository:
         )
         with self.connection:
             self.sqlite.insert("model_profiles", profile.model_dump(mode="json"))
+            if request.setup_idempotency_key:
+                self.connection.execute(
+                    "UPDATE model_profiles SET setup_idempotency_key = ? "
+                    "WHERE model_profile_uuid = ?",
+                    (request.setup_idempotency_key, profile.model_profile_uuid),
+                )
         return profile
 
     def get_profile(self, model_profile_uuid: str) -> ModelProfile | None:
@@ -92,7 +112,7 @@ class ModelControlRepository:
             "SELECT * FROM model_profiles WHERE model_profile_uuid = ?",
             (model_profile_uuid,),
         ).fetchone()
-        return ModelProfile.model_validate(dict(row)) if row is not None else None
+        return _profile_from_sqlite_row(row) if row is not None else None
 
     def list_profiles(self, role: ModelRole | str | None = None) -> list[ModelProfile]:
         if role is None:
@@ -108,7 +128,7 @@ class ModelControlRepository:
                 """,
                 (_model_role(role).value,),
             ).fetchall()
-        return [ModelProfile.model_validate(dict(row)) for row in rows]
+        return [_profile_from_sqlite_row(row) for row in rows]
 
     def patch_profile(self, model_profile_uuid: str, request: ModelProfilePatch) -> ModelProfile:
         profile = self.get_profile(model_profile_uuid)
@@ -189,6 +209,8 @@ class ModelControlRepository:
             raise RepositoryError(f"model profile not found: {model_profile_uuid}")
         if not profile.is_enabled:
             raise RepositoryError("disabled model profile cannot be assigned as default")
+        if profile.role is not model_role:
+            raise RepositoryError("model profile role does not match the requested default role")
         if requires_privacy_acknowledgement(profile) and profile.privacy_acknowledged_at is None:
             raise PrivacyAcknowledgementRequired(
                 "external or non-local profiles require explicit privacy acknowledgement before use"
@@ -248,7 +270,8 @@ class ModelControlRepository:
         model_role = _model_role(role)
         row = self.connection.execute(
             """
-            SELECT p.*
+            SELECT p.*, d.workspace_uuid AS resolved_workspace_uuid,
+                   d.project_uuid AS resolved_project_uuid
             FROM model_role_defaults d
             JOIN model_profiles p ON p.model_profile_uuid = d.model_profile_uuid
             WHERE d.role = ?
@@ -273,7 +296,13 @@ class ModelControlRepository:
         ).fetchone()
         if row is None:
             return None
-        return public_profile(ModelProfile.model_validate(dict(row)))
+        values = dict(row)
+        resolved_workspace = values.pop("resolved_workspace_uuid", None)
+        resolved_project = values.pop("resolved_project_uuid", None)
+        payload = public_profile(_profile_from_sqlite_values(values))
+        payload["workspace_uuid"] = resolved_workspace
+        payload["project_uuid"] = resolved_project
+        return payload
 
     def record_usage_event(self, event: UsageEventCreate) -> dict[str, Any]:
         model_profile_uuid = event.model_profile_uuid
@@ -329,7 +358,8 @@ class ModelControlRepository:
                    COALESCE(SUM(estimated_cost), 0.0) AS estimated_cost,
                    SUM(CASE WHEN status IN ('error', 'failed', 'failed_open') THEN 1 ELSE 0 END)
                        AS error_count,
-                   MAX(latency_ms) AS max_latency_ms
+                   MAX(latency_ms) AS max_latency_ms,
+                   MAX(created_at) AS last_used_at
             FROM model_usage_events
             GROUP BY role, provider_type, model_name
             ORDER BY role, provider_type, model_name
@@ -359,6 +389,7 @@ class ModelControlRepository:
         self,
         model_profile_uuid: str,
         health: ProviderHealth,
+        test_idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         profile = self.get_profile(model_profile_uuid)
         if profile is None:
@@ -373,10 +404,22 @@ class ModelControlRepository:
             "latency_ms": health.latency_ms,
             "local_only_safe": health.local_only_safe,
             "detail_sanitized": sanitize_error_message(health.detail),
+            "result_ijson": prepare_ijson_field(
+                "metadata_ijson", health.model_dump(mode="json")
+            ),
+            "test_idempotency_key": test_idempotency_key,
             "created_at": utc_now(),
             "schema_version": 1,
         }
         with self.connection:
+            if test_idempotency_key:
+                existing = self.connection.execute(
+                    "SELECT * FROM model_health_events "
+                    "WHERE model_profile_uuid = ? AND test_idempotency_key = ?",
+                    (model_profile_uuid, test_idempotency_key),
+                ).fetchone()
+                if existing is not None:
+                    return dict(existing)
             self.sqlite.insert("model_health_events", values)
         return values
 
@@ -743,6 +786,15 @@ def _profile_ijson(profile: ModelProfile, field_name: str) -> dict[str, Any]:
 
 def _model_role(value: ModelRole | str) -> ModelRole:
     return value if isinstance(value, ModelRole) else ModelRole(value)
+
+
+def _profile_from_sqlite_row(row: sqlite3.Row) -> ModelProfile:
+    return _profile_from_sqlite_values(dict(row))
+
+
+def _profile_from_sqlite_values(values: dict[str, Any]) -> ModelProfile:
+    values.pop("setup_idempotency_key", None)
+    return ModelProfile.model_validate(values)
 
 
 def _token_count(text: str) -> int:

@@ -487,7 +487,7 @@ def test_slow_import_inference_does_not_block_live_capture(
     assert not thread.is_alive()
 
 
-def test_publication_can_finish_after_remaining_lease_expires(
+def test_publication_is_rejected_after_remaining_lease_expires(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings = _settings(tmp_path, concurrency=1)
@@ -547,8 +547,8 @@ def test_publication_can_finish_after_remaining_lease_expires(
             (claimed["status_uuid"],),
         ).fetchone()
     assert dict(status) == {
-        "status": "succeeded",
-        "processing_stage": "complete",
+        "status": "queued",
+        "processing_stage": "memory_extraction",
         "lease_owner": None,
         "lease_expires_at": None,
     }

@@ -17,14 +17,14 @@ describe("Memorist authenticated browser transport", () => {
     window.fetch = originalFetch;
     XMLHttpRequest.prototype.open = originalOpen;
     XMLHttpRequest.prototype.send = originalSend;
-    localStorage.clear();
+    window.localStorage.clear();
     delete (window as unknown as Record<string, unknown>)[installFlag];
     vi.restoreAllMocks();
     vi.resetModules();
   });
 
   it("adds the Open WebUI bearer token and rewrites only same-origin import calls", async () => {
-    localStorage.setItem("token", "openwebui-jwt-test-token");
+    window.localStorage.setItem("token", "openwebui-jwt-test-token");
     const calls: FetchCall[] = [];
     const nativeFetch: typeof window.fetch = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {

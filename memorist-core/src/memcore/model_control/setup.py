@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from memcore.model_control.repository import built_in_default
+from memcore.model_control.resolution import RoleResolutionService
 from memcore.model_control.roles import MODEL_ROLE_SPECS
 from memcore.models import ModelRole
 
@@ -15,12 +15,20 @@ class SetupRepository(Protocol):
         project_uuid: str | None = None,
     ) -> dict[str, Any] | None: ...
 
+    def get_profile(self, model_profile_uuid: str) -> Any: ...
+
+    def health(self) -> dict[str, Any]: ...
+
+    def usage_summary(self) -> dict[str, Any]: ...
+
 
 SETUP_ROLES = (
+    ModelRole.PREFLIGHT,
     ModelRole.MEMORY_EXTRACTION,
     ModelRole.HIGH_CONFIDENCE_EXTRACTION,
-    ModelRole.EMBEDDING,
     ModelRole.PRIVACY_SENSITIVITY,
+    ModelRole.EMBEDDING,
+    ModelRole.BLOCK_COMPACTION,
     ModelRole.IMPORT_RECONSTRUCTION,
 )
 REQUIRED_PROCESSING_ROLES = (ModelRole.MEMORY_EXTRACTION,)
@@ -41,9 +49,26 @@ def build_setup_status(
     fallback_roles: list[str] = []
     missing_roles: list[str] = []
 
+    resolver = RoleResolutionService(repository)
+    health_items = repository.health().get("latest_health_events", [])
+    health_by_profile = {
+        str(item["model_profile_uuid"]): item
+        for item in health_items
+        if item.get("model_profile_uuid")
+    }
+    usage_items = repository.usage_summary().get("by_role", [])
+    usage_by_role = {str(item["role"]): item for item in usage_items}
+    wired_roles = {role.value for role in SETUP_ROLES}
+
     for role in SETUP_ROLES:
         configured = repository.resolve_default(role, workspace_uuid, None)
-        effective = configured or built_in_default(role)
+        resolution = resolver.resolve(role, workspace_uuid=workspace_uuid)
+        effective = resolution.runtime_profile()
+        effective_profile = (
+            repository.get_profile(resolution.model_profile_uuid)
+            if resolution.model_profile_uuid
+            else None
+        )
         available = bool(
             effective.get("is_enabled", True)
             and effective.get("provider_type") not in {None, "disabled", "unknown"}
@@ -64,19 +89,47 @@ def build_setup_status(
                 "recommended": role in RECOMMENDED_FIRST_RUN_ROLES,
                 "configured": configured is not None,
                 "available": available,
-                "source": "configured_default" if configured is not None else "built_in_fallback",
+                "source": (
+                    f"inherited_from_{resolution.inheritance_source}"
+                    if resolution.inheritance_source
+                    else "configured_default"
+                    if configured is not None
+                    else "built_in_fallback"
+                ),
+                "scope_source": resolution.scope_source,
+                "inheritance_source": resolution.inheritance_source,
+                "fallback_reason": resolution.fallback_reason,
+                "effective_role": resolution.effective_role.value,
                 "provider_type": effective.get("provider_type"),
-                "provider_name": effective.get("provider_name") or effective.get("provider_type"),
+                "provider_name": (
+                    effective_profile.provider_name
+                    if effective_profile is not None
+                    else effective.get("provider_type")
+                ),
                 "model_name": effective.get("model_name"),
                 "model_profile_uuid": effective.get("model_profile_uuid"),
-                "endpoint_is_local": bool(effective.get("endpoint_is_local", True)),
-                "secret_configured": bool(effective.get("secret_configured", False)),
+                "endpoint_is_local": resolution.endpoint_is_local,
+                "secret_configured": resolution.secret_reference_configured,
+                "secret_available": resolution.secret_reference_available,
+                "privacy_acknowledged": resolution.privacy_acknowledged,
+                "capability_compatible": resolution.capability_compatible,
+                "capability_reasons": resolution.capability_reasons,
                 "supports_structured_output": bool(
-                    effective.get("supports_structured_output", False)
+                    effective_profile is not None
+                    and effective_profile.supports_structured_output
                 ),
-                "supports_embeddings": bool(effective.get("supports_embeddings", False)),
+                "supports_embeddings": bool(
+                    effective_profile is not None and effective_profile.supports_embeddings
+                ),
                 "description": spec.description,
                 "safe_fallback": spec.safe_beta_default,
+                "runtime_wired": role.value in wired_roles,
+                "last_health": (
+                    health_by_profile.get(str(resolution.model_profile_uuid))
+                    if resolution.model_profile_uuid
+                    else None
+                ),
+                "last_runtime_use": usage_by_role.get(role.value),
             }
         )
 

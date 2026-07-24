@@ -8,8 +8,8 @@ type MemoristWindow = Window & {
 };
 
 function browserToken(): string {
-  if (typeof localStorage === "undefined") return "";
-  return localStorage.getItem("token") || "";
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") return "";
+  return window.localStorage.getItem("token") || "";
 }
 
 function sameOriginPath(value: string): { url: URL; relative: boolean } | null {

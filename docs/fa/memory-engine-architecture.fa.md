@@ -14,8 +14,8 @@ README_MEMORY_ENGINE_ARCHITECTURE.fa.md
 وضعیت قابل ادعای فعلی:
 
 ```text
-Version: 0.2.0-beta.1 development baseline
-Schema version: 18
+Version: 0.2.0-beta.3 development baseline
+Schema version: 19
 Lite Mode: beta-candidate
 Full Mode: experimental preview, materially improved
 Open WebUI integration: contract-tested; pinned container smoke pending/manual

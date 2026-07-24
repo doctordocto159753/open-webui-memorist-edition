@@ -8,7 +8,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-VERSION = "0.2.0-beta.2"
+VERSION = "0.2.0-beta.3"
 OPENWEBUI_BASE_IMAGE = (
     "ghcr.io/open-webui/open-webui:v0.9.6@sha256:"
     "90eae5b419e40b4c3dd684582b2c83440b36f9ae2f6532c09639b2ba4ee65158"
@@ -219,6 +219,10 @@ def _copy_archive_docs() -> None:
         (
             ROOT / "docs" / "reference" / "backup-restore.md",
             Path("docs/reference/backup-restore.md"),
+        ),
+        (
+            ROOT / "docs" / "reference" / "model-control-plane.md",
+            Path("docs/reference/model-control-plane.md"),
         ),
     ]:
         if not source.is_file():

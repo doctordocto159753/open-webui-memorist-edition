@@ -1,6 +1,33 @@
 # Release Notes
 
-## v0.2.0-beta.2 — PR5-G integrated product candidate (current)
+## v0.2.0-beta.3 — fenced processing-runtime closure (current)
+
+This candidate closes the processing-node failure boundaries found during the
+independent audit of PR #49:
+
+- **Lossless stage replay** — validated structured outputs are stored as
+  canonical I-JSON with hashes, corrupt or legacy audit rows are repaired
+  instead of replayed as abstentions, and concurrent writers converge on one
+  authoritative result.
+- **Strict worker fencing** — memory jobs now use per-claim lease tokens,
+  monotonic generations, explicit expiry, and short post-provider
+  transactions that revalidate job, source, and effective-profile identity
+  before candidate, memory, embedding, graph, outbox, or terminal-state
+  writes.
+- **Embedding recovery** — disabled embedding is a terminal audited state;
+  missing projections bypass stage replay, increment durable attempts, and
+  regenerate exactly one model/dimension-matched vector.
+- **Functional block compaction** — configured providers return typed,
+  provenance-exact proposals whose accepted content changes the published
+  Active Memory Block. Unsupported claims, omitted constraints, flattened
+  conflicts, scope drift, source drift, and lease loss cannot publish.
+  Deterministic fallback and preservation of the previous valid block remain
+  explicit in diagnostics.
+- **Schema and release identity** — new additive SQLite `0030`/`0031` and
+  PostgreSQL `0017`/`0018` migrations; public schema `21`; package identity
+  `0.2.0-beta.3`.
+
+## v0.2.0-beta.2 — PR5-G integrated product candidate
 
 The first release candidate in which the packaged Open WebUI application
 itself exposes the Memorist product:
@@ -25,6 +52,18 @@ itself exposes the Memorist product:
   installer behavioral tests, and Playwright E2E (capture → retrieval →
   disclosure → Memory Off → restart persistence → regeneration) against the
   extracted final ZIP.
+- **Processing-node runtime orchestration** — all Memorist processing roles
+  resolve project/workspace/global defaults through one audited resolver,
+  invoke their effective provider through a shared stage boundary, expose
+  truthful multi-level health and stage diagnostics, and fall back locally
+  without blocking the main chat path.
+- **Cross-session structured project memory** — substantial user-authored and
+  assistant-produced project artifacts preserve exact evidence and provenance,
+  pass privacy/high-confidence gates, and can be recalled in a later session
+  without mislabelling assistant output as a user fact.
+- **Embedding runtime wiring** — configured embedding profiles generate and
+  consume provider vectors through durable outbox/projection paths while
+  deterministic retrieval remains available when embeddings are unavailable.
 
 ## v0.2.0 — early public alpha
 
@@ -68,7 +107,7 @@ Honest status:
 - Alpha software: no security audit; schema migrations between alpha versions
   may require export/import; see README "Known limitations".
 
-Storage schema version: 18. Pinned Open WebUI base:
+Storage schema version: 21. Pinned Open WebUI base:
 `ghcr.io/open-webui/open-webui:v0.9.6`.
 
 Generated packages under `release/source/` and `release/rc/` are reproducible

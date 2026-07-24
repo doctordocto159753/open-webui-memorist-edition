@@ -7,7 +7,7 @@ services:
     # image (see runtime/openwebui-image/Dockerfile + source-pin.json).
     # MEMORIST_OPENWEBUI_IMAGE may point at a prebuilt pinned image; otherwise
     # the bundled build context reproduces it locally with Docker only.
-    image: ${MEMORIST_OPENWEBUI_IMAGE:-memorist/openwebui:0.2.0-beta.2}
+    image: ${MEMORIST_OPENWEBUI_IMAGE:-memorist/openwebui:0.2.0-beta.3}
     build:
       context: ./runtime
       dockerfile: openwebui-image/Dockerfile

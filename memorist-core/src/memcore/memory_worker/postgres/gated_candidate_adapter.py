@@ -13,6 +13,7 @@ from memcore.memory_worker.semantic.candidate_service import (
     LinguisticCandidateComplements,
     build_candidate_draft,
 )
+from memcore.memory_worker.semantic.project_artifact import structured_project_artifact
 from memcore.models import (
     CandidateStatus,
     GateDecisionValue,
@@ -172,6 +173,13 @@ def record_candidates(
                 utc_now(),
             ),
         )
+    _record_structured_project_artifact(
+        self,
+        processing_run_uuid,
+        message,
+        units,
+        prompt_execution_uuid,
+    )
     return [
         dict(row)
         for row in self.connection.execute(
@@ -179,6 +187,102 @@ def record_candidates(
             (processing_run_uuid,),
         ).fetchall()
     ]
+
+
+def _record_structured_project_artifact(
+    self: Any,
+    processing_run_uuid: str,
+    message: dict[str, Any],
+    units: list[dict[str, Any]],
+    prompt_execution_uuid: str,
+) -> None:
+    if not units:
+        return
+    raw_text = str(message.get("raw_text") or "")
+    artifact = structured_project_artifact(
+        raw_text=raw_text,
+        message_role=str(message.get("role") or ""),
+        list_item_count=sum(str(unit.get("unit_type")) == "list_item" for unit in units),
+        has_cross_session_scope=bool(
+            message.get("project_uuid") or message.get("workspace_uuid")
+        ),
+        preceding_user_message_uuid=None,
+    )
+    if artifact is None or not message.get("created_at"):
+        return
+    preceding = self.connection.execute(
+        """
+        SELECT message_uuid
+        FROM messages
+        WHERE session_uuid = %s AND role = 'user' AND created_at <= %s
+          AND message_uuid <> %s
+        ORDER BY created_at DESC, message_uuid DESC
+        LIMIT 1
+        """,
+        (
+            message["session_uuid"],
+            message["created_at"],
+            message["message_uuid"],
+        ),
+    ).fetchone()
+    artifact = structured_project_artifact(
+        raw_text=raw_text,
+        message_role=str(message.get("role") or ""),
+        list_item_count=sum(str(unit.get("unit_type")) == "list_item" for unit in units),
+        has_cross_session_scope=bool(
+            message.get("project_uuid") or message.get("workspace_uuid")
+        ),
+        preceding_user_message_uuid=(
+            str(preceding["message_uuid"]) if preceding is not None else None
+        ),
+    )
+    assert artifact is not None
+    unit_uuid = str(units[0]["text_unit_uuid"])
+    existing = self.connection.execute(
+        _EXISTING_CANDIDATE_SQL,
+        (processing_run_uuid, unit_uuid, artifact.normalized_text),
+    ).fetchone()
+    if existing:
+        return
+    candidate_uuid = new_uuid()
+    self.connection.execute(
+        _INSERT_CANDIDATE_SQL,
+        (
+            candidate_uuid,
+            processing_run_uuid,
+            unit_uuid,
+            "episode",
+            f"project_artifact:{message['message_uuid']}",
+            "structured_project_artifact",
+            json.dumps(artifact.object_payload, ensure_ascii=False, sort_keys=True),
+            artifact.normalized_text,
+            artifact.source_authority.value,
+            artifact.explicitness.value,
+            artifact.confidence,
+            artifact.importance,
+            "normal",
+            "accepted",
+            None,
+            json.dumps(artifact.metadata, ensure_ascii=False, sort_keys=True),
+            utc_now(),
+            prompt_execution_uuid,
+        ),
+    )
+    self.connection.execute(
+        _INSERT_EVIDENCE_SQL,
+        (
+            new_uuid(),
+            candidate_uuid,
+            message["message_uuid"],
+            unit_uuid,
+            None,
+            None,
+            raw_text,
+            0,
+            len(raw_text),
+            utc_now(),
+        ),
+    )
 
 
 def _linguistic_complements(

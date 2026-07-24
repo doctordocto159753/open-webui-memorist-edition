@@ -11,7 +11,25 @@ class ProviderHealth(BaseModel):
     model_name: str
     latency_ms: int = Field(ge=0)
     local_only_safe: bool
-    detail: str | None = None
+    dns_or_host_reachable: str = "unknown"
+    tcp_or_http_reachable: str = "unknown"
+    authentication_status: str = "unknown"
+    model_status: str = "unknown"
+    chat_completion_status: str = "not_applicable"
+    structured_output_status: str = "not_applicable"
+    role_compatibility_status: str = "unknown"
+    overall_status: str = "unknown_error"
+    http_status: int | None = None
+    retryable: bool = False
+    quota_or_rate_limited: bool = False
+    detail_sanitized: str | None = None
+    recommended_action: str | None = None
+
+    @property
+    def detail(self) -> str | None:
+        """Backward-compatible alias; new clients should use detail_sanitized."""
+
+        return self.detail_sanitized
 
 
 class TokenEstimate(BaseModel):

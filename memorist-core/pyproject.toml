@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "memorist-core"
-version = "0.2.0b1"
+version = "0.2.0b3"
 description = "Local-first Memorist core service foundation."
 readme = "README.md"
 requires-python = ">=3.12"

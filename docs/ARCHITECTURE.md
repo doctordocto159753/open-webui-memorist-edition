@@ -175,6 +175,12 @@ privacy acknowledgement before they can become role defaults. Profiles
 reference secrets **by environment-variable name only**; raw keys are rejected
 by the API and never stored in SQLite/PostgreSQL or returned to the browser.
 
+Every stage uses one scoped resolver (project → workspace → global →
+documented inheritance → built-in fallback) and one invocation boundary.
+Executions are idempotent and audit-linked in `processing_stage_runs`,
+`prompt_execution_runs`, and `model_usage_events`; Lite and Full expose the
+same effective-profile and processing-trace contract.
+
 The first-run **Memory Setup** page (Settings → Memorist) is an admin-only
 wizard over this contract: it shows per-role readiness, tests profiles with
 real role-capability calls (`/v1/chat/completions`, `/v1/embeddings`,

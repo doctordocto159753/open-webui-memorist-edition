@@ -21,6 +21,10 @@ class NestedTransactionConnection(sqlite3.Connection):
     _atomic_depth = 0
     _rollback_only = False
 
+    @property
+    def composed_write_active(self) -> bool:
+        return self._atomic_depth > 0
+
     def begin_composed_write(self) -> None:
         if self._atomic_depth != 0:
             raise RuntimeError("composed write already active")
@@ -33,6 +37,13 @@ class NestedTransactionConnection(sqlite3.Connection):
             raise RuntimeError("no composed write active")
         self._atomic_depth = 0
         self.commit()
+
+    def rollback_composed_write(self) -> None:
+        if self._atomic_depth != 1:
+            raise RuntimeError("no composed write active")
+        self._atomic_depth = 0
+        self._rollback_only = False
+        self.rollback()
 
     def __enter__(self) -> NestedTransactionConnection:
         if self._atomic_depth > 0:

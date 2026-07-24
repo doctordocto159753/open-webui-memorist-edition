@@ -52,6 +52,14 @@ def _render_items(name: str, items: list[dict[str, object]]) -> list[str]:
             + escape_memory_text(str(item.get("normalized_text", "")))
             + f" [{item.get('memory_uuid')} / {item.get('memory_version_uuid')}]"
         )
+        authority = str(item.get("source_authority_label") or "")
+        if authority == "assistant-claim":
+            rendered.append(
+                "  authority: assistant_claim "
+                "(earlier assistant-produced project artifact; not a user fact)"
+            )
+        elif authority:
+            rendered.append("  authority: " + escape_memory_text(authority))
         evidence = item.get("evidence_text")
         if evidence:
             rendered.append("  evidence: " + escape_memory_text(str(evidence)))
