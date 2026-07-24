@@ -12,8 +12,12 @@ from fastapi import HTTPException
 
 from memcore.config import Settings
 from memcore.memory_worker.contracts import PIPELINE_VERSION, PROMPT_BUNDLE_VERSION
+from memcore.memory_worker.fencing import LeaseFenceRejected, fenced_write
 from memcore.memory_worker.gating import DeterministicGate
-from memcore.memory_worker.identity import build_processing_identity
+from memcore.memory_worker.identity import (
+    build_processing_identity,
+    execution_profile_fingerprint,
+)
 from memcore.memory_worker.postgres.deterministic_fallback import (
     deterministic_jakobson_output,
 )
@@ -51,6 +55,35 @@ class PostgresMemoryWorkerPipeline:
         self.settings = settings
         self.segmenter = SentenceSegmenter()
         self.gate = DeterministicGate()
+
+    def execution_snapshot(
+        self,
+        message_uuid: str,
+        model_target: dict[str, Any] | None = None,
+    ) -> dict[str, str | None]:
+        message = self.connection.execute(
+            "SELECT m.*, s.workspace_uuid, s.project_uuid FROM messages m "
+            "JOIN sessions s ON s.session_uuid = m.session_uuid "
+            "WHERE m.message_uuid = %s",
+            (message_uuid,),
+        ).fetchone()
+        if message is None:
+            raise HTTPException(status_code=404, detail="message not found")
+        profile = model_target or self._resolve_profile(message) or {}
+        model_role = str(
+            profile.get("model_role") or profile.get("role") or "import_reconstruction"
+        )
+        identity = build_processing_identity(
+            target_message_uuid=message_uuid,
+            raw_text=str(message.get("raw_text") or ""),
+            model_target=profile,
+            model_role=model_role,
+        )
+        return {
+            "input_content_hash": identity.input_content_hash,
+            "processing_identity_hash": identity.identity_hash,
+            "profile_fingerprint": execution_profile_fingerprint(profile),
+        }
 
     def prepare_message(
         self,
@@ -156,6 +189,7 @@ class PostgresMemoryWorkerPipeline:
             model_name=model_name,
             processing_identity_hash=identity.identity_hash,
             input_content_hash=identity.input_content_hash,
+            profile_fingerprint=execution_profile_fingerprint(profile),
             output=output,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -198,6 +232,8 @@ class PostgresMemoryWorkerPipeline:
             else None
         )
         model_name = str((profile or {}).get("model_name") or provider_type)
+        if prepared_inference is None:
+            prepared_inference = self.prepare_message(message_uuid, profile)
         if provider_type == "disabled":
             provider_type = "deterministic"
             model_profile_uuid = None
@@ -215,34 +251,46 @@ class PostgresMemoryWorkerPipeline:
         if prepared_inference is not None and (
             prepared_inference.processing_identity_hash != identity.identity_hash
             or prepared_inference.input_content_hash != identity.input_content_hash
+            or prepared_inference.profile_fingerprint
+            != execution_profile_fingerprint(profile)
         ):
             raise RuntimeError("prepared inference processing identity mismatch")
         content_hash = identity.input_content_hash
-        run = self._get_or_create_run(
-            message, identity, model_profile_uuid, provider_type, model_name
-        )
-        if run["status"] == "succeeded":
-            return self._summary(message_uuid, str(run["processing_run_uuid"]), True)
-        self.connection.execute(
-            "UPDATE memory_processing_runs SET status = 'running', started_at = COALESCE(started_at, %s) WHERE processing_run_uuid = %s",
-            (utc_now(), run["processing_run_uuid"]),
-        )
         try:
-            units = self._unitize(message, raw_text)
-            input_payload = {
-                "sentences": [
-                    {
-                        "id": index + 1,
-                        "unit_uuid": unit["text_unit_uuid"],
-                        "message_uuid": message_uuid,
-                        "text": unit["text"],
-                        "span_start": unit["start_char"],
-                        "span_end": unit["end_char"],
-                    }
-                    for index, unit in enumerate(units)
-                ]
-            }
-            if prepared_inference is not None:
+            with fenced_write(self.connection, lease_fence, postgres=True):
+                run = self._get_or_create_run(
+                    message, identity, model_profile_uuid, provider_type, model_name
+                )
+                if run["status"] == "succeeded":
+                    completed = self._summary(
+                        message_uuid,
+                        str(run["processing_run_uuid"]),
+                        True,
+                    )
+                else:
+                    completed = None
+                    self.connection.execute(
+                        "UPDATE memory_processing_runs SET status = 'running', "
+                        "started_at = COALESCE(started_at, %s) "
+                        "WHERE processing_run_uuid = %s",
+                        (utc_now(), run["processing_run_uuid"]),
+                    )
+                if completed is not None:
+                    return completed
+                units = self._unitize(message, raw_text)
+                input_payload = {
+                    "sentences": [
+                        {
+                            "id": index + 1,
+                            "unit_uuid": unit["text_unit_uuid"],
+                            "message_uuid": message_uuid,
+                            "text": unit["text"],
+                            "span_start": unit["start_char"],
+                            "span_end": unit["end_char"],
+                        }
+                        for index, unit in enumerate(units)
+                    ]
+                }
                 self._validate_prepared_inference(
                     prepared_inference,
                     message_uuid=message_uuid,
@@ -279,97 +327,75 @@ class PostgresMemoryWorkerPipeline:
                     "output_tokens": prepared_inference.output_tokens,
                     "latency_ms": prepared_inference.latency_ms,
                 }
-            elif profile and provider_type in {"openai_compatible", "openai_compatible_llm"}:
-                output, prompt_execution_uuid, usage = self._run_model_prompt(
-                    profile,
-                    input_payload,
+                self._record_usage(
                     message,
-                    model_name,
+                    model_profile_uuid,
                     provider_type,
+                    model_name,
                     model_role,
                     import_run_uuid,
                     job_uuid,
-                    lease_fence,
+                    usage,
                 )
-            else:
-                output = self._deterministic_jakobson_output(units)
-                if lease_fence is not None:
-                    lease_fence()
-                prompt_execution_uuid, usage = (
-                    self._record_prompt_execution(
-                        input_payload=input_payload,
-                        output=output,
-                        message=message,
-                        model_profile_uuid=model_profile_uuid,
-                        provider_type="deterministic",
-                        model_name=model_name,
-                        model_role=model_role,
-                        latency_ms=0,
-                        input_tokens=0,
-                        output_tokens=0,
-                        import_run_uuid=import_run_uuid,
-                        job_uuid=job_uuid,
-                    ),
-                    {"input_tokens": 0, "output_tokens": 0, "latency_ms": 0},
+                analysis_run_uuid = self._record_jakobson(
+                    message,
+                    input_payload,
+                    output,
+                    model_profile_uuid,
+                    provider_type,
+                    model_name,
+                    prompt_execution_uuid,
                 )
-            self._record_usage(
-                message,
-                model_profile_uuid,
-                provider_type,
-                model_name,
-                model_role,
-                import_run_uuid,
-                job_uuid,
-                usage,
-            )
-            analysis_run_uuid = self._record_jakobson(
-                message,
-                input_payload,
-                output,
-                model_profile_uuid,
-                provider_type,
-                model_name,
-                prompt_execution_uuid,
-            )
-            annotations = self._record_annotations(message_uuid, analysis_run_uuid, units, output)
-            routes = self._record_routes(message_uuid, annotations)
-            decisions = self._record_gates(str(run["processing_run_uuid"]), units)
-            analyses = self._record_linguistic_analyses(
-                str(run["processing_run_uuid"]), units, output
-            )
-            candidates = self._record_candidates(
-                str(run["processing_run_uuid"]),
-                message,
-                units,
-                annotations,
-                routes,
-                prompt_execution_uuid,
-                provider_type,
-                import_run_uuid,
-                model_name,
-                analyses=analyses,
-            )
+                annotations = self._record_annotations(
+                    message_uuid,
+                    analysis_run_uuid,
+                    units,
+                    output,
+                )
+                routes = self._record_routes(message_uuid, annotations)
+                decisions = self._record_gates(str(run["processing_run_uuid"]), units)
+                analyses = self._record_linguistic_analyses(
+                    str(run["processing_run_uuid"]), units, output
+                )
+                candidates = self._record_candidates(
+                    str(run["processing_run_uuid"]),
+                    message,
+                    units,
+                    annotations,
+                    routes,
+                    prompt_execution_uuid,
+                    provider_type,
+                    import_run_uuid,
+                    model_name,
+                    analyses=analyses,
+                )
             candidate_stage_results = self._run_candidate_stages(
                 str(run["processing_run_uuid"]),
                 message,
                 candidates,
+                lease_fence=lease_fence,
             )
-            memories = self._record_memories(
-                message, candidates, content_hash, prompt_execution_uuid
-            )
+            with fenced_write(self.connection, lease_fence, postgres=True):
+                memories = self._record_memories(
+                    message, candidates, content_hash, prompt_execution_uuid
+                )
             embedding_results = self._run_embedding_stages(
                 str(run["processing_run_uuid"]),
                 message,
                 candidates,
+                lease_fence=lease_fence,
             )
-            self.connection.execute(
-                "UPDATE messages SET processing_status = 'available', updated_at = %s WHERE message_uuid = %s",
-                (utc_now(), message_uuid),
-            )
-            self.connection.execute(
-                "UPDATE memory_processing_runs SET status = 'succeeded', finished_at = %s WHERE processing_run_uuid = %s",
-                (utc_now(), run["processing_run_uuid"]),
-            )
+            with fenced_write(self.connection, lease_fence, postgres=True):
+                self.connection.execute(
+                    "UPDATE messages SET processing_status = 'available', updated_at = %s "
+                    "WHERE message_uuid = %s",
+                    (utc_now(), message_uuid),
+                )
+                self.connection.execute(
+                    "UPDATE memory_processing_runs SET status = 'succeeded', finished_at = %s "
+                    "WHERE processing_run_uuid = %s",
+                    (utc_now(), run["processing_run_uuid"]),
+                )
             return {
                 **self._summary(message_uuid, str(run["processing_run_uuid"]), False),
                 "prompt_execution_uuid": prompt_execution_uuid,
@@ -383,11 +409,22 @@ class PostgresMemoryWorkerPipeline:
                 "candidate_stage_results": candidate_stage_results,
                 "embedding_results": embedding_results,
             }
+        except LeaseFenceRejected:
+            self.connection.rollback()
+            raise
         except Exception as error:
-            self.connection.execute(
-                "UPDATE memory_processing_runs SET status = 'failed', finished_at = %s, error_sanitized = %s WHERE processing_run_uuid = %s",
-                (utc_now(), sanitize_error_message(str(error)), run["processing_run_uuid"]),
-            )
+            if "run" in locals():
+                with fenced_write(self.connection, lease_fence, postgres=True):
+                    self.connection.execute(
+                        "UPDATE memory_processing_runs SET status = 'failed', "
+                        "finished_at = %s, error_sanitized = %s "
+                        "WHERE processing_run_uuid = %s",
+                        (
+                            utc_now(),
+                            sanitize_error_message(str(error)),
+                            run["processing_run_uuid"],
+                        ),
+                    )
             raise
 
     @staticmethod
@@ -945,6 +982,8 @@ class PostgresMemoryWorkerPipeline:
         processing_run_uuid: str,
         message: dict[str, Any],
         candidates: list[dict[str, Any]],
+        *,
+        lease_fence: Callable[..., None] | None = None,
     ) -> list[dict[str, Any]]:
         repository = PostgresModelControlRepository(self.connection)
         invoker = StageInvoker(self.connection, repository, postgres=True)
@@ -982,8 +1021,8 @@ class PostgresMemoryWorkerPipeline:
                 ),
                 validator=validate_privacy_result,
                 deterministic_output=deterministic_privacy,
+                lease_fence=lease_fence,
             )
-            self.connection.commit()
             classification = str((privacy.output or {}).get("classification") or "abstain")
             status = str(candidate["status"])
             sensitivity = str(candidate.get("sensitivity") or "normal")
@@ -994,11 +1033,12 @@ class PostgresMemoryWorkerPipeline:
                     status = "needs_review"
                 if classification == "sensitive":
                     sensitivity = "sensitive"
-            self.connection.execute(
-                "UPDATE memory_candidates SET status = %s, sensitivity = %s "
-                "WHERE candidate_uuid = %s",
-                (status, sensitivity, candidate["candidate_uuid"]),
-            )
+            with fenced_write(self.connection, lease_fence, postgres=True):
+                self.connection.execute(
+                    "UPDATE memory_candidates SET status = %s, sensitivity = %s "
+                    "WHERE candidate_uuid = %s",
+                    (status, sensitivity, candidate["candidate_uuid"]),
+                )
             candidate["status"] = status
             candidate["sensitivity"] = sensitivity
             results.append(privacy.model_dump(mode="json", exclude={"output"}))
@@ -1029,8 +1069,8 @@ class PostgresMemoryWorkerPipeline:
                 ),
                 validator=validate_high_confidence_result,
                 deterministic_output=deterministic_high_confidence,
+                lease_fence=lease_fence,
             )
-            self.connection.commit()
             decision = str((high.output or {}).get("decision") or "abstain")
             if decision == "rejected":
                 status = "rejected"
@@ -1038,11 +1078,17 @@ class PostgresMemoryWorkerPipeline:
                 status = "needs_review"
             metadata["high_confidence_stage_status"] = decision
             metadata["high_confidence_execution_uuid"] = high.execution_uuid
-            self.connection.execute(
-                "UPDATE memory_candidates SET status = %s, extraction_metadata_jsonb = %s::jsonb "
-                "WHERE candidate_uuid = %s",
-                (status, json.dumps(metadata, sort_keys=True), candidate["candidate_uuid"]),
-            )
+            with fenced_write(self.connection, lease_fence, postgres=True):
+                self.connection.execute(
+                    "UPDATE memory_candidates SET status = %s, "
+                    "extraction_metadata_jsonb = %s::jsonb "
+                    "WHERE candidate_uuid = %s",
+                    (
+                        status,
+                        json.dumps(metadata, sort_keys=True),
+                        candidate["candidate_uuid"],
+                    ),
+                )
             candidate["status"] = status
             candidate["extraction_metadata_jsonb"] = metadata
             results.append(high.model_dump(mode="json", exclude={"output"}))
@@ -1053,6 +1099,8 @@ class PostgresMemoryWorkerPipeline:
         processing_run_uuid: str,
         message: dict[str, Any],
         candidates: list[dict[str, Any]],
+        *,
+        lease_fence: Callable[..., None] | None = None,
     ) -> list[dict[str, Any]]:
         repository = PostgresModelControlRepository(self.connection)
         invoker = StageInvoker(self.connection, repository, postgres=True)
@@ -1061,8 +1109,6 @@ class PostgresMemoryWorkerPipeline:
             workspace_uuid=_optional_text(message.get("workspace_uuid")),
             project_uuid=_optional_text(message.get("project_uuid")),
         )
-        if resolution.provider_type == "disabled":
-            return []
         rows = self.connection.execute(
             """
             SELECT mv.memory_version_uuid, mv.memory_uuid, mv.normalized_text
@@ -1094,29 +1140,60 @@ class PostgresMemoryWorkerPipeline:
                 },
                 sort_keys=True,
             )
-            self.connection.execute(
-                """
-                INSERT INTO embedding_outbox (
-                    outbox_uuid, event_type, source_type, source_uuid, payload_jsonb,
-                    status, priority, attempts, run_after, created_at, updated_at,
-                    schema_version
-                ) VALUES (%s,'memory_version_upserted','memory_version',%s,%s::jsonb,
-                          'pending',25,0,%s,%s,%s,1)
-                ON CONFLICT (event_type, source_type, source_uuid) DO NOTHING
-                """,
-                (new_uuid(), version_uuid, payload, utc_now(), utc_now(), utc_now()),
-            )
-            self.connection.commit()
+            with fenced_write(self.connection, lease_fence, postgres=True):
+                self.connection.execute(
+                    """
+                    INSERT INTO embedding_outbox (
+                        outbox_uuid, event_type, source_type, source_uuid, payload_jsonb,
+                        status, priority, attempts, run_after, created_at, updated_at,
+                        schema_version
+                    ) VALUES (%s,'memory_version_upserted','memory_version',%s,%s::jsonb,
+                              'pending',25,0,%s,%s,%s,1)
+                    ON CONFLICT (event_type, source_type, source_uuid) DO NOTHING
+                    """,
+                    (new_uuid(), version_uuid, payload, utc_now(), utc_now(), utc_now()),
+                )
             # A replayed stage returns no vectors, so only accept a replay when
             # the projection row from the first execution actually exists.
+            projection_sql = (
+                "SELECT 1 FROM memory_version_embeddings "
+                "WHERE memory_version_uuid = %s AND content_hash = %s "
+                "AND embedding_model = %s"
+            )
+            projection_params: tuple[object, ...] = (
+                version_uuid,
+                content_hash,
+                resolution.model_name,
+            )
+            if expected_dimension is not None:
+                projection_sql += " AND embedding_dimension = %s"
+                projection_params += (expected_dimension,)
             projection_exists = (
-                self.connection.execute(
-                    "SELECT 1 FROM memory_version_embeddings "
-                    "WHERE memory_version_uuid = %s AND content_hash = %s",
-                    (version_uuid, content_hash),
-                ).fetchone()
+                self.connection.execute(projection_sql, projection_params).fetchone()
                 is not None
             )
+            if projection_exists:
+                attempt_row = self.connection.execute(
+                    "SELECT attempts FROM embedding_outbox "
+                    "WHERE event_type = 'memory_version_upserted' AND source_uuid = %s",
+                    (version_uuid,),
+                ).fetchone()
+                projection_attempt = int(attempt_row["attempts"] if attempt_row else 1)
+            else:
+                with fenced_write(self.connection, lease_fence, postgres=True):
+                    attempt_row = self.connection.execute(
+                        """
+                        UPDATE embedding_outbox
+                        SET status = 'running', attempts = attempts + 1,
+                            last_error_sanitized = NULL, updated_at = %s
+                        WHERE event_type = 'memory_version_upserted' AND source_uuid = %s
+                        RETURNING attempts
+                        """,
+                        (utc_now(), version_uuid),
+                    ).fetchone()
+                if attempt_row is None:
+                    raise RuntimeError("embedding outbox attempt could not be claimed")
+                projection_attempt = int(attempt_row["attempts"])
             result, vectors = invoker.invoke_embedding(
                 StageInvocationRequest(
                     role=ModelRole.EMBEDDING,
@@ -1129,50 +1206,75 @@ class PostgresMemoryWorkerPipeline:
                     session_uuid=str(message["session_uuid"]),
                     message_uuid=str(message["message_uuid"]),
                     prompt_version="1.0",
-                    input_payload={"text": text, "content_hash": content_hash},
+                    input_payload={
+                        "text": text,
+                        "content_hash": content_hash,
+                        "projection_attempt": projection_attempt,
+                    },
                 ),
                 texts=[text],
                 expected_dimension=expected_dimension,
                 allow_replay=projection_exists,
+                lease_fence=lease_fence,
             )
-            self.connection.commit()
             if vectors and result.model_profile_uuid:
                 vector = vectors[0]
-                self.connection.execute(
-                    """
-                    INSERT INTO memory_version_embeddings (
-                        memory_version_uuid, embedding_model, embedding_dimension,
-                        embedding_version, content_hash, embedding_jsonb, created_at,
-                        schema_version
-                    ) VALUES (%s,%s,%s,'1',%s,%s::jsonb,%s,1)
-                    ON CONFLICT (memory_version_uuid, embedding_model, embedding_version)
-                    DO UPDATE SET content_hash = excluded.content_hash,
-                                  embedding_dimension = excluded.embedding_dimension,
-                                  embedding_jsonb = excluded.embedding_jsonb,
-                                  created_at = excluded.created_at
-                    """,
-                    (
+                with fenced_write(self.connection, lease_fence, postgres=True):
+                    self.connection.execute(
+                        """
+                        INSERT INTO memory_version_embeddings (
+                            memory_version_uuid, embedding_model, embedding_dimension,
+                            embedding_version, content_hash, embedding_jsonb, created_at,
+                            schema_version
+                        ) VALUES (%s,%s,%s,'1',%s,%s::jsonb,%s,1)
+                        ON CONFLICT (memory_version_uuid, embedding_model, embedding_version)
+                        DO UPDATE SET content_hash = excluded.content_hash,
+                                      embedding_dimension = excluded.embedding_dimension,
+                                      embedding_jsonb = excluded.embedding_jsonb,
+                                      created_at = excluded.created_at
+                        """,
+                        (
+                            version_uuid,
+                            result.model_name,
+                            len(vector),
+                            content_hash,
+                            json.dumps(vector),
+                            utc_now(),
+                        ),
+                    )
+                    repository.record_embedding(
+                        result.model_profile_uuid,
+                        "memory_version",
                         version_uuid,
-                        result.model_name,
-                        len(vector),
                         content_hash,
-                        json.dumps(vector),
-                        utc_now(),
-                    ),
-                )
-                repository.record_embedding(
-                    result.model_profile_uuid,
-                    "memory_version",
-                    version_uuid,
-                    content_hash,
-                    f"postgres:memory_version_embeddings:{version_uuid}",
-                    len(vector),
-                )
-                self.connection.execute(
-                    "UPDATE embedding_outbox SET status = 'succeeded', updated_at = %s "
-                    "WHERE event_type = 'memory_version_upserted' AND source_uuid = %s",
-                    (utc_now(), version_uuid),
-                )
+                        f"postgres:memory_version_embeddings:{version_uuid}",
+                        len(vector),
+                    )
+                    self.connection.execute(
+                        "UPDATE embedding_outbox SET status = 'succeeded', updated_at = %s "
+                        "WHERE event_type = 'memory_version_upserted' AND source_uuid = %s",
+                        (utc_now(), version_uuid),
+                    )
+            elif projection_exists:
+                with fenced_write(self.connection, lease_fence, postgres=True):
+                    self.connection.execute(
+                        "UPDATE embedding_outbox SET status = 'succeeded', updated_at = %s "
+                        "WHERE event_type = 'memory_version_upserted' AND source_uuid = %s",
+                        (utc_now(), version_uuid),
+                    )
+            else:
+                with fenced_write(self.connection, lease_fence, postgres=True):
+                    self.connection.execute(
+                        "UPDATE embedding_outbox SET status = %s, "
+                        "last_error_sanitized = %s, updated_at = %s "
+                        "WHERE event_type = 'memory_version_upserted' AND source_uuid = %s",
+                        (
+                            "skipped" if result.status == "abstained" else "pending",
+                            result.detail_sanitized,
+                            utc_now(),
+                            version_uuid,
+                        ),
+                    )
             results.append(result.model_dump(mode="json", exclude={"output"}))
         return results
 

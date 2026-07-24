@@ -222,7 +222,7 @@
       "path": "release/tests/smoke_full.py",
       "classification": "manual-only",
       "may_block_release": false,
-      "reason": "Full graph startup remains a manual/local compose check for v0.2.0-beta.2."
+      "reason": "Full graph startup remains a manual/local compose check for v0.2.0-beta.3."
     },
     {
       "name": "smoke_import",

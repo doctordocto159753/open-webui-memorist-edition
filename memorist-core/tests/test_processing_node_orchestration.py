@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -25,6 +27,7 @@ from memcore.models import ModelRole
 from memcore.repositories import ProjectRepository, WorkspaceRepository
 from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
+from memcore.validators.ijson import canonical_hash_ijson, dump_ijson, load_ijson
 
 
 @pytest.fixture
@@ -273,6 +276,171 @@ def test_setup_profile_and_stage_invocation_are_idempotent_and_audited(
     assert orchestration_connection.execute(
         "SELECT COUNT(*) FROM model_usage_events WHERE stage = 'privacy_sensitivity'"
     ).fetchone()[0] == 1
+    stored = orchestration_connection.execute(
+        "SELECT output_ijson, output_hash FROM processing_stage_runs"
+    ).fetchone()
+    assert stored["output_ijson"] == dump_ijson(first.output)
+    assert stored["output_hash"] == canonical_hash_ijson(first.output)
+
+
+@pytest.mark.parametrize(
+    ("stored_output", "stored_hash"),
+    [
+        (None, None),
+        ("not-json", "not-a-hash"),
+        (dump_ijson({"classification": "normal", "reason_codes": []}), "not-a-hash"),
+    ],
+)
+def test_invalid_or_legacy_stage_output_is_reexecuted_and_repaired(
+    orchestration_connection: sqlite3.Connection,
+    stored_output: str | None,
+    stored_hash: str | None,
+) -> None:
+    repository = ModelControlRepository(orchestration_connection)
+    profile_uuid = _profile(
+        repository,
+        ModelRole.PRIVACY_SENSITIVITY,
+        "privacy-repair",
+    )
+    repository.set_default(ModelRole.PRIVACY_SENSITIVITY, profile_uuid)
+    request = StageInvocationRequest(
+        role=ModelRole.PRIVACY_SENSITIVITY,
+        stage="privacy_sensitivity",
+        source_type="memory_candidate",
+        source_uuid="candidate-repair",
+        idempotency_key="privacy:candidate-repair",
+        input_payload={
+            "candidate_text": "ordinary project context",
+            "evidence_text": "ordinary project context",
+        },
+    )
+    invoker = StageInvoker(orchestration_connection, repository)
+    initial = invoker.invoke_structured(
+        request,
+        validator=validate_privacy_result,
+        deterministic_output=deterministic_privacy,
+    )
+    orchestration_connection.execute(
+        """
+        UPDATE processing_stage_runs
+        SET output_ijson = ?, output_hash = ?
+        WHERE stage_execution_uuid = ?
+        """,
+        (stored_output, stored_hash, initial.execution_uuid),
+    )
+    orchestration_connection.commit()
+    calls = 0
+
+    def counted_output(payload: dict[str, object]) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return deterministic_privacy(payload)
+
+    repaired = invoker.invoke_structured(
+        request,
+        validator=validate_privacy_result,
+        deterministic_output=counted_output,
+    )
+    row = orchestration_connection.execute(
+        "SELECT output_ijson, output_hash FROM processing_stage_runs "
+        "WHERE stage_execution_uuid = ?",
+        (initial.execution_uuid,),
+    ).fetchone()
+
+    assert calls == 1
+    assert repaired.output == initial.output
+    assert repaired.status == "ok"
+    assert load_ijson(row["output_ijson"]) == repaired.output
+    assert row["output_hash"] == canonical_hash_ijson(repaired.output)
+
+
+def test_stage_replay_survives_database_restart(tmp_path: Path) -> None:
+    db_path = tmp_path / "restart.sqlite"
+    connection = connect(db_path)
+    apply_migrations(connection)
+    repository = ModelControlRepository(connection)
+    profile_uuid = _profile(repository, ModelRole.PRIVACY_SENSITIVITY, "privacy-restart")
+    repository.set_default(ModelRole.PRIVACY_SENSITIVITY, profile_uuid)
+    request = StageInvocationRequest(
+        role=ModelRole.PRIVACY_SENSITIVITY,
+        stage="privacy_sensitivity",
+        source_type="memory_candidate",
+        source_uuid="candidate-restart",
+        input_payload={
+            "candidate_text": "ordinary project context",
+            "evidence_text": "ordinary project context",
+        },
+    )
+    first = StageInvoker(connection, repository).invoke_structured(
+        request,
+        validator=validate_privacy_result,
+        deterministic_output=deterministic_privacy,
+    )
+    connection.close()
+
+    restarted = connect(db_path)
+    replay = StageInvoker(
+        restarted,
+        ModelControlRepository(restarted),
+    ).invoke_structured(
+        request,
+        validator=validate_privacy_result,
+        deterministic_output=deterministic_privacy,
+    )
+
+    assert replay.idempotent_replay is True
+    assert replay.execution_uuid == first.execution_uuid
+    assert replay.output == first.output
+    assert restarted.execute("SELECT COUNT(*) FROM processing_stage_runs").fetchone()[0] == 1
+    restarted.close()
+
+
+def test_concurrent_stage_writers_return_one_authoritative_output(tmp_path: Path) -> None:
+    db_path = tmp_path / "concurrent-stage.sqlite"
+    setup = connect(db_path)
+    apply_migrations(setup)
+    repository = ModelControlRepository(setup)
+    profile_uuid = _profile(repository, ModelRole.PRIVACY_SENSITIVITY, "privacy-race")
+    repository.set_default(ModelRole.PRIVACY_SENSITIVITY, profile_uuid)
+    setup.close()
+    barrier = threading.Barrier(2)
+    request = StageInvocationRequest(
+        role=ModelRole.PRIVACY_SENSITIVITY,
+        stage="privacy_sensitivity",
+        source_type="memory_candidate",
+        source_uuid="candidate-race",
+        input_payload={
+            "candidate_text": "ordinary project context",
+            "evidence_text": "ordinary project context",
+        },
+    )
+
+    def invoke() -> tuple[str, dict[str, object] | None]:
+        connection = connect(db_path)
+        try:
+            def simultaneous(payload: dict[str, object]) -> dict[str, object]:
+                barrier.wait(timeout=5)
+                return deterministic_privacy(payload)
+
+            result = StageInvoker(
+                connection,
+                ModelControlRepository(connection),
+            ).invoke_structured(
+                request,
+                validator=validate_privacy_result,
+                deterministic_output=simultaneous,
+            )
+            return result.execution_uuid, result.output
+        finally:
+            connection.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: invoke(), range(2)))
+
+    verify = connect(db_path)
+    assert results[0] == results[1]
+    assert verify.execute("SELECT COUNT(*) FROM processing_stage_runs").fetchone()[0] == 1
+    verify.close()
 
 
 def test_embedding_stage_disabled_resolution_records_abstained_result(
@@ -297,6 +465,52 @@ def test_embedding_stage_disabled_resolution_records_abstained_result(
     assert orchestration_connection.execute(
         "SELECT COUNT(*) FROM processing_stage_runs WHERE source_uuid = 'version-disabled'"
     ).fetchone()[0] == 1
+
+
+def test_disabled_embedding_is_audited_and_outbox_is_terminally_skipped(
+    tmp_path: Path,
+) -> None:
+    from memcore.config import Settings
+    from memcore.memory_worker.pipeline import MemoryWorkerPipeline
+    from memcore.repositories import MessageRepository, SessionRepository
+
+    db_path = tmp_path / "embedding-disabled.sqlite"
+    connection = connect(db_path)
+    apply_migrations(connection)
+    settings = Settings(
+        db_path=str(db_path),
+        object_store_path=str(tmp_path / "objects"),
+    )
+    session = SessionRepository(connection).create_session()
+    message = MessageRepository(connection).create_message(
+        session.session_uuid,
+        role="user",
+        creator_type="user",
+        raw_text="Do not disable backups.",
+    )
+
+    MemoryWorkerPipeline(connection, settings).process_message(message.message_uuid)
+
+    stage = connection.execute(
+        """
+        SELECT status, called_provider, embedding_count
+        FROM processing_stage_runs
+        WHERE stage = 'embedding_generation'
+        """
+    ).fetchone()
+    outbox = connection.execute(
+        "SELECT status, attempts FROM embedding_outbox"
+    ).fetchone()
+    assert dict(stage) == {
+        "status": "abstained",
+        "called_provider": 0,
+        "embedding_count": 0,
+    }
+    assert dict(outbox) == {"status": "skipped", "attempts": 1}
+    assert connection.execute(
+        "SELECT COUNT(*) FROM memory_version_embeddings"
+    ).fetchone()[0] == 0
+    connection.close()
 
 
 def test_embedding_stage_replay_bypass_regenerates_vectors(
@@ -331,6 +545,71 @@ def test_embedding_stage_replay_bypass_regenerates_vectors(
     assert orchestration_connection.execute(
         "SELECT COUNT(*) FROM processing_stage_runs WHERE source_uuid = 'version-1'"
     ).fetchone()[0] == 1
+
+
+def test_embedding_projection_recovers_after_stage_persisted_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from memcore.config import Settings
+    from memcore.memory_worker.pipeline import MemoryWorkerPipeline
+    from memcore.repositories import MessageRepository, SessionRepository
+    from memcore.repositories.retrieval import RetrievalRepository
+
+    db_path = tmp_path / "embedding-recovery.sqlite"
+    connection = connect(db_path)
+    apply_migrations(connection)
+    settings = Settings(
+        db_path=str(db_path),
+        object_store_path=str(tmp_path / "objects"),
+    )
+    repository = ModelControlRepository(connection)
+    embedding_uuid = _profile(repository, ModelRole.EMBEDDING, "recovery-embedder")
+    repository.set_default(ModelRole.EMBEDDING, embedding_uuid)
+    session = SessionRepository(connection).create_session()
+    message = MessageRepository(connection).create_message(
+        session.session_uuid,
+        role="user",
+        creator_type="user",
+        raw_text="Do not disable backups.",
+    )
+    original_upsert = RetrievalRepository.upsert_embedding
+    crashed = False
+
+    def crash_once(self: RetrievalRepository, embedding: object) -> object:
+        nonlocal crashed
+        if not crashed:
+            crashed = True
+            raise RuntimeError("injected crash after embedding stage persistence")
+        return original_upsert(self, embedding)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(RetrievalRepository, "upsert_embedding", crash_once)
+    with pytest.raises(RuntimeError, match="injected crash"):
+        MemoryWorkerPipeline(connection, settings).process_message(message.message_uuid)
+
+    memory_count = int(connection.execute("SELECT COUNT(*) FROM memories").fetchone()[0])
+    assert connection.execute(
+        "SELECT COUNT(*) FROM processing_stage_runs WHERE stage = 'embedding_generation'"
+    ).fetchone()[0] == 1
+    assert connection.execute(
+        "SELECT COUNT(*) FROM memory_version_embeddings"
+    ).fetchone()[0] == 0
+    outbox = connection.execute(
+        "SELECT status, attempts FROM embedding_outbox"
+    ).fetchone()
+    assert dict(outbox) == {"status": "running", "attempts": 1}
+
+    MemoryWorkerPipeline(connection, settings).process_message(message.message_uuid)
+
+    assert int(connection.execute("SELECT COUNT(*) FROM memories").fetchone()[0]) == memory_count
+    assert connection.execute(
+        "SELECT COUNT(*) FROM memory_version_embeddings"
+    ).fetchone()[0] == 1
+    recovered_outbox = connection.execute(
+        "SELECT status, attempts FROM embedding_outbox"
+    ).fetchone()
+    assert dict(recovered_outbox) == {"status": "succeeded", "attempts": 2}
+    connection.close()
 
 
 def test_candidate_stage_results_survive_processing_retry(tmp_path: Path) -> None:

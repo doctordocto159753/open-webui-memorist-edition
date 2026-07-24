@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     enable_openwebui_adapter: bool = True
     enable_graph_projection: bool = False
     enable_memory_worker: bool = False
+    memory_worker_lease_seconds: int = Field(default=300, ge=1, le=3600)
     enable_import_system: bool = False
     enable_memory_context_attachment: bool = False
     enable_active_memory_blocks: bool = False

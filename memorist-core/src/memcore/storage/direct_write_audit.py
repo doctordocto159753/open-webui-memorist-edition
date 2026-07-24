@@ -17,6 +17,9 @@ ALLOWED_DIRECT_WRITE_PATHS = {
     "memcore/active_memory/repositories.py": (
         "active-memory repository writes are bounded block metadata operations"
     ),
+    "memcore/active_memory/compaction/compactor.py": (
+        "compaction marks a rejected stage result inside the same fenced write boundary"
+    ),
     "memcore/repositories/retrieval.py": (
         "retrieval repository writes are bounded query/candidate audit rows"
     ),

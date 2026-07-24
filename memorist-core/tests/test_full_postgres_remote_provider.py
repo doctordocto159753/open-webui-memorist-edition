@@ -202,6 +202,7 @@ def test_full_postgres_scheduled_profile_cannot_be_hard_deleted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _ProviderHandler.requests = []
+    monkeypatch.setenv("MEMORIST_IMPORT_TEST_KEY", "scheduled-profile-test-credential")
     settings = Settings(
         runtime_profile="full",
         canonical_store="postgres",
@@ -259,7 +260,8 @@ def test_full_postgres_scheduled_profile_cannot_be_hard_deleted(
         status = connection.execute(
             """
             SELECT model_profile_uuid, status
-            FROM import_message_processing_status WHERE import_run_uuid = ?
+            FROM import_message_processing_status
+            WHERE import_run_uuid = ? AND skip_reason IS NULL
             """,
             (run_uuid,),
         ).fetchone()
@@ -416,7 +418,7 @@ def test_full_postgres_remote_profile_failures_do_not_call_provider(
                 """
                 SELECT status, error_classification, error_sanitized, run_after
                 FROM import_message_processing_status
-                WHERE import_run_uuid = ?
+                WHERE import_run_uuid = ? AND skip_reason IS NULL
                 """,
                 (run_uuid,),
             ).fetchone()

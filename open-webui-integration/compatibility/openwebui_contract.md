@@ -1,6 +1,6 @@
 # Open WebUI Filter Compatibility Contract
 
-Memorist v0.2.0-beta.2 targets the server-side Open WebUI Filter lifecycle. The pinned local container-smoke target is `ghcr.io/open-webui/open-webui:v0.9.6`. Automated release gates verify the Memorist parser, fail-open behavior, inlet/outlet idempotency, payload fixtures, and Model Control Plane; the optional container smoke verifies that the pinned Open WebUI image and Memorist Core can start together locally.
+Memorist v0.2.0-beta.3 targets the server-side Open WebUI Filter lifecycle. The pinned local container-smoke target is `ghcr.io/open-webui/open-webui:v0.9.6`. Automated release gates verify the Memorist parser, fail-open behavior, inlet/outlet idempotency, payload fixtures, and Model Control Plane; the optional container smoke verifies that the pinned Open WebUI image and Memorist Core can start together locally.
 
 This is not a claim that every future Open WebUI payload variant is certified. Open WebUI remains the parent chat product; Memorist adds local memory capture and bounded memory context through trusted server-side integration files.
 

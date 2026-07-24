@@ -8,9 +8,10 @@ def deterministic_compact(
 ) -> tuple[list[BlockSource], list[dict[str, object]]]:
     selected: list[BlockSource] = []
     omitted: list[dict[str, object]] = []
-    seen_keys: set[str] = set()
+    seen_keys: dict[str, BlockSource] = {}
     for source in sources:
-        if source.canonical_key in seen_keys:
+        previous = seen_keys.get(source.canonical_key)
+        if previous is not None and previous.normalized_text == source.normalized_text:
             omitted.append(
                 {
                     "memory_uuid": source.memory_uuid,
@@ -19,7 +20,7 @@ def deterministic_compact(
                 }
             )
             continue
-        seen_keys.add(source.canonical_key)
+        seen_keys.setdefault(source.canonical_key, source)
         selected.append(source)
 
     selected.sort(

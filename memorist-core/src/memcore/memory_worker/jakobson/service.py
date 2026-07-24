@@ -7,6 +7,12 @@ from time import perf_counter
 from typing import Any, Protocol
 
 from memcore.memory_worker.contracts import JOB_MEMORY_SIGNAL_ROUTING
+from memcore.memory_worker.fencing import (
+    LeaseFenceRejected,
+    close_transaction_before_provider,
+    fenced_write,
+    invoke_lease_fence,
+)
 from memcore.memory_worker.jakobson.mapper import map_output_to_annotations
 from memcore.memory_worker.jakobson.validator import validate_jakobson_provider_output
 from memcore.memory_worker.prepared import PreparedJakobsonInference
@@ -49,6 +55,7 @@ from memcore.repositories.memory_worker import (
     MemoryStoreRepository,
     TextUnitRepository,
 )
+from memcore.storage.sqlite import NestedTransactionConnection
 from memcore.validators.ijson import canonical_hash_ijson, dump_ijson
 
 
@@ -173,6 +180,7 @@ class JakobsonAnalysisService:
         input_value = _jakobson_input(units)
         session = self.sessions.get_session(message.session_uuid)
         output: dict[str, Any] | None = None
+        composed_write_open = False
         run = JakobsonAnalysisRun(
             workspace_uuid=session.workspace_uuid if session else None,
             project_uuid=session.project_uuid if session else None,
@@ -201,10 +209,15 @@ class JakobsonAnalysisService:
                     raise RepositoryError("prepared inference model name mismatch")
                 output = prepared_inference.output
             else:
+                close_transaction_before_provider(self.connection, lease_fence)
                 output = self.provider.analyze(units, raw_text)
             validate_jakobson_provider_output(output)
             if lease_fence is not None:
-                lease_fence()
+                if not isinstance(self.connection, NestedTransactionConnection):
+                    raise RuntimeError("leased Jakobson writes require atomic SQLite connection")
+                self.connection.begin_composed_write()
+                composed_write_open = True
+                invoke_lease_fence(lease_fence, lock=True)
             run.output_hash = canonical_hash_ijson(output)
             annotations, warnings = map_output_to_annotations(
                 analysis_run_uuid=run.analysis_run_uuid,
@@ -280,7 +293,7 @@ class JakobsonAnalysisService:
                     ],
                 },
             )
-            return {
+            response = {
                 "analysis_run_uuid": persisted_run.analysis_run_uuid,
                 "prompt_execution_uuid": execution["prompt_execution_uuid"],
                 "message_uuid": message.message_uuid,
@@ -306,7 +319,18 @@ class JakobsonAnalysisService:
                     or (perf_counter() - started) * 1000
                 ),
             }
+            if composed_write_open:
+                self.connection.commit_composed_write()
+                composed_write_open = False
+            return response
+        except LeaseFenceRejected:
+            if composed_write_open:
+                self.connection.rollback_composed_write()
+            raise
         except Exception as error:
+            if composed_write_open:
+                self.connection.rollback_composed_write()
+                composed_write_open = False
             sanitized_error = (
                 sanitize_error_message(f"{type(error).__name__}: {error}") or type(error).__name__
             )
@@ -316,38 +340,42 @@ class JakobsonAnalysisService:
                 run.raw_output_ijson = dump_ijson(output)
                 run.output_hash = canonical_hash_ijson(output)
             try:
-                execution = PromptExecutionRepository(self.connection).record_execution(
-                    prompt_id=JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-                    prompt_version=JAKOBSON_SENTENCE_ANALYSIS_VERSION,
-                    model_role=self.model_role,
-                    provider_type=self.provider.provider_type,
-                    model_name=str(self.provider.model_name or self.provider.provider_type),
-                    model_profile_uuid=self.model_profile_uuid,
-                    workspace_uuid=session.workspace_uuid if session else None,
-                    project_uuid=session.project_uuid if session else None,
-                    session_uuid=message.session_uuid,
-                    message_uuid=message.message_uuid,
-                    import_run_uuid=import_run_uuid,
-                    job_uuid=job_uuid,
-                    input_value=input_value,
-                    input_ref=f"message:{message.message_uuid}",
-                    raw_output_value=output,
-                    validated_output_value=None,
-                    status="error",
-                    warnings=[type(error).__name__],
-                    error_sanitized=sanitized_error,
-                    latency_ms=int(
-                        getattr(self.provider, "latency_ms", 0) or (perf_counter() - started) * 1000
-                    ),
-                    input_tokens=int(
-                        getattr(self.provider, "input_tokens", 0)
-                        or max(0, (len(raw_text) + 3) // 4)
-                    ),
-                )
-                run.prompt_execution_uuid = str(execution["prompt_execution_uuid"])
+                with fenced_write(self.connection, lease_fence):
+                    execution = PromptExecutionRepository(self.connection).record_execution(
+                        prompt_id=JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
+                        prompt_version=JAKOBSON_SENTENCE_ANALYSIS_VERSION,
+                        model_role=self.model_role,
+                        provider_type=self.provider.provider_type,
+                        model_name=str(self.provider.model_name or self.provider.provider_type),
+                        model_profile_uuid=self.model_profile_uuid,
+                        workspace_uuid=session.workspace_uuid if session else None,
+                        project_uuid=session.project_uuid if session else None,
+                        session_uuid=message.session_uuid,
+                        message_uuid=message.message_uuid,
+                        import_run_uuid=import_run_uuid,
+                        job_uuid=job_uuid,
+                        input_value=input_value,
+                        input_ref=f"message:{message.message_uuid}",
+                        raw_output_value=output,
+                        validated_output_value=None,
+                        status="error",
+                        warnings=[type(error).__name__],
+                        error_sanitized=sanitized_error,
+                        latency_ms=int(
+                            getattr(self.provider, "latency_ms", 0)
+                            or (perf_counter() - started) * 1000
+                        ),
+                        input_tokens=int(
+                            getattr(self.provider, "input_tokens", 0)
+                            or max(0, (len(raw_text) + 3) // 4)
+                        ),
+                    )
+                    run.prompt_execution_uuid = str(execution["prompt_execution_uuid"])
+                    self.runs.create_run(run)
+            except LeaseFenceRejected:
+                raise
             except Exception:
                 pass
-            self.runs.create_run(run)
             raise
 
     def _load_or_create_sentence_units(self, message: Message, raw_text: str) -> list[TextUnit]:

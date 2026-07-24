@@ -136,6 +136,29 @@ class ActiveMemoryRepository:
         ).fetchone()
         return dict(row) if row is not None else None
 
+    def find_version_for_execution(
+        self,
+        block_uuid: str,
+        prompt_execution_uuid: str,
+        source_snapshot_hash: str,
+    ) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            """
+            SELECT mbv.*
+            FROM memory_block_versions mbv
+            JOIN memory_block_build_runs run
+              ON run.block_build_run_uuid = mbv.block_build_run_uuid
+            WHERE mbv.block_uuid = ?
+              AND run.prompt_execution_uuid = ?
+              AND mbv.source_snapshot_hash = ?
+              AND run.status = 'succeeded'
+            ORDER BY mbv.version_number DESC
+            LIMIT 1
+            """,
+            (block_uuid, prompt_execution_uuid, source_snapshot_hash),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
     def list_sources(self, block_uuid: str) -> list[dict[str, Any]]:
         return [
             dict(row)

@@ -109,17 +109,34 @@ def validate_compaction_result(output: dict[str, Any]) -> None:
     for item in items:
         if not isinstance(item, dict):
             raise ValueError("block compaction items must be objects")
+        if not isinstance(item.get("text"), str) or not str(item["text"]).strip():
+            raise ValueError("compacted item requires non-empty text")
         if not isinstance(item.get("source_memory_uuids"), list):
             raise ValueError("compacted item requires source_memory_uuids")
+        if not isinstance(item.get("source_memory_version_uuids"), list):
+            raise ValueError("compacted item requires source_memory_version_uuids")
+    summary = output.get("summary")
+    if summary is not None and not isinstance(summary, str):
+        raise ValueError("block compaction summary must be text")
+    excluded = output.get("excluded_memory_version_uuids", [])
+    if not isinstance(excluded, list) or any(not isinstance(item, dict) for item in excluded):
+        raise ValueError("block compaction exclusions must be objects")
+    conflicts = output.get("conflicts", [])
+    if not isinstance(conflicts, list) or any(not isinstance(item, dict) for item in conflicts):
+        raise ValueError("block compaction conflicts must be objects")
 
 
 def deterministic_compaction(payload: dict[str, Any]) -> dict[str, Any]:
     sources = payload.get("sources")
     items: list[dict[str, Any]] = []
+    sources_by_key: dict[str, list[dict[str, Any]]] = {}
     if isinstance(sources, list):
         for source in sources:
             if not isinstance(source, dict):
                 continue
+            sources_by_key.setdefault(str(source.get("canonical_key") or ""), []).append(
+                source
+            )
             items.append(
                 {
                     "text": str(source.get("normalized_text") or ""),
@@ -129,7 +146,28 @@ def deterministic_compaction(payload: dict[str, Any]) -> dict[str, Any]:
                     ],
                 }
             )
-    return {"items": items, "status": "ok"}
+    conflicts = []
+    for grouped_sources in sources_by_key.values():
+        normalized_values = {
+            str(source.get("normalized_text") or "") for source in grouped_sources
+        }
+        if len(grouped_sources) > 1 and len(normalized_values) > 1:
+            conflicts.append(
+                {
+                    "memory_version_uuids": [
+                        str(source.get("memory_version_uuid"))
+                        for source in grouped_sources
+                    ],
+                    "status": "unresolved",
+                }
+            )
+    return {
+        "summary": None,
+        "items": items,
+        "excluded_memory_version_uuids": [],
+        "conflicts": conflicts,
+        "status": "ok",
+    }
 
 
 def validate_import_reconstruction_result(output: dict[str, Any]) -> None:

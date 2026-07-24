@@ -1,11 +1,14 @@
 import sqlite3
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from memcore.active_memory.compaction.compactor import BlockCompactor
 from memcore.active_memory.materializer import ActiveMemoryMaterializer
 from memcore.active_memory.repositories import ActiveMemoryRepository
+from memcore.active_memory.selectors import select_canonical_sources
 from memcore.config import Settings
 from memcore.governance.correction import MemoryCorrectionService
 from memcore.governance.delivery import DeliveryTraceService
@@ -13,8 +16,12 @@ from memcore.governance.feedback import FeedbackService
 from memcore.governance.inspection import MemoryInspectionService
 from memcore.governance.privacy import PrivacyService
 from memcore.governance.repositories import GovernanceRepository
+from memcore.memory_worker.fencing import LeaseFenceRejected
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
-from memcore.models import MemoryBlockType, Message
+from memcore.model_control.providers.base import StructuredCompletionResponse
+from memcore.model_control.repository import ModelControlRepository
+from memcore.model_control.schemas import ModelProfileCreate, ProviderType
+from memcore.models import MemoryBlockType, Message, ModelRole
 from memcore.preflight import PreflightRequest, PreflightService
 from memcore.repositories import (
     MemoryBlockRepository,
@@ -29,6 +36,7 @@ from memcore.retrieval.runner import RetrievalRunner
 from memcore.retrieval.semantic import SemanticGenerator
 from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
+from memcore.validators.ijson import load_ijson
 
 
 @pytest.fixture()
@@ -112,6 +120,286 @@ def test_active_block_build_versions_sources_and_coverage(
     assert sources[0]["source_role"] == "constraint"
     assert coverage.constraint_coverage == 1.0
     assert "Do not use cloud storage" in result.value
+
+
+def test_configured_compaction_provider_changes_block_and_replays_idempotently(
+    connection: sqlite3.Connection,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = WorkspaceRepository(connection).create_workspace("Compaction workspace")
+    project = ProjectRepository(connection).create_project(
+        workspace.workspace_uuid,
+        "Compaction project",
+    )
+    session = SessionRepository(connection).create_session(
+        workspace_uuid=workspace.workspace_uuid,
+        project_uuid=project.project_uuid,
+    )
+    _process_message(
+        connection,
+        settings,
+        session.session_uuid,
+        "Do not disable project backups.",
+    )
+    block = MemoryBlockRepository(connection).create_block(
+        MemoryBlockType.PROJECT_CONTEXT,
+        scope_type="project",
+        scope_uuid=project.project_uuid,
+        label="Project context",
+        value="empty",
+        char_limit=1200,
+    )
+    source = select_canonical_sources(connection, block)[0]
+    _configure_compaction_profile(connection)
+    calls = 0
+
+    class Provider:
+        def complete_structured(
+            self,
+            prompt: str,
+            timeout_seconds: float = 1.0,
+        ) -> StructuredCompletionResponse:
+            del prompt, timeout_seconds
+            nonlocal calls
+            calls += 1
+            return StructuredCompletionResponse(
+                output_ijson={
+                    "summary": source.normalized_text,
+                    "items": [
+                        {
+                            "text": source.normalized_text,
+                            "source_memory_uuids": [source.memory_uuid],
+                            "source_memory_version_uuids": [
+                                source.memory_version_uuid
+                            ],
+                        }
+                    ],
+                    "excluded_memory_version_uuids": [],
+                    "conflicts": [],
+                    "status": "ok",
+                },
+                input_tokens=20,
+                output_tokens=10,
+                latency_ms=1,
+            )
+
+    monkeypatch.setattr(
+        "memcore.model_control.stage_invocation.provider_for_profile",
+        lambda profile: Provider(),
+    )
+
+    first = BlockCompactor(connection).compact(block.block_uuid)
+    replay = BlockCompactor(connection).compact(block.block_uuid)
+    versions = ActiveMemoryRepository(connection).list_versions(block.block_uuid)
+    structured = load_ijson(versions[0]["structured_value_ijson"])
+
+    assert first["provider_output_applied"] is True
+    assert first["published"] is True
+    assert f"Summary: {source.normalized_text}" in str(first["value"])
+    assert structured["content_source"] == "provider"
+    assert structured["items"][0]["source_provenance"][0]["source_authority"]
+    assert replay["block_version_uuid"] == first["block_version_uuid"]
+    assert calls == 1
+    assert len(versions) == 1
+
+
+def test_invalid_provider_compaction_preserves_previous_valid_block(
+    connection: sqlite3.Connection,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = WorkspaceRepository(connection).create_workspace("Fallback workspace")
+    project = ProjectRepository(connection).create_project(
+        workspace.workspace_uuid,
+        "Fallback project",
+    )
+    session = SessionRepository(connection).create_session(
+        workspace_uuid=workspace.workspace_uuid,
+        project_uuid=project.project_uuid,
+    )
+    _process_message(connection, settings, session.session_uuid, "Do not disable backups.")
+    block = MemoryBlockRepository(connection).create_block(
+        MemoryBlockType.PROJECT_CONTEXT,
+        scope_type="project",
+        scope_uuid=project.project_uuid,
+        label="Project context",
+        value="empty",
+        char_limit=1200,
+    )
+    previous = ActiveMemoryMaterializer(connection).build(block.block_uuid)
+    _configure_compaction_profile(connection)
+
+    class InvalidProvider:
+        def complete_structured(
+            self,
+            prompt: str,
+            timeout_seconds: float = 1.0,
+        ) -> StructuredCompletionResponse:
+            del prompt, timeout_seconds
+            return StructuredCompletionResponse(
+                output_ijson={
+                    "summary": "invented unsupported claim",
+                    "items": [
+                        {
+                            "text": "invented unsupported claim",
+                            "source_memory_uuids": ["unsupported-memory"],
+                            "source_memory_version_uuids": ["unsupported-version"],
+                        }
+                    ],
+                    "excluded_memory_version_uuids": [],
+                    "conflicts": [],
+                    "status": "ok",
+                },
+                input_tokens=1,
+                output_tokens=1,
+                latency_ms=1,
+            )
+
+    monkeypatch.setattr(
+        "memcore.model_control.stage_invocation.provider_for_profile",
+        lambda profile: InvalidProvider(),
+    )
+    result = BlockCompactor(connection).compact(block.block_uuid)
+
+    assert result["published"] is False
+    assert result["provider_output_applied"] is False
+    assert result["fallback"] == "previous_valid_block_preserved"
+    assert result["block_version_uuid"] == previous.block_version_uuid
+    assert len(ActiveMemoryRepository(connection).list_versions(block.block_uuid)) == 1
+    stage = connection.execute(
+        "SELECT status, detail_sanitized FROM processing_stage_runs "
+        "WHERE stage = 'block_compaction'"
+    ).fetchone()
+    assert stage["status"] == "abstained"
+    assert stage["detail_sanitized"] == "context validation rejected compaction proposal"
+
+
+def test_compaction_source_change_during_provider_preserves_previous_block(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "compaction-source-change.sqlite"
+    connection = connect(db_path)
+    apply_migrations(connection)
+    settings = Settings(
+        db_path=str(db_path),
+        object_store_path=str(tmp_path / "objects"),
+    )
+    workspace = WorkspaceRepository(connection).create_workspace("Changing workspace")
+    project = ProjectRepository(connection).create_project(
+        workspace.workspace_uuid,
+        "Changing project",
+    )
+    session = SessionRepository(connection).create_session(
+        workspace_uuid=workspace.workspace_uuid,
+        project_uuid=project.project_uuid,
+    )
+    _process_message(connection, settings, session.session_uuid, "Do not disable backups.")
+    block = MemoryBlockRepository(connection).create_block(
+        MemoryBlockType.PROJECT_CONTEXT,
+        scope_type="project",
+        scope_uuid=project.project_uuid,
+        label="Project context",
+        value="empty",
+        char_limit=1200,
+    )
+    previous = ActiveMemoryMaterializer(connection).build(block.block_uuid)
+    source = select_canonical_sources(connection, block)[0]
+    _configure_compaction_profile(connection)
+
+    class MutatingProvider:
+        def complete_structured(
+            self,
+            prompt: str,
+            timeout_seconds: float = 1.0,
+        ) -> StructuredCompletionResponse:
+            del prompt, timeout_seconds
+            concurrent = connect(db_path)
+            try:
+                other_session = SessionRepository(concurrent).create_session(
+                    workspace_uuid=workspace.workspace_uuid,
+                    project_uuid=project.project_uuid,
+                )
+                _process_message(
+                    concurrent,
+                    settings,
+                    other_session.session_uuid,
+                    "Do not disable audit logs.",
+                )
+            finally:
+                concurrent.close()
+            return StructuredCompletionResponse(
+                output_ijson=_provider_compaction_output(source),
+                input_tokens=1,
+                output_tokens=1,
+                latency_ms=1,
+            )
+
+    monkeypatch.setattr(
+        "memcore.model_control.stage_invocation.provider_for_profile",
+        lambda profile: MutatingProvider(),
+    )
+    result = BlockCompactor(connection).compact(block.block_uuid)
+
+    assert result["published"] is False
+    assert result["block_version_uuid"] == previous.block_version_uuid
+    assert result["fallback_reason"] == "source snapshot changed during provider execution"
+    assert len(ActiveMemoryRepository(connection).list_versions(block.block_uuid)) == 1
+    connection.close()
+
+
+def test_compaction_lease_loss_after_provider_fences_stage_and_block_writes(
+    connection: sqlite3.Connection,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = SessionRepository(connection).create_session()
+    _process_message(connection, settings, session.session_uuid, "Do not disable backups.")
+    block = MemoryBlockRepository(connection).create_block(
+        MemoryBlockType.PROJECT_CONTEXT,
+        scope_type="session",
+        scope_uuid=session.session_uuid,
+        label="Session context",
+        value="empty",
+        char_limit=1200,
+    )
+    source = select_canonical_sources(connection, block)[0]
+    _configure_compaction_profile(connection)
+    lost = False
+
+    class Provider:
+        def complete_structured(
+            self,
+            prompt: str,
+            timeout_seconds: float = 1.0,
+        ) -> StructuredCompletionResponse:
+            del prompt, timeout_seconds
+            nonlocal lost
+            lost = True
+            return StructuredCompletionResponse(
+                output_ijson=_provider_compaction_output(source),
+                input_tokens=1,
+                output_tokens=1,
+                latency_ms=1,
+            )
+
+    def fence(**kwargs: object) -> None:
+        del kwargs
+        if lost:
+            raise LeaseFenceRejected("test lease lost")
+
+    monkeypatch.setattr(
+        "memcore.model_control.stage_invocation.provider_for_profile",
+        lambda profile: Provider(),
+    )
+    with pytest.raises(LeaseFenceRejected, match="test lease lost"):
+        BlockCompactor(connection).compact(block.block_uuid, lease_fence=fence)
+
+    assert connection.execute(
+        "SELECT COUNT(*) FROM processing_stage_runs WHERE stage = 'block_compaction'"
+    ).fetchone()[0] == 0
+    assert len(ActiveMemoryRepository(connection).list_versions(block.block_uuid)) == 0
 
 
 def test_read_only_safety_block_requires_trusted_actor(
@@ -350,3 +638,39 @@ def _process_message(
     )
     MemoryWorkerPipeline(connection, settings).process_message(message.message_uuid)
     return message
+
+
+def _configure_compaction_profile(connection: sqlite3.Connection) -> str:
+    repository = ModelControlRepository(connection)
+    profile = repository.create_profile(
+        ModelProfileCreate(
+            profile_name="Test block compactor",
+            provider_type=ProviderType.OPENAI_COMPATIBLE_LLM,
+            provider_name="test provider",
+            model_name="test-compactor",
+            role=ModelRole.BLOCK_COMPACTION,
+            endpoint_url="http://127.0.0.1:9/v1",
+            endpoint_is_local=True,
+            supports_structured_output=True,
+            supports_json_mode=True,
+            privacy_acknowledged=True,
+        )
+    )
+    repository.set_default(ModelRole.BLOCK_COMPACTION, profile.model_profile_uuid)
+    return profile.model_profile_uuid
+
+
+def _provider_compaction_output(source: Any) -> dict[str, Any]:
+    return {
+        "summary": source.normalized_text,
+        "items": [
+            {
+                "text": source.normalized_text,
+                "source_memory_uuids": [source.memory_uuid],
+                "source_memory_version_uuids": [source.memory_version_uuid],
+            }
+        ],
+        "excluded_memory_version_uuids": [],
+        "conflicts": [],
+        "status": "ok",
+    }

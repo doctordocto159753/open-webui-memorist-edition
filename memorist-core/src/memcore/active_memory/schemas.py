@@ -66,6 +66,14 @@ class BuildResult(BaseModel):
     omitted_sources: list[dict[str, Any]]
 
 
+class ValidatedCompactionProposal(BaseModel):
+    value: str
+    sources: list[BlockSource]
+    omitted_sources: list[dict[str, Any]] = Field(default_factory=list)
+    structured_value: dict[str, Any]
+    output_hash: str
+
+
 class CoverageReport(BaseModel):
     block_uuid: str
     source_coverage: float

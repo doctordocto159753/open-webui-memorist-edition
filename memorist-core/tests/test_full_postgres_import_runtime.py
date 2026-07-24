@@ -119,6 +119,9 @@ def test_full_postgres_import_runtime_end_to_end(
 ) -> None:
     monkeypatch.setenv("MEMORIST_RUNTIME_PROFILE", "full")
     monkeypatch.setenv("MEMORIST_CANONICAL_STORE", "postgres")
+    monkeypatch.setenv("MEMORIST_GRAPH_BACKEND", "disabled")
+    monkeypatch.setenv("MEMORIST_ALLOW_FULL_GRAPH_DEGRADED", "true")
+    monkeypatch.setenv("MEMORIST_HOT_SCHEDULER", "in_memory")
     settings = Settings(
         runtime_profile="full",
         canonical_store="postgres",

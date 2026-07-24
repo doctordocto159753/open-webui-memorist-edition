@@ -22,13 +22,13 @@ def build_manifest(output_dir: str | Path) -> dict[str, object]:
         "memorist_version": __version__,
         "schema_version": SCHEMA_VERSION,
         "openwebui_base": OPENWEBUI_BASE_IMAGE,
-        "openwebui_integration_version": "0.2.0-beta.2",
+        "openwebui_integration_version": "0.2.0-beta.3",
         "supported_openwebui_versions": [OPENWEBUI_BASE_IMAGE],
         "build_time": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "git_commit": _git_commit(),
         "components": {
             "memorist_core": __version__,
-            "adapter": "0.2.0-beta.2",
+            "adapter": "0.2.0-beta.3",
             "ui": "model-control-contract",
         },
     }

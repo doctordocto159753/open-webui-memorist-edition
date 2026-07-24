@@ -87,7 +87,7 @@ REQUIRED_MAKE_TARGETS = {
 }
 
 SOURCE_ZIP_REL = "release/source/open-webui-memorist-edition-source.zip"
-RC_ZIP_REL = "release/rc/memorist-openwebui-0.2.0-beta.2.zip"
+RC_ZIP_REL = "release/rc/memorist-openwebui-0.2.0-beta.3.zip"
 MEMORY_WORKER_PATH = "memorist-core/src/memcore/memory_worker"
 PROMPTS_PATH = f"{MEMORY_WORKER_PATH}/prompts"
 PROMPT_REGISTRY_PATH = f"{PROMPTS_PATH}/registry.py"

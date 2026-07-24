@@ -4,7 +4,13 @@ from collections.abc import Sequence
 from memcore.active_memory.policies import actor_can_build_block, source_role_for
 from memcore.active_memory.renderer import render_block, structured_block, token_count
 from memcore.active_memory.repositories import ActiveMemoryRepository
-from memcore.active_memory.schemas import BlockBuildRun, BlockVersion, BuildResult, CoverageReport
+from memcore.active_memory.schemas import (
+    BlockBuildRun,
+    BlockVersion,
+    BuildResult,
+    CoverageReport,
+    ValidatedCompactionProposal,
+)
 from memcore.active_memory.selectors import select_canonical_sources, session_hot_cache_items
 from memcore.models import utc_now
 from memcore.repositories.domain import RepositoryError
@@ -24,6 +30,10 @@ class ActiveMemoryMaterializer:
         trigger_type: str = "manual",
         actor_type: str = "user",
         expected_optimistic_lock_version: int | None = None,
+        compaction_proposal: ValidatedCompactionProposal | None = None,
+        prompt_execution_uuid: str | None = None,
+        builder_version: str = BUILDER_VERSION,
+        expected_source_snapshot_hash: str | None = None,
     ) -> BuildResult:
         block = self.repository.get_block(block_uuid)
         if not actor_can_build_block(block, actor_type):
@@ -37,10 +47,31 @@ class ActiveMemoryMaterializer:
         sources = select_canonical_sources(self.connection, block)
         hot_cache_items = session_hot_cache_items(self.connection, block)
         snapshot_hash = source_snapshot_hash(sources, hot_cache_items)
+        if (
+            expected_source_snapshot_hash is not None
+            and snapshot_hash != expected_source_snapshot_hash
+        ):
+            raise RepositoryError("source snapshot changed during provider execution")
+        if prompt_execution_uuid is not None:
+            existing = self.repository.find_version_for_execution(
+                block_uuid,
+                prompt_execution_uuid,
+                snapshot_hash,
+            )
+            if existing is not None:
+                return BuildResult(
+                    block_uuid=block_uuid,
+                    block_version_uuid=str(existing["block_version_uuid"]),
+                    version_number=int(existing["version_number"]),
+                    source_snapshot_hash=str(existing["source_snapshot_hash"]),
+                    value=str(existing["value"]),
+                    omitted_sources=[],
+                )
         run = self.repository.create_build_run(
             BlockBuildRun(
                 block_uuid=block_uuid,
-                builder_version=BUILDER_VERSION,
+                prompt_execution_uuid=prompt_execution_uuid,
+                builder_version=builder_version,
                 source_snapshot_hash=snapshot_hash,
                 trigger_type=trigger_type,
                 started_at=utc_now(),
@@ -72,15 +103,28 @@ class ActiveMemoryMaterializer:
             )
             raise RepositoryError("source snapshot changed during build")
 
-        value, omitted_sources = render_block(block, sources, hot_cache_items)
+        published_sources = sources
+        if compaction_proposal is None:
+            value, omitted_sources = render_block(block, sources, hot_cache_items)
+            structured_value = structured_block(sources, hot_cache_items, omitted_sources)
+        else:
+            current_versions = {source.memory_version_uuid for source in sources}
+            proposed_versions = {
+                source.memory_version_uuid for source in compaction_proposal.sources
+            }
+            if not proposed_versions.issubset(current_versions):
+                raise RepositoryError("compaction proposal source snapshot changed")
+            value = compaction_proposal.value
+            omitted_sources = compaction_proposal.omitted_sources
+            structured_value = compaction_proposal.structured_value
+            published_sources = compaction_proposal.sources
         version = self.repository.create_version(
             BlockVersion(
                 block_uuid=block.block_uuid,
+                prompt_execution_uuid=prompt_execution_uuid,
                 version_number=self.repository.next_version_number(block.block_uuid),
                 value=value,
-                structured_value_ijson=dump_ijson(
-                    structured_block(sources, hot_cache_items, omitted_sources)
-                ),
+                structured_value_ijson=dump_ijson(structured_value),
                 char_count=len(value),
                 token_count=token_count(value),
                 source_snapshot_hash=snapshot_hash,
@@ -88,8 +132,11 @@ class ActiveMemoryMaterializer:
                 change_reason=trigger_type,
                 created_by=actor_type,
             ),
-            sources,
-            {source.memory_version_uuid: source_role_for(block, source) for source in sources},
+            published_sources,
+            {
+                source.memory_version_uuid: source_role_for(block, source)
+                for source in published_sources
+            },
         )
         self.repository.update_current_version(block, version)
         self.repository.update_build_run(

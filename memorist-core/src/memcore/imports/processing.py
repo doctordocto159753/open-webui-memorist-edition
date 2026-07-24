@@ -13,7 +13,10 @@ from typing import Any, cast
 from memcore.config import Settings
 from memcore.imports.reconstruction.content_parts import visible_text
 from memcore.imports.reconstruction.models import ImportedMessageNode
-from memcore.memory_worker.identity import build_processing_identity
+from memcore.memory_worker.identity import (
+    build_processing_identity,
+    execution_profile_fingerprint,
+)
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
 from memcore.memory_worker.postgres.pipeline import PostgresMemoryWorkerPipeline
 from memcore.model_control.postgres_repository import PostgresModelControlRepository
@@ -74,7 +77,7 @@ class ImportMessageProcessor:
             raise RuntimeError(
                 "no configured import reconstruction profile and deterministic fallback is disabled"
             )
-        return {
+        fallback = {
             "role": ModelRole.IMPORT_RECONSTRUCTION.value,
             "model_role": ModelRole.IMPORT_RECONSTRUCTION.value,
             "model_profile_uuid": None,
@@ -91,6 +94,15 @@ class ImportMessageProcessor:
             "scope_source": resolution.scope_source,
             "fallback_reason": resolution.fallback_reason,
         }
+        fallback["execution_profile_fingerprint"] = execution_profile_fingerprint(
+            {
+                "model_role": fallback["model_role"],
+                "model_profile_uuid": None,
+                "provider_type": fallback["provider_type"],
+                "model_name": fallback["model_name"],
+            }
+        )
+        return fallback
 
     def _usable_model_target(
         self, role: ModelRole, profile: dict[str, Any] | None, warnings: list[str]
@@ -149,7 +161,7 @@ class ImportMessageProcessor:
             """,
             (profile.get("model_profile_uuid"),),
         ).fetchone()
-        return {
+        target = {
             "role": role.value,
             "model_role": role.value,
             "model_profile_uuid": profile.get("model_profile_uuid"),
@@ -162,6 +174,16 @@ class ImportMessageProcessor:
             "latest_health": dict(health) if health is not None else None,
             "warnings": warnings,
         }
+        fingerprint_material = (
+            internal_profile.model_dump(mode="json")
+            if internal_profile is not None
+            else dict(profile)
+        )
+        fingerprint_material["model_role"] = role.value
+        target["execution_profile_fingerprint"] = execution_profile_fingerprint(
+            fingerprint_material
+        )
+        return target
 
     def eligibility(self, message: ImportedMessageNode) -> tuple[bool, str | None, str]:
         text = visible_text(message.content_parts)
@@ -219,6 +241,9 @@ class ImportMessageProcessor:
             "prompt_version": identity.prompt_version,
             "input_content_hash": identity.input_content_hash,
             "processing_identity_hash": identity.identity_hash,
+            "execution_profile_fingerprint": model_target.get(
+                "execution_profile_fingerprint"
+            ),
         }
         if not eligible:
             return self._upsert_status(
@@ -943,20 +968,37 @@ class ImportMessageProcessor:
             if status_row.get("processing_attempt_uuid")
             else None
         )
-        publication_fence_locked = False
+        expected_target: dict[str, Any] | None = None
+        expected_prepared: Any | None = None
 
-        def require_fence(*, lock: bool = False) -> None:
-            nonlocal publication_fence_locked
+        def require_fence(
+            *,
+            lock: bool = False,
+            before_provider: bool = False,
+        ) -> None:
             if not self.lease_fence_intact(
                 status_uuid=str(status_row["status_uuid"]),
                 worker_id=worker_id,
                 attempt_uuid=attempt_uuid,
                 lock=lock,
-                require_unexpired=not publication_fence_locked,
+                require_unexpired=True,
             ):
                 raise ImportLeaseLost("lease_lost")
-            if lock:
-                publication_fence_locked = True
+            if expected_target is not None and expected_prepared is not None:
+                current_target = self._hydrate_execution_model_target(status_row)
+                self._require_same_execution_target(
+                    status_row=status_row,
+                    prepared_target=expected_target,
+                    commit_target=current_target,
+                    prepared=expected_prepared,
+                )
+            if before_provider and not self.renew_lease(
+                str(status_row["status_uuid"]),
+                worker_id,
+                attempt_uuid,
+                self.settings.import_reconstruction_lease_seconds,
+            ):
+                raise ImportLeaseLost("lease_lost")
 
         try:
             require_fence()
@@ -1009,49 +1051,52 @@ class ImportMessageProcessor:
                 else MemoryWorkerPipeline(self.connection, self.settings)
             )
             prepared_target = self._hydrate_execution_model_target(status_row)
+            expected_target = prepared_target
             prepared = pipeline.prepare_message(
                 str(status_row["target_message_uuid"]),
                 model_target=prepared_target,
             )
+            expected_prepared = prepared
 
+            require_fence()
+            commit_target = self._hydrate_execution_model_target(status_row)
+            self._require_same_execution_target(
+                status_row=status_row,
+                prepared_target=prepared_target,
+                commit_target=commit_target,
+                prepared=prepared,
+            )
+            result = pipeline.process_message(
+                str(status_row["target_message_uuid"]),
+                import_run_uuid=str(status_row["import_run_uuid"]),
+                job_uuid=str(job_uuid) if job_uuid else None,
+                model_target=commit_target,
+                lease_fence=require_fence,
+                prepared_inference=prepared,
+            )
+            processing_run_uuid = str(result["processing_run_uuid"])
+            prompt_execution_uuid = result.get("prompt_execution_uuid")
+            if prompt_execution_uuid is None:
+                execution = self.connection.execute(
+                    """
+                    SELECT prompt_execution_uuid
+                    FROM prompt_execution_runs
+                    WHERE import_run_uuid = ? AND message_uuid = ?
+                      AND job_uuid = ?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (
+                        status_row["import_run_uuid"],
+                        status_row["target_message_uuid"],
+                        job_uuid,
+                    ),
+                ).fetchone()
+                prompt_execution_uuid = (
+                    execution["prompt_execution_uuid"] if execution else None
+                )
             with self._result_transaction():
                 require_fence(lock=True)
-                commit_target = self._hydrate_execution_model_target(status_row)
-                self._require_same_execution_target(
-                    status_row=status_row,
-                    prepared_target=prepared_target,
-                    commit_target=commit_target,
-                    prepared=prepared,
-                )
-                result = pipeline.process_message(
-                    str(status_row["target_message_uuid"]),
-                    import_run_uuid=str(status_row["import_run_uuid"]),
-                    job_uuid=str(job_uuid) if job_uuid else None,
-                    model_target=commit_target,
-                    lease_fence=require_fence,
-                    prepared_inference=prepared,
-                )
-                processing_run_uuid = str(result["processing_run_uuid"])
-                prompt_execution_uuid = result.get("prompt_execution_uuid")
-                if prompt_execution_uuid is None:
-                    execution = self.connection.execute(
-                        """
-                        SELECT prompt_execution_uuid
-                        FROM prompt_execution_runs
-                        WHERE import_run_uuid = ? AND message_uuid = ?
-                          AND job_uuid = ?
-                        ORDER BY created_at DESC
-                        LIMIT 1
-                        """,
-                        (
-                            status_row["import_run_uuid"],
-                            status_row["target_message_uuid"],
-                            job_uuid,
-                        ),
-                    ).fetchone()
-                    prompt_execution_uuid = (
-                        execution["prompt_execution_uuid"] if execution else None
-                    )
                 finished = utc_now()
                 success_updated = self.connection.execute(
                     """
@@ -1109,7 +1154,6 @@ class ImportMessageProcessor:
             return
         except Exception as error:
             self.connection.rollback()
-            publication_fence_locked = False
             sanitized = (
                 sanitize_error_message(f"{type(error).__name__}: {error}") or type(error).__name__
             )
@@ -1202,6 +1246,11 @@ class ImportMessageProcessor:
     @contextmanager
     def _result_transaction(self) -> Iterator[None]:
         if self._is_postgres_runtime:
+            # Reads performed after the pipeline's last fenced write can open a
+            # new implicit transaction. End it so this context is a real
+            # top-level publication transaction, not a savepoint whose result
+            # remains invisible until a later worker iteration.
+            self.connection.commit()
             with self.connection.raw.transaction():
                 yield
             return
@@ -1234,6 +1283,19 @@ class ImportMessageProcessor:
         ):
             raise RuntimeError("scheduled model profile execution identity changed")
         if (
+            prepared.profile_fingerprint != execution_profile_fingerprint(prepared_target)
+            or prepared.profile_fingerprint != execution_profile_fingerprint(commit_target)
+        ):
+            raise RuntimeError("scheduled model profile configuration changed")
+        scheduled_profile_fingerprint = status_row.get(
+            "execution_profile_fingerprint"
+        )
+        if (
+            scheduled_profile_fingerprint
+            and str(scheduled_profile_fingerprint) != prepared.profile_fingerprint
+        ):
+            raise RuntimeError("scheduled model profile configuration changed")
+        if (
             str(status_row.get("processing_identity_hash") or "")
             != prepared.processing_identity_hash
             or str(status_row.get("input_content_hash") or "") != prepared.input_content_hash
@@ -1251,12 +1313,14 @@ class ImportMessageProcessor:
                 raise RuntimeError(
                     "scheduled deterministic fallback is no longer allowed by policy"
                 )
-            return {
+            target = {
                 "model_role": operational_role,
                 "model_profile_uuid": None,
                 "provider_type": "deterministic",
                 "model_name": "deterministic_extraction",
             }
+            self._require_scheduled_profile_fingerprint(status_row, target)
+            return target
         profile = self.model_control.get_profile(str(profile_uuid))
         if profile is None:
             raise RuntimeError("scheduled model profile is no longer available")
@@ -1302,7 +1366,17 @@ class ImportMessageProcessor:
         hydrated["model_role"] = operational_role
         hydrated["provider_type"] = provider_type
         hydrated["model_name"] = str(profile.model_name)
+        self._require_scheduled_profile_fingerprint(status_row, hydrated)
         return hydrated
+
+    @staticmethod
+    def _require_scheduled_profile_fingerprint(
+        status_row: dict[str, Any],
+        target: dict[str, Any],
+    ) -> None:
+        expected = status_row.get("execution_profile_fingerprint")
+        if expected and str(expected) != execution_profile_fingerprint(target):
+            raise RuntimeError("scheduled model profile configuration changed")
 
     def _upsert_status(self, **values: Any) -> dict[str, Any]:
         existing = self.connection.execute(
@@ -1351,6 +1425,9 @@ class ImportMessageProcessor:
             "retry_count": 0,
             "error_sanitized": values.get("error_sanitized"),
             "processing_identity_hash": values.get("processing_identity_hash"),
+            "execution_profile_fingerprint": values.get(
+                "execution_profile_fingerprint"
+            ),
             "created_at": now,
             "updated_at": now,
             "last_transition_at": now,

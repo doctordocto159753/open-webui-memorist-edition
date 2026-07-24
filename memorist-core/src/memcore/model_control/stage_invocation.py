@@ -7,12 +7,18 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from memcore.memory_worker.fencing import (
+    LeaseFenceRejected,
+    close_transaction_before_provider,
+    fenced_write,
+)
+from memcore.memory_worker.identity import execution_profile_fingerprint
 from memcore.model_control.registry import provider_for_profile
 from memcore.model_control.resolution import EffectiveRoleResolution, RoleResolutionService
 from memcore.model_control.schemas import UsageEventCreate
 from memcore.model_control.security import sanitize_error_message
 from memcore.models import ModelRole, new_uuid, utc_now
-from memcore.validators.ijson import canonical_hash_ijson
+from memcore.validators.ijson import canonical_hash_ijson, dump_ijson, load_ijson
 
 STAGE_INVOCATION_SCHEMA_VERSION = "1.0"
 
@@ -81,6 +87,7 @@ class StageInvoker:
         *,
         validator: OutputValidator,
         deterministic_output: DeterministicOutput,
+        lease_fence: Callable[..., None] | None = None,
     ) -> StageInvocationResult:
         resolution = self.resolver.resolve(
             request.role,
@@ -88,7 +95,12 @@ class StageInvoker:
             project_uuid=request.project_uuid,
         )
         identity = request.idempotency_key or _stage_identity(request, resolution)
-        existing = self._existing(identity)
+        existing = self._existing(
+            identity,
+            request=request,
+            resolution=resolution,
+            validator=validator,
+        )
         if existing is not None:
             return existing.model_copy(update={"idempotent_replay": True})
 
@@ -111,6 +123,7 @@ class StageInvoker:
                 output = deterministic_output(request.input_payload)
                 validator(output)
             else:
+                close_transaction_before_provider(self.connection, lease_fence)
                 profile = self._provider_profile(resolution)
                 provider = provider_for_profile(profile)
                 response = provider.complete_structured(
@@ -121,6 +134,9 @@ class StageInvoker:
                 input_tokens = response.input_tokens
                 output_tokens = response.output_tokens
                 validator(output)
+                self._require_same_resolution(request, resolution)
+        except LeaseFenceRejected:
+            raise
         except Exception as error:
             status = "failed_open" if resolution.fail_open else "failed"
             detail = sanitize_error_message(str(error))
@@ -162,9 +178,14 @@ class StageInvoker:
             validation_errors=validation_errors,
             created_at=created_at,
         )
-        self._record(request, result, identity)
-        self._record_usage(request, result)
-        return result
+        return self._persist_result(
+            request,
+            result,
+            identity,
+            resolution,
+            validator=validator,
+            lease_fence=lease_fence,
+        )
 
     def invoke_embedding(
         self,
@@ -173,6 +194,7 @@ class StageInvoker:
         texts: list[str],
         expected_dimension: int | None = None,
         allow_replay: bool = True,
+        lease_fence: Callable[..., None] | None = None,
     ) -> tuple[StageInvocationResult, list[list[float]]]:
         resolution = self.resolver.resolve(
             ModelRole.EMBEDDING,
@@ -181,7 +203,12 @@ class StageInvoker:
         )
         identity = request.idempotency_key or _stage_identity(request, resolution)
         if allow_replay:
-            existing = self._existing(identity)
+            existing = self._existing(
+                identity,
+                request=request,
+                resolution=resolution,
+                validator=_validate_embedding_audit_output,
+            )
             if existing is not None:
                 # Vectors are deliberately stored in projection tables, not stage
                 # audit rows. A replay does not issue another provider request, so
@@ -201,6 +228,7 @@ class StageInvoker:
                 status = "abstained"
                 detail = resolution.fallback_reason or "embedding role disabled"
             else:
+                close_transaction_before_provider(self.connection, lease_fence)
                 provider = provider_for_profile(self._provider_profile(resolution))
                 response = provider.embed(texts, timeout_seconds=request.timeout_ms / 1000)
                 vectors = response.vectors
@@ -216,6 +244,9 @@ class StageInvoker:
                         f"expected {expected_dimension}, got {dimension}"
                     )
                 input_tokens = response.input_tokens
+                self._require_same_resolution(request, resolution)
+        except LeaseFenceRejected:
+            raise
         except Exception as error:
             status = "failed_open" if resolution.fail_open else "failed"
             detail = sanitize_error_message(str(error))
@@ -223,6 +254,10 @@ class StageInvoker:
             vectors = []
             input_tokens = 0
 
+        audit_output = {
+            "vector_count": len(vectors),
+            "dimension": len(vectors[0]) if vectors else None,
+        }
         result = StageInvocationResult(
             execution_uuid=new_uuid(),
             role=ModelRole.EMBEDDING,
@@ -232,14 +267,9 @@ class StageInvoker:
             model_name=resolution.model_name,
             prompt_version=request.prompt_version,
             input_hash=canonical_hash_ijson(request.input_payload),
-            output_hash=(
-                sha256(str(vectors).encode("utf-8")).hexdigest() if vectors else None
-            ),
+            output_hash=canonical_hash_ijson(audit_output),
             status=status,
-            output={
-                "vector_count": len(vectors),
-                "dimension": len(vectors[0]) if vectors else None,
-            },
+            output=audit_output,
             detail_sanitized=detail,
             latency_ms=int((perf_counter() - started) * 1000),
             input_tokens=input_tokens,
@@ -252,9 +282,16 @@ class StageInvoker:
             validation_errors=errors,
             created_at=utc_now(),
         )
-        self._record(request, result, identity)
-        self._record_usage(request, result)
-        return result, vectors
+        persisted = self._persist_result(
+            request,
+            result,
+            identity,
+            resolution,
+            validator=_validate_embedding_audit_output,
+            lease_fence=lease_fence,
+            prefer_execution_result=not allow_replay,
+        )
+        return persisted, vectors
 
     def _provider_profile(self, resolution: EffectiveRoleResolution) -> dict[str, Any]:
         if resolution.model_profile_uuid:
@@ -265,54 +302,142 @@ class StageInvoker:
                 return {str(key): value for key, value in values.items()}
         return resolution.runtime_profile()
 
-    def _existing(self, identity: str) -> StageInvocationResult | None:
+    def _existing(
+        self,
+        identity: str,
+        *,
+        request: StageInvocationRequest,
+        resolution: EffectiveRoleResolution,
+        validator: OutputValidator,
+        lock: bool = False,
+    ) -> StageInvocationResult | None:
         placeholder = "%s" if self.postgres else "?"
+        lock_clause = " FOR UPDATE" if lock and self.postgres else ""
         row = self.connection.execute(
-            f"SELECT * FROM processing_stage_runs WHERE idempotency_key = {placeholder}",
+            f"SELECT * FROM processing_stage_runs "
+            f"WHERE idempotency_key = {placeholder}{lock_clause}",
             (identity,),
         ).fetchone()
         if row is None:
             return None
-        values = dict(row)
-        validation = values.get(
-            "validation_errors_jsonb" if self.postgres else "validation_errors_ijson"
-        )
-        if isinstance(validation, str):
-            import json
+        try:
+            values = dict(row)
+            validation = values.get(
+                "validation_errors_jsonb" if self.postgres else "validation_errors_ijson"
+            )
+            if isinstance(validation, str):
+                validation = load_ijson(validation)
+            if not isinstance(validation, list):
+                validation = []
+            output = values.get("output_jsonb" if self.postgres else "output_ijson")
+            if isinstance(output, str):
+                output = load_ijson(output)
+            if output is not None and not isinstance(output, dict):
+                return None
+            status = str(values["status"])
+            if status in {"ok", "failed_open"} and output is None:
+                return None
+            expected_metadata = {
+                "source_type": request.source_type,
+                "source_uuid": request.source_uuid,
+                "requested_role": request.role.value,
+                "effective_role": resolution.effective_role.value,
+                "stage": request.stage,
+                "model_profile_uuid": resolution.model_profile_uuid,
+                "provider_type": resolution.provider_type,
+                "model_name": resolution.model_name,
+                "prompt_id": request.prompt_id,
+                "prompt_version": request.prompt_version,
+            }
+            if any(
+                values.get(key) != expected
+                for key, expected in expected_metadata.items()
+            ):
+                return None
+            if int(values.get("schema_version") or 0) != 1:
+                return None
+            expected_input_hash = canonical_hash_ijson(request.input_payload)
+            if str(values["input_hash"]) != expected_input_hash:
+                return None
+            output_hash = values.get("output_hash")
+            if output is not None:
+                validator(output)
+                if output_hash != canonical_hash_ijson(output):
+                    return None
+            elif output_hash is not None:
+                return None
+            return StageInvocationResult(
+                execution_uuid=str(values["stage_execution_uuid"]),
+                role=ModelRole(str(values["requested_role"])),
+                effective_role=ModelRole(str(values["effective_role"])),
+                model_profile_uuid=values.get("model_profile_uuid"),
+                provider_type=str(values["provider_type"]),
+                model_name=str(values["model_name"]),
+                prompt_version=values.get("prompt_version"),
+                input_hash=str(values["input_hash"]),
+                output_hash=output_hash,
+                status=status,
+                output=output,
+                detail_sanitized=values.get("detail_sanitized"),
+                latency_ms=int(values.get("latency_ms") or 0),
+                input_tokens=int(values.get("input_tokens") or 0),
+                output_tokens=int(values.get("output_tokens") or 0),
+                embedding_count=int(values.get("embedding_count") or 0),
+                called_provider=bool(values.get("called_provider")),
+                fallback_used=bool(values.get("fallback_used")),
+                scope_source=str(values.get("scope_source") or "unknown"),
+                inheritance_source=values.get("inheritance_source"),
+                fallback_reason=values.get("fallback_reason"),
+                validation_errors=[str(item) for item in validation],
+                created_at=str(values["created_at"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            # A corrupt/legacy semantic result is never replayed as abstention.
+            # The caller re-executes the stage and repairs the row atomically.
+            return None
 
-            validation = json.loads(validation)
-        output = values.get("output_jsonb" if self.postgres else "output_ijson")
-        if isinstance(output, str):
-            import json
-
-            output = json.loads(output)
-        if not isinstance(output, dict):
-            output = None
-        return StageInvocationResult(
-            execution_uuid=str(values["stage_execution_uuid"]),
-            role=ModelRole(str(values["requested_role"])),
-            effective_role=ModelRole(str(values["effective_role"])),
-            model_profile_uuid=values.get("model_profile_uuid"),
-            provider_type=str(values["provider_type"]),
-            model_name=str(values["model_name"]),
-            prompt_version=values.get("prompt_version"),
-            input_hash=str(values["input_hash"]),
-            output_hash=values.get("output_hash"),
-            status=str(values["status"]),
-            output=output,
-            detail_sanitized=values.get("detail_sanitized"),
-            latency_ms=int(values.get("latency_ms") or 0),
-            input_tokens=int(values.get("input_tokens") or 0),
-            output_tokens=int(values.get("output_tokens") or 0),
-            embedding_count=int(values.get("embedding_count") or 0),
-            called_provider=bool(values.get("called_provider")),
-            fallback_used=bool(values.get("fallback_used")),
-            scope_source=str(values.get("scope_source") or "unknown"),
-            inheritance_source=values.get("inheritance_source"),
-            fallback_reason=values.get("fallback_reason"),
-            validation_errors=list(validation or []),
-            created_at=str(values["created_at"]),
-        )
+    def _persist_result(
+        self,
+        request: StageInvocationRequest,
+        result: StageInvocationResult,
+        identity: str,
+        resolution: EffectiveRoleResolution,
+        *,
+        validator: OutputValidator,
+        lease_fence: Callable[..., None] | None,
+        prefer_execution_result: bool = False,
+    ) -> StageInvocationResult:
+        self.connection.commit()
+        with fenced_write(self.connection, lease_fence, postgres=self.postgres):
+            existing = self._existing(
+                identity,
+                request=request,
+                resolution=resolution,
+                validator=validator,
+                lock=True,
+            )
+            if existing is not None:
+                if prefer_execution_result:
+                    self._record_usage(request, result)
+                    return result
+                return existing.model_copy(update={"idempotent_replay": True})
+            validator_output = result.output
+            if validator_output is not None:
+                validator(validator_output)
+                if result.output_hash != canonical_hash_ijson(validator_output):
+                    raise ValueError("stage output hash does not match validated output")
+            self._record(request, result, identity)
+            self._record_usage(request, result)
+            persisted = self._existing(
+                identity,
+                request=request,
+                resolution=resolution,
+                validator=validator,
+                lock=True,
+            )
+            if persisted is None:
+                raise RuntimeError("persisted stage result failed replay validation")
+            return persisted
 
     def _record(
         self,
@@ -320,8 +445,6 @@ class StageInvoker:
         result: StageInvocationResult,
         identity: str,
     ) -> None:
-        import json
-
         columns = [
             "stage_execution_uuid",
             "processing_run_uuid",
@@ -377,9 +500,9 @@ class StageInvoker:
             result.inheritance_source,
             result.fallback_reason,
             result.detail_sanitized,
-            json.dumps(result.validation_errors, sort_keys=True),
+            dump_ijson(result.validation_errors),
             (
-                json.dumps(result.output, ensure_ascii=False, sort_keys=True)
+                dump_ijson(result.output)
                 if result.output is not None
                 else None
             ),
@@ -398,13 +521,25 @@ class StageInvoker:
             ]
             self.connection.execute(
                 f"INSERT INTO processing_stage_runs ({', '.join(columns)}) "
-                f"VALUES ({', '.join(placeholders)}) ON CONFLICT (idempotency_key) DO NOTHING",
+                f"VALUES ({', '.join(placeholders)}) "
+                "ON CONFLICT (idempotency_key) DO UPDATE SET "
+                + ", ".join(
+                    f"{column} = excluded.{column}"
+                    for column in columns
+                    if column not in {"stage_execution_uuid", "idempotency_key", "created_at"}
+                ),
                 tuple(values),
             )
         else:
             self.connection.execute(
-                f"INSERT OR IGNORE INTO processing_stage_runs ({', '.join(columns)}) "
-                f"VALUES ({', '.join(['?'] * len(columns))})",
+                f"INSERT INTO processing_stage_runs ({', '.join(columns)}) "
+                f"VALUES ({', '.join(['?'] * len(columns))}) "
+                "ON CONFLICT (idempotency_key) DO UPDATE SET "
+                + ", ".join(
+                    f"{column} = excluded.{column}"
+                    for column in columns
+                    if column not in {"stage_execution_uuid", "idempotency_key", "created_at"}
+                ),
                 tuple(values),
             )
         if request.prompt_id and request.prompt_version:
@@ -415,8 +550,6 @@ class StageInvoker:
         request: StageInvocationRequest,
         result: StageInvocationResult,
     ) -> None:
-        import json
-
         columns = [
             "prompt_execution_uuid",
             "prompt_id",
@@ -445,7 +578,7 @@ class StageInvoker:
             "schema_version",
         ]
         output_json = (
-            json.dumps(result.output, ensure_ascii=False, sort_keys=True)
+            dump_ijson(result.output)
             if result.output is not None
             else None
         )
@@ -468,7 +601,7 @@ class StageInvoker:
             output_json,
             output_json if result.status in {"ok", "failed_open"} else None,
             result.status,
-            json.dumps(result.validation_errors, ensure_ascii=False, sort_keys=True),
+            dump_ijson(result.validation_errors),
             result.detail_sanitized,
             result.latency_ms,
             result.input_tokens,
@@ -511,6 +644,21 @@ class StageInvoker:
             )
         )
 
+    def _require_same_resolution(
+        self,
+        request: StageInvocationRequest,
+        expected: EffectiveRoleResolution,
+    ) -> None:
+        current = self.resolver.resolve(
+            request.role,
+            workspace_uuid=request.workspace_uuid,
+            project_uuid=request.project_uuid,
+        )
+        if _resolution_fingerprint(self.repository, current) != _resolution_fingerprint(
+            self.repository, expected
+        ):
+            raise LeaseFenceRejected("effective processing profile changed during provider call")
+
 
 def _stage_identity(
     request: StageInvocationRequest,
@@ -531,6 +679,43 @@ def _stage_identity(
         "input_hash": canonical_hash_ijson(request.input_payload),
     }
     return sha256(str(sorted(material.items())).encode("utf-8")).hexdigest()
+
+
+def _resolution_fingerprint(
+    repository: Any,
+    resolution: EffectiveRoleResolution,
+) -> str:
+    profile_values: dict[str, Any] | None = None
+    if resolution.model_profile_uuid:
+        profile = repository.get_profile(resolution.model_profile_uuid)
+        if profile is not None:
+            profile_values = profile.model_dump(mode="json")
+    material = dict(profile_values or resolution.runtime_profile())
+    material.update(
+        {
+            "requested_role": resolution.requested_role.value,
+            "effective_role": resolution.effective_role.value,
+            "scope_source": resolution.scope_source,
+            "inheritance_source": resolution.inheritance_source,
+            "fallback_reason": resolution.fallback_reason,
+        }
+    )
+    return execution_profile_fingerprint(material)
+
+
+def _validate_embedding_audit_output(output: dict[str, Any]) -> None:
+    count = output.get("vector_count")
+    dimension = output.get("dimension")
+    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+        raise ValueError("embedding audit output requires a non-negative vector_count")
+    if dimension is not None and (
+        not isinstance(dimension, int) or isinstance(dimension, bool) or dimension <= 0
+    ):
+        raise ValueError("embedding audit output dimension is invalid")
+    if count == 0 and dimension is not None:
+        raise ValueError("embedding audit output cannot have dimension without vectors")
+    if count > 0 and dimension is None:
+        raise ValueError("embedding audit output requires dimension for vectors")
 
 
 def _stage_prompt(request: StageInvocationRequest) -> str:

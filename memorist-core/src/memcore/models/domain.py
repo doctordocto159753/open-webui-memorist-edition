@@ -258,6 +258,9 @@ class Job(DomainModel):
     run_after: str | None = None
     locked_by: str | None = None
     locked_at: str | None = None
+    lease_token: str | None = None
+    lease_generation: int = Field(default=0, ge=0)
+    lease_expires_at: str | None = None
     created_at: str = Field(default_factory=utc_now)
     updated_at: str | None = None
 
