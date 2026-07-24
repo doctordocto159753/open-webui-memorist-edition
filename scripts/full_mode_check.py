@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import platform
+import shutil
 import subprocess
 import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "release" / "artifacts"
 CORE_SRC = ROOT / "memorist-core" / "src"
+CORE_PROJECT = ROOT / "memorist-core"
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -41,6 +44,9 @@ CRITICAL_GATES = {
 
 
 def main() -> int:
+    managed_exit = _run_in_managed_core_environment()
+    if managed_exit is not None:
+        return managed_exit
     started = time.perf_counter()
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     results = [_run_gate(name) for name in FULL_GATES]
@@ -50,12 +56,51 @@ def main() -> int:
     return 0 if report["summary"]["all_required_passed"] else 1
 
 
+def _run_in_managed_core_environment() -> int | None:
+    """Re-enter through Core's dependency environment when system Python is bare."""
+
+    if os.getenv("MEMORIST_FULL_MODE_RUNTIME_BOOTSTRAPPED") == "1":
+        return None
+    try:
+        importlib.import_module("psycopg")
+        return None
+    except ModuleNotFoundError:
+        pass
+
+    candidates = [
+        CORE_PROJECT / ".venv" / "Scripts" / "python.exe",
+        CORE_PROJECT / ".venv" / "bin" / "python",
+    ]
+    command: list[str] | None = None
+    for candidate in candidates:
+        if candidate.is_file() and candidate.resolve() != Path(sys.executable).resolve():
+            command = [str(candidate), str(Path(__file__).resolve()), *sys.argv[1:]]
+            break
+    if command is None:
+        uv = shutil.which("uv")
+        if uv is not None:
+            command = [
+                uv,
+                "run",
+                "--project",
+                str(CORE_PROJECT),
+                "python",
+                str(Path(__file__).resolve()),
+                *sys.argv[1:],
+            ]
+    if command is None:
+        return None
+    environment = dict(os.environ)
+    environment["MEMORIST_FULL_MODE_RUNTIME_BOOTSTRAPPED"] = "1"
+    return subprocess.run(command, cwd=ROOT, env=environment, check=False).returncode
+
+
 def _run_gate(name: str) -> dict[str, Any]:
     started = time.perf_counter()
     started_at = now_z()
     try:
         module = importlib.import_module(f"release.tests.{name}")
-        result = module.run()
+        result = cast(dict[str, Any], module.run())
         if "status" not in result:
             result["status"] = "passed" if result.get("passed") else "failed"
         result["duration_ms"] = int((time.perf_counter() - started) * 1000)
@@ -102,7 +147,10 @@ def _build_report(results: list[dict[str, Any]], started: float) -> dict[str, An
         "python_version": platform.python_version(),
         "service_versions": {
             "postgres": "postgres:16.9-alpine3.22",
-            "falkordb": "falkordb/falkordb@sha256:2496643cabd67e87fd82458383400c049324daec1fe674ba0db4c5bdaca5d25f",
+            "falkordb": (
+                "falkordb/falkordb@sha256:"
+                "2496643cabd67e87fd82458383400c049324daec1fe674ba0db4c5bdaca5d25f"
+            ),
             "open_webui": "ghcr.io/open-webui/open-webui:v0.9.6",
             "docker": _command_output(["docker", "version", "--format", "{{.Server.Version}}"]),
         },
@@ -190,7 +238,14 @@ def now_z() -> str:
 
 def _command_output(command: list[str]) -> str:
     try:
-        return subprocess.run(command, capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+        return completed.stdout.strip()
     except Exception:
         return "unavailable"
 
