@@ -172,6 +172,7 @@ class StageInvoker:
         *,
         texts: list[str],
         expected_dimension: int | None = None,
+        allow_replay: bool = True,
     ) -> tuple[StageInvocationResult, list[list[float]]]:
         resolution = self.resolver.resolve(
             ModelRole.EMBEDDING,
@@ -179,17 +180,21 @@ class StageInvoker:
             project_uuid=request.project_uuid,
         )
         identity = request.idempotency_key or _stage_identity(request, resolution)
-        existing = self._existing(identity)
-        if existing is not None:
-            # Vectors are deliberately stored in projection tables, not stage
-            # audit rows. A replay does not issue another provider request.
-            return existing.model_copy(update={"idempotent_replay": True}), []
+        if allow_replay:
+            existing = self._existing(identity)
+            if existing is not None:
+                # Vectors are deliberately stored in projection tables, not stage
+                # audit rows. A replay does not issue another provider request, so
+                # callers whose projection row is missing must pass
+                # allow_replay=False to regenerate the vectors.
+                return existing.model_copy(update={"idempotent_replay": True}), []
 
         started = perf_counter()
         vectors: list[list[float]] = []
         status = "ok"
         detail: str | None = None
         errors: list[str] = []
+        input_tokens = 0
         called_provider = resolution.provider_type not in {"deterministic", "disabled"}
         try:
             if resolution.provider_type == "disabled":
@@ -215,6 +220,7 @@ class StageInvoker:
             status = "failed_open" if resolution.fail_open else "failed"
             detail = sanitize_error_message(str(error))
             errors.append(type(error).__name__)
+            vectors = []
             input_tokens = 0
 
         result = StageInvocationResult(
@@ -275,6 +281,13 @@ class StageInvoker:
             import json
 
             validation = json.loads(validation)
+        output = values.get("output_jsonb" if self.postgres else "output_ijson")
+        if isinstance(output, str):
+            import json
+
+            output = json.loads(output)
+        if not isinstance(output, dict):
+            output = None
         return StageInvocationResult(
             execution_uuid=str(values["stage_execution_uuid"]),
             role=ModelRole(str(values["requested_role"])),
@@ -286,7 +299,7 @@ class StageInvoker:
             input_hash=str(values["input_hash"]),
             output_hash=values.get("output_hash"),
             status=str(values["status"]),
-            output=None,
+            output=output,
             detail_sanitized=values.get("detail_sanitized"),
             latency_ms=int(values.get("latency_ms") or 0),
             input_tokens=int(values.get("input_tokens") or 0),
@@ -332,6 +345,7 @@ class StageInvoker:
             "fallback_reason",
             "detail_sanitized",
             "validation_errors_jsonb" if self.postgres else "validation_errors_ijson",
+            "output_jsonb" if self.postgres else "output_ijson",
             "input_tokens",
             "output_tokens",
             "embedding_count",
@@ -364,6 +378,11 @@ class StageInvoker:
             result.fallback_reason,
             result.detail_sanitized,
             json.dumps(result.validation_errors, sort_keys=True),
+            (
+                json.dumps(result.output, ensure_ascii=False, sort_keys=True)
+                if result.output is not None
+                else None
+            ),
             result.input_tokens,
             result.output_tokens,
             result.embedding_count,
@@ -374,8 +393,9 @@ class StageInvoker:
             1,
         ]
         if self.postgres:
-            placeholders = ["%s"] * len(columns)
-            placeholders[21] = "%s::jsonb"
+            placeholders = [
+                "%s::jsonb" if column.endswith("_jsonb") else "%s" for column in columns
+            ]
             self.connection.execute(
                 f"INSERT INTO processing_stage_runs ({', '.join(columns)}) "
                 f"VALUES ({', '.join(placeholders)}) ON CONFLICT (idempotency_key) DO NOTHING",

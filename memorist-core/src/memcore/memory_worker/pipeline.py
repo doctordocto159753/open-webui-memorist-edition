@@ -788,12 +788,13 @@ class MemoryWorkerPipeline:
             if row is None:
                 continue
             text = str(row["normalized_text"])
+            content_hash = sha256(text.encode("utf-8")).hexdigest()
             now = utc_now()
             payload = dump_ijson(
                 {
                     "memory_uuid": memory_uuid,
                     "memory_version_uuid": version_uuid,
-                    "content_hash": sha256(text.encode("utf-8")).hexdigest(),
+                    "content_hash": content_hash,
                 }
             )
             with self.connection:
@@ -828,6 +829,16 @@ class MemoryWorkerPipeline:
                 else None
             )
             expected_dimension = profile.embedding_dimension if profile else None
+            # A replayed stage returns no vectors, so only accept a replay when
+            # the projection row from the first execution actually exists.
+            projection_exists = (
+                self.connection.execute(
+                    "SELECT 1 FROM memory_version_embeddings "
+                    "WHERE memory_version_uuid = ? AND content_hash = ?",
+                    (version_uuid, content_hash),
+                ).fetchone()
+                is not None
+            )
             result, vectors = invoker.invoke_embedding(
                 StageInvocationRequest(
                     role=ModelRole.EMBEDDING,
@@ -840,14 +851,14 @@ class MemoryWorkerPipeline:
                     session_uuid=message.session_uuid,
                     message_uuid=message.message_uuid,
                     prompt_version="1.0",
-                    input_payload={"text": text, "content_hash": sha256(text.encode()).hexdigest()},
+                    input_payload={"text": text, "content_hash": content_hash},
                 ),
                 texts=[text],
                 expected_dimension=expected_dimension,
+                allow_replay=projection_exists,
             )
             if vectors and result.model_profile_uuid:
                 vector = vectors[0]
-                content_hash = sha256(text.encode("utf-8")).hexdigest()
                 RetrievalRepository(self.connection).upsert_embedding(
                     MemoryVersionEmbedding(
                         memory_version_uuid=str(version_uuid),

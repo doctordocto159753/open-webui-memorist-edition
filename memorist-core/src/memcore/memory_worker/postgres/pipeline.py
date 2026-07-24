@@ -1107,6 +1107,16 @@ class PostgresMemoryWorkerPipeline:
                 (new_uuid(), version_uuid, payload, utc_now(), utc_now(), utc_now()),
             )
             self.connection.commit()
+            # A replayed stage returns no vectors, so only accept a replay when
+            # the projection row from the first execution actually exists.
+            projection_exists = (
+                self.connection.execute(
+                    "SELECT 1 FROM memory_version_embeddings "
+                    "WHERE memory_version_uuid = %s AND content_hash = %s",
+                    (version_uuid, content_hash),
+                ).fetchone()
+                is not None
+            )
             result, vectors = invoker.invoke_embedding(
                 StageInvocationRequest(
                     role=ModelRole.EMBEDDING,
@@ -1123,6 +1133,7 @@ class PostgresMemoryWorkerPipeline:
                 ),
                 texts=[text],
                 expected_dimension=expected_dimension,
+                allow_replay=projection_exists,
             )
             self.connection.commit()
             if vectors and result.model_profile_uuid:

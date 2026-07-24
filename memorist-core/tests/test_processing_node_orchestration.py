@@ -259,6 +259,10 @@ def test_setup_profile_and_stage_invocation_are_idempotent_and_audited(
     assert repository.get_profile(first_uuid).model_name == "privacy-v2"  # type: ignore[union-attr]
     assert replay.execution_uuid == first.execution_uuid
     assert replay.idempotent_replay is True
+    # A replay must return the originally validated output, not None; otherwise
+    # deterministic retry downgrades candidate lifecycle decisions to "abstain".
+    assert first.output is not None
+    assert replay.output == first.output
     assert orchestration_connection.execute(
         "SELECT COUNT(*) FROM processing_stage_runs"
     ).fetchone()[0] == 1
@@ -269,3 +273,139 @@ def test_setup_profile_and_stage_invocation_are_idempotent_and_audited(
     assert orchestration_connection.execute(
         "SELECT COUNT(*) FROM model_usage_events WHERE stage = 'privacy_sensitivity'"
     ).fetchone()[0] == 1
+
+
+def test_embedding_stage_disabled_resolution_records_abstained_result(
+    orchestration_connection: sqlite3.Connection,
+) -> None:
+    repository = ModelControlRepository(orchestration_connection)
+    invoker = StageInvoker(orchestration_connection, repository)
+    result, vectors = invoker.invoke_embedding(
+        StageInvocationRequest(
+            role=ModelRole.EMBEDDING,
+            stage="embedding_generation",
+            source_type="memory_version",
+            source_uuid="version-disabled",
+            input_payload={"text": "hello"},
+        ),
+        texts=["hello"],
+    )
+
+    assert result.status == "abstained"
+    assert result.called_provider is False
+    assert vectors == []
+    assert orchestration_connection.execute(
+        "SELECT COUNT(*) FROM processing_stage_runs WHERE source_uuid = 'version-disabled'"
+    ).fetchone()[0] == 1
+
+
+def test_embedding_stage_replay_bypass_regenerates_vectors(
+    orchestration_connection: sqlite3.Connection,
+) -> None:
+    repository = ModelControlRepository(orchestration_connection)
+    embedding_uuid = _profile(repository, ModelRole.EMBEDDING, "embedder")
+    repository.set_default(ModelRole.EMBEDDING, embedding_uuid)
+    invoker = StageInvoker(orchestration_connection, repository)
+    request = StageInvocationRequest(
+        role=ModelRole.EMBEDDING,
+        stage="embedding_generation",
+        source_type="memory_version",
+        source_uuid="version-1",
+        input_payload={"text": "embedding source text"},
+    )
+
+    first, first_vectors = invoker.invoke_embedding(request, texts=["embedding source text"])
+    replay, replay_vectors = invoker.invoke_embedding(request, texts=["embedding source text"])
+    regenerated, regenerated_vectors = invoker.invoke_embedding(
+        request,
+        texts=["embedding source text"],
+        allow_replay=False,
+    )
+
+    assert first.status == "ok" and first_vectors
+    assert replay.idempotent_replay is True and replay_vectors == []
+    # When the caller's projection row is missing it must be able to bypass the
+    # replay short-circuit and obtain real vectors again.
+    assert regenerated.idempotent_replay is False
+    assert regenerated_vectors == first_vectors
+    assert orchestration_connection.execute(
+        "SELECT COUNT(*) FROM processing_stage_runs WHERE source_uuid = 'version-1'"
+    ).fetchone()[0] == 1
+
+
+def test_candidate_stage_results_survive_processing_retry(tmp_path: Path) -> None:
+    from memcore.config import Settings
+    from memcore.memory_worker.pipeline import MemoryWorkerPipeline
+    from memcore.repositories import MessageRepository, SessionRepository
+
+    db_path = tmp_path / "retry.sqlite"
+    connection = connect(db_path)
+    apply_migrations(connection)
+    settings = Settings(
+        db_path=str(db_path),
+        object_store_path=str(tmp_path / "objects"),
+    )
+    workspace = WorkspaceRepository(connection).create_workspace("Retry workspace")
+    project = ProjectRepository(connection).create_project(
+        workspace.workspace_uuid,
+        "Retry project",
+    )
+    session = SessionRepository(connection).create_session(
+        workspace_uuid=workspace.workspace_uuid,
+        project_uuid=project.project_uuid,
+    )
+    messages = MessageRepository(connection)
+    messages.create_message(
+        session.session_uuid,
+        role="user",
+        creator_type="user",
+        raw_text="یک طرح فنی یازده‌مرحله‌ای برای این پروژه تهیه کن.",
+    )
+    plan = "\n".join(
+        ["طرح فنی یازده‌مرحله‌ای پروژه:"]
+        + [
+            f"{index}. مرحله شماره {index} برای پروژه با جزئیات کافی و توضیح کامل."
+            for index in range(1, 12)
+        ]
+    )
+    source = messages.create_message(
+        session.session_uuid,
+        role="assistant",
+        creator_type="model",
+        raw_text=plan,
+    )
+
+    result = MemoryWorkerPipeline(connection, settings).process_message(source.message_uuid)
+    run_uuid = str(result["processing_run_uuid"])
+    first_statuses = [
+        str(row["status"])
+        for row in connection.execute(
+            "SELECT status FROM memory_candidates WHERE processing_run_uuid = ? "
+            "ORDER BY candidate_uuid",
+            (run_uuid,),
+        ).fetchall()
+    ]
+    first_memories = int(connection.execute("SELECT COUNT(*) FROM memories").fetchone()[0])
+    assert "ready_for_consolidation" in first_statuses
+
+    # Simulate a crash after candidate stages were persisted but before the run
+    # was marked succeeded, then retry through the production pipeline path.
+    connection.execute(
+        "UPDATE memory_processing_runs SET status = 'failed' WHERE processing_run_uuid = ?",
+        (run_uuid,),
+    )
+    connection.commit()
+    MemoryWorkerPipeline(connection, settings).process_message(source.message_uuid)
+
+    retry_statuses = [
+        str(row["status"])
+        for row in connection.execute(
+            "SELECT status FROM memory_candidates WHERE processing_run_uuid = ? "
+            "ORDER BY candidate_uuid",
+            (run_uuid,),
+        ).fetchall()
+    ]
+    retry_memories = int(connection.execute("SELECT COUNT(*) FROM memories").fetchone()[0])
+    assert retry_statuses == first_statuses
+    assert retry_memories == first_memories
+    connection.close()
