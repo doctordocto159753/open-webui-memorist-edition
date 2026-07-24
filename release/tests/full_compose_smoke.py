@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -41,7 +42,7 @@ def run() -> dict[str, Any]:
     log_dir = ROOT / "release" / "artifacts" / "logs" / NAME
     log_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
-    env.setdefault("MEMORIST_PORT", "8777")
+    env.setdefault("MEMORIST_PORT", str(_free_host_port()))
     env.setdefault("MEMORIST_ACTOR_ASSERTION_SECRET", "compose-smoke-actor-secret")
     env.setdefault("MEMORIST_ACTOR_SERVICE_TOKEN", "compose-smoke-service-token")
     env.setdefault(
@@ -95,7 +96,12 @@ def run() -> dict[str, Any]:
         _compose(["down", "-v"], project_name, env, timeout=120)
 
 
-def _compose(argv: list[str], project_name: str, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
+def _compose(
+    argv: list[str],
+    project_name: str,
+    env: dict[str, str],
+    timeout: int,
+) -> subprocess.CompletedProcess[str]:
     compose = _compose_command(env)
     return subprocess.run(
         [*compose, "-p", project_name, "-f", "docker-compose.full.yml", *argv],
@@ -143,6 +149,12 @@ def _wait_for_health(port: str, timeout_seconds: int = 180) -> dict[str, Any]:
             last_error = sanitize(str(error))
             time.sleep(2)
     return {"ok": False, "url": url, "error_sanitized": last_error}
+
+
+def _free_host_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
 
 
 def _collect_logs(project_name: str, log_dir: Path, env: dict[str, str]) -> None:
