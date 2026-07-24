@@ -13,9 +13,9 @@ from memcore.model_control.registry import test_profile_health
 from memcore.model_control.repository import (
     ModelControlRepository,
     PrivacyAcknowledgementRequired,
-    built_in_default,
     public_profile,
 )
+from memcore.model_control.resolution import RoleResolutionService, public_resolution
 from memcore.model_control.roles import list_role_specs
 from memcore.model_control.schemas import (
     CostEstimateRequest,
@@ -27,6 +27,7 @@ from memcore.model_control.schemas import (
 )
 from memcore.model_control.security import sanitize_error_message
 from memcore.model_control.setup import build_setup_status
+from memcore.models import ModelRole
 from memcore.storage.postgres.migrations import apply_postgres_migrations
 from memcore.storage.sqlite import connect
 
@@ -109,11 +110,57 @@ def test_profile(model_profile_uuid: str, request: ProfileTestRequest) -> dict[s
         profile = repository.get_profile(model_profile_uuid)
         if profile is None:
             raise HTTPException(status_code=404, detail="model profile not found")
-        health = test_profile_health(profile, timeout_seconds=request.timeout_ms / 1000)
-        repository.record_health_event(model_profile_uuid, health)
+        timeout_ms = request.timeout_ms or get_settings().provider_test_timeout_ms
+        health = test_profile_health(profile, timeout_seconds=timeout_ms / 1000)
+        repository.record_health_event(
+            model_profile_uuid,
+            health,
+            test_idempotency_key=request.idempotency_key,
+        )
+        health_payload = health.model_dump(mode="json")
+        health_payload["detail"] = health.detail_sanitized
         return {
             "model_profile_uuid": model_profile_uuid,
-            "health": health.model_dump(mode="json"),
+            "health": health_payload,
+            "timeout_ms": timeout_ms,
+            "test_levels": {
+                "connectivity_and_authentication": {
+                    "host": health.dns_or_host_reachable,
+                    "http": health.tcp_or_http_reachable,
+                    "authentication": health.authentication_status,
+                },
+                "model_capability": {
+                    "model": health.model_status,
+                    "chat_completion": health.chat_completion_status,
+                    "structured_output": health.structured_output_status,
+                },
+                "role_compatibility": health.role_compatibility_status,
+            },
+        }
+
+
+@router.get("/effective", response_model=None)
+def get_effective_roles(
+    workspace_uuid: str | None = None,
+    project_uuid: str | None = None,
+) -> dict[str, Any]:
+    with _connection() as connection:
+        repository = _repository(connection)
+        resolver = RoleResolutionService(repository)
+        return {
+            "resolution_version": "processing-role-resolution-v1",
+            "items": [
+                public_resolution(
+                    resolver.resolve(
+                        role,
+                        workspace_uuid=workspace_uuid,
+                        project_uuid=project_uuid,
+                    ),
+                    repository,
+                )
+                for role in ModelRole
+                if role is not ModelRole.MAIN_CHAT_OBSERVED
+            ],
         }
 
 
@@ -127,10 +174,14 @@ def get_defaults(
         repository = _repository(connection)
         if role is not None:
             try:
-                resolved = repository.resolve_default(role, workspace_uuid, project_uuid)
+                resolution = RoleResolutionService(repository).resolve(
+                    role,
+                    workspace_uuid=workspace_uuid,
+                    project_uuid=project_uuid,
+                )
             except ValueError as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error
-            return {"item": resolved or built_in_default(role)}
+            return {"item": public_resolution(resolution, repository)}
         return {
             "items": [
                 {

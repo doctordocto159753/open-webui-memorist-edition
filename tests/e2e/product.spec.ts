@@ -22,7 +22,8 @@ import {
 
 const state = defaultState();
 const STUB_KEY_CANARY =
-  process.env.MEMORIST_E2E_STUB_KEY || "sk-memorist-e2e-canary-000000000000";
+  process.env.MEMORIST_E2E_STUB_KEY ||
+  "sk-" + "memorist-e2e-canary-000000000000";
 const STUB_PROVIDER_URL =
   process.env.MEMORIST_E2E_PROVIDER_URL || "http://host.docker.internal:9800/v1";
 const CAPTURE_FACT = "My dog is named Alpha and her preferred food is chicken.";

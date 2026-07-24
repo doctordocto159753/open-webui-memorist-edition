@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+from memcore.model_control.endpoint import normalize_openai_endpoint
 from memcore.model_control.security import (
     endpoint_contains_secret,
     endpoint_is_local,
@@ -54,6 +55,7 @@ class ModelProfileCreate(BaseModel):
     secret_env_var_name: str | None = None
     is_enabled: bool = True
     privacy_acknowledged: bool = False
+    setup_idempotency_key: str | None = Field(default=None, min_length=8, max_length=200)
 
     @model_validator(mode="after")
     def validate_policy(self) -> ModelProfileCreate:
@@ -109,7 +111,8 @@ class PrivacyAcknowledgementRequest(BaseModel):
 
 
 class ProfileTestRequest(BaseModel):
-    timeout_ms: int = Field(default=1000, ge=1, le=10_000)
+    timeout_ms: int | None = Field(default=None, ge=250, le=60_000)
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=200)
 
 
 class CostEstimateRequest(BaseModel):
@@ -166,3 +169,9 @@ def _validate_common_policy(model: ModelProfileCreate | ModelProfilePatch) -> No
         raise ValueError("disabled/deterministic providers must be local-only")
     if model.endpoint_is_local is None and model.endpoint_url:
         model.endpoint_is_local = endpoint_is_local(model.endpoint_url)
+    if model.endpoint_url and model.provider_type in {
+        ProviderType.OPENAI_COMPATIBLE,
+        ProviderType.OPENAI_COMPATIBLE_LLM,
+        ProviderType.OPENAI_COMPATIBLE_EMBEDDING,
+    }:
+        model.endpoint_url = normalize_openai_endpoint(model.endpoint_url).base_url

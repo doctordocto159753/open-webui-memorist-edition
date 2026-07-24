@@ -25,6 +25,18 @@ itself exposes the Memorist product:
   installer behavioral tests, and Playwright E2E (capture → retrieval →
   disclosure → Memory Off → restart persistence → regeneration) against the
   extracted final ZIP.
+- **Processing-node runtime orchestration** — all Memorist processing roles
+  resolve project/workspace/global defaults through one audited resolver,
+  invoke their effective provider through a shared stage boundary, expose
+  truthful multi-level health and stage diagnostics, and fall back locally
+  without blocking the main chat path.
+- **Cross-session structured project memory** — substantial user-authored and
+  assistant-produced project artifacts preserve exact evidence and provenance,
+  pass privacy/high-confidence gates, and can be recalled in a later session
+  without mislabelling assistant output as a user fact.
+- **Embedding runtime wiring** — configured embedding profiles generate and
+  consume provider vectors through durable outbox/projection paths while
+  deterministic retrieval remains available when embeddings are unavailable.
 
 ## v0.2.0 — early public alpha
 
@@ -68,7 +80,7 @@ Honest status:
 - Alpha software: no security audit; schema migrations between alpha versions
   may require export/import; see README "Known limitations".
 
-Storage schema version: 18. Pinned Open WebUI base:
+Storage schema version: 19. Pinned Open WebUI base:
 `ghcr.io/open-webui/open-webui:v0.9.6`.
 
 Generated packages under `release/source/` and `release/rc/` are reproducible

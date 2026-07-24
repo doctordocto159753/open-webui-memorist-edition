@@ -15,8 +15,10 @@ from memcore.memory_worker.pipeline import MemoryWorkerPipeline
 from memcore.model_control.security import sanitize_error_message
 from test_import_worker_lifecycle import _archive, _commit, _settings
 
-SECURITY_CORPUS = """
-Authorization: Bearer sk-import-secret
+FAKE_PROVIDER_CREDENTIAL = "sk-" + "import-secret"
+
+SECURITY_CORPUS = f"""
+Authorization: Bearer {FAKE_PROVIDER_CREDENTIAL}
 X-API-Key: another-secret
 api_key=raw-import-key
 token=raw-token
@@ -26,7 +28,7 @@ secret_env_var_name=VERY_PRIVATE_SECRET
 """.strip()
 
 RAW_SECRET_VALUES = {
-    "sk-import-secret",
+    FAKE_PROVIDER_CREDENTIAL,
     "another-secret",
     "raw-import-key",
     "raw-token",

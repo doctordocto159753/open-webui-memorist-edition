@@ -9,9 +9,11 @@ from typing import Any
 
 from memcore.config import Settings
 from memcore.imports.runtime import import_connection
+from memcore.memory_worker.pipeline import MemoryWorkerPipeline
 from memcore.memory_worker.postgres.pipeline import PostgresMemoryWorkerPipeline
 from memcore.model_control.security import sanitize_error_message
 from memcore.models import new_uuid, utc_now
+from memcore.storage.sqlite import connect
 
 LOGGER = logging.getLogger(__name__)
 _POLL_SECONDS = 0.25
@@ -52,6 +54,8 @@ class MemoryJobWorkerService:
         if not self.enabled:
             return False
         owner = worker_id or _worker_id()
+        if self.settings.runtime_profile == "lite":
+            return self._process_once_sqlite(owner)
         with import_connection(self.settings) as connection:
             job = _claim_next_extraction_job(connection, owner)
             if job is None:
@@ -77,6 +81,29 @@ class MemoryJobWorkerService:
                 LOGGER.exception("memory job %s failed", job["job_uuid"])
             return True
 
+    def _process_once_sqlite(self, owner: str) -> bool:
+        connection = connect(self.settings.db_path)
+        try:
+            job = _claim_next_extraction_job_sqlite(connection, owner)
+            if job is None:
+                return False
+            try:
+                payload = _job_payload(job)
+                message_uuid = str(payload["message_uuid"])
+                MemoryWorkerPipeline(connection, self.settings).process_message(
+                    message_uuid,
+                    job_uuid=str(job["job_uuid"]),
+                    model_target=payload,
+                )
+                _record_success_sqlite(connection, job, message_uuid, owner)
+            except Exception as error:
+                connection.rollback()
+                _record_failure_sqlite(connection, job, owner, error)
+                LOGGER.exception("Lite memory job %s failed", job["job_uuid"])
+            return True
+        finally:
+            connection.close()
+
     def _run(self) -> None:
         owner = _worker_id()
         while not self._stop.is_set():
@@ -89,6 +116,22 @@ class MemoryJobWorkerService:
                 self._stop.wait(_POLL_SECONDS)
 
     def _recover_stale_jobs(self) -> None:
+        if self.settings.runtime_profile == "lite":
+            connection = connect(self.settings.db_path)
+            try:
+                connection.execute(
+                    """
+                    UPDATE jobs
+                    SET status = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'pending' END,
+                        locked_by = NULL, locked_at = NULL,
+                        last_error_sanitized = COALESCE(last_error_sanitized, 'lease expired')
+                    WHERE job_type = 'memory_extraction' AND status = 'running'
+                    """
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            return
         with import_connection(self.settings) as connection:
             connection.execute(
                 """
@@ -105,9 +148,12 @@ class MemoryJobWorkerService:
 
 
 def _worker_enabled(settings: Settings) -> bool:
+    if not settings.enable_memory_worker:
+        return False
+    if settings.runtime_profile == "lite":
+        return settings.canonical_store == "sqlite"
     return bool(
-        settings.enable_memory_worker
-        and settings.runtime_profile == "full"
+        settings.runtime_profile == "full"
         and settings.canonical_store == "postgres"
         and settings.postgres_dsn
     )
@@ -231,9 +277,96 @@ def _record_failure(
 
 
 def _job_payload(job: dict[str, Any]) -> dict[str, Any]:
-    payload = job.get("payload_jsonb")
+    payload = job.get("payload_jsonb") or job.get("payload_ijson")
     if isinstance(payload, str):
         payload = json.loads(payload)
     if not isinstance(payload, dict) or not payload.get("message_uuid"):
         raise ValueError("memory extraction job is missing message_uuid")
     return payload
+
+
+def _claim_next_extraction_job_sqlite(
+    connection: Any,
+    worker_id: str,
+) -> dict[str, Any] | None:
+    connection.execute("BEGIN IMMEDIATE")
+    row = connection.execute(
+        """
+        SELECT * FROM jobs
+        WHERE status = 'pending' AND job_type = 'memory_extraction'
+          AND (run_after IS NULL OR run_after <= ?)
+        ORDER BY priority DESC, COALESCE(run_after, created_at), created_at
+        LIMIT 1
+        """,
+        (utc_now(),),
+    ).fetchone()
+    if row is None:
+        connection.commit()
+        return None
+    cursor = connection.execute(
+        """
+        UPDATE jobs
+        SET status = 'running', locked_by = ?, locked_at = ?, attempts = attempts + 1
+        WHERE job_uuid = ? AND status = 'pending'
+        """,
+        (worker_id, utc_now(), row["job_uuid"]),
+    )
+    connection.commit()
+    return dict(row) if cursor.rowcount == 1 else None
+
+
+def _record_success_sqlite(
+    connection: Any,
+    job: dict[str, Any],
+    message_uuid: str,
+    worker_id: str,
+) -> None:
+    connection.execute(
+        """
+        UPDATE jobs
+        SET status = 'succeeded', locked_by = NULL, locked_at = NULL,
+            last_error = NULL, last_error_sanitized = NULL, run_after = NULL
+        WHERE job_uuid = ? AND locked_by = ?
+        """,
+        (job["job_uuid"], worker_id),
+    )
+    connection.execute(
+        """
+        UPDATE jobs
+        SET status = 'succeeded', locked_by = NULL, locked_at = NULL,
+            last_error = NULL, last_error_sanitized = NULL, run_after = NULL
+        WHERE job_type = 'text_unitization'
+          AND payload_ijson LIKE ?
+          AND status IN ('pending', 'running')
+        """,
+        (f'%"{message_uuid}"%',),
+    )
+    connection.commit()
+
+
+def _record_failure_sqlite(
+    connection: Any,
+    job: dict[str, Any],
+    worker_id: str,
+    error: Exception,
+) -> None:
+    sanitized = sanitize_error_message(f"{type(error).__name__}: {error}") or type(error).__name__
+    attempts = int(job.get("attempts") or 0) + 1
+    terminal = attempts >= int(job.get("max_attempts") or 3)
+    connection.execute(
+        """
+        UPDATE jobs
+        SET status = ?, locked_by = NULL, locked_at = NULL,
+            last_error = ?, last_error_sanitized = ?, run_after = ?
+        WHERE job_uuid = ? AND locked_by = ?
+        """,
+        (
+            "dead" if terminal else "pending",
+            sanitized,
+            sanitized,
+            None if terminal else utc_now(),
+            job["job_uuid"],
+            worker_id,
+        ),
+    )
+    connection.commit()

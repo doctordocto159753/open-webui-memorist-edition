@@ -41,6 +41,21 @@ class PostgresModelControlRepository(ModelControlRepository):
         self.connection = connection
 
     def create_profile(self, request: ModelProfileCreate) -> ModelProfile:
+        if request.setup_idempotency_key:
+            existing = self.connection.execute(
+                "SELECT model_profile_uuid FROM model_profiles "
+                "WHERE setup_idempotency_key = %s",
+                (request.setup_idempotency_key,),
+            ).fetchone()
+            if existing is not None:
+                patch_values = request.model_dump(
+                    exclude={"setup_idempotency_key"},
+                    exclude_unset=True,
+                )
+                return self.patch_profile(
+                    str(existing["model_profile_uuid"]),
+                    ModelProfilePatch.model_validate(patch_values),
+                )
         profile = self._profile_from_create_request(request)
         self.connection.execute(
             """
@@ -63,6 +78,12 @@ class PostgresModelControlRepository(ModelControlRepository):
             """,
             _profile_insert_params(profile),
         )
+        if request.setup_idempotency_key:
+            self.connection.execute(
+                "UPDATE model_profiles SET setup_idempotency_key = %s "
+                "WHERE model_profile_uuid = %s",
+                (request.setup_idempotency_key, profile.model_profile_uuid),
+            )
         created = self.get_profile(profile.model_profile_uuid)
         if created is None:
             raise RepositoryError("model profile not found after create")
@@ -182,6 +203,8 @@ class PostgresModelControlRepository(ModelControlRepository):
             raise RepositoryError(f"model profile not found: {model_profile_uuid}")
         if not profile.is_enabled:
             raise RepositoryError("disabled model profile cannot be assigned as default")
+        if profile.role is not model_role:
+            raise RepositoryError("model profile role does not match the requested default role")
         if requires_privacy_acknowledgement(profile) and profile.privacy_acknowledged_at is None:
             raise PrivacyAcknowledgementRequired(
                 "external or non-local profiles require explicit privacy acknowledgement before use"
@@ -244,7 +267,8 @@ class PostgresModelControlRepository(ModelControlRepository):
         model_role = _model_role(role)
         row = self.connection.execute(
             """
-            SELECT p.*
+            SELECT p.*, d.workspace_uuid AS resolved_workspace_uuid,
+                   d.project_uuid AS resolved_project_uuid
             FROM model_role_defaults d
             JOIN model_profiles p ON p.model_profile_uuid = d.model_profile_uuid
             WHERE d.role = %s
@@ -267,7 +291,15 @@ class PostgresModelControlRepository(ModelControlRepository):
             """,
             (model_role.value, project_uuid, workspace_uuid),
         ).fetchone()
-        return public_profile(_profile_from_row(row)) if row is not None else None
+        if row is None:
+            return None
+        values = dict(row)
+        resolved_workspace = values.pop("resolved_workspace_uuid", None)
+        resolved_project = values.pop("resolved_project_uuid", None)
+        payload = public_profile(_profile_from_row(values))
+        payload["workspace_uuid"] = resolved_workspace
+        payload["project_uuid"] = resolved_project
+        return payload
 
     def record_usage_event(self, event: UsageEventCreate) -> dict[str, Any]:
         model_profile_uuid = event.model_profile_uuid
@@ -365,7 +397,8 @@ class PostgresModelControlRepository(ModelControlRepository):
                    COALESCE(SUM(estimated_cost), 0.0) AS estimated_cost,
                    SUM(CASE WHEN status IN ('error', 'failed', 'failed_open') THEN 1 ELSE 0 END)
                        AS error_count,
-                   MAX(latency_ms) AS max_latency_ms
+                   MAX(latency_ms) AS max_latency_ms,
+                   MAX(created_at) AS last_used_at
             FROM model_usage_events
             GROUP BY role, provider_type, model_name
             ORDER BY role, provider_type, model_name
@@ -392,7 +425,10 @@ class PostgresModelControlRepository(ModelControlRepository):
         }
 
     def record_health_event(
-        self, model_profile_uuid: str, health: ProviderHealth
+        self,
+        model_profile_uuid: str,
+        health: ProviderHealth,
+        test_idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         profile = self.get_profile(model_profile_uuid)
         if profile is None:
@@ -407,16 +443,27 @@ class PostgresModelControlRepository(ModelControlRepository):
             "latency_ms": health.latency_ms,
             "local_only_safe": health.local_only_safe,
             "detail_sanitized": sanitize_error_message(health.detail),
+            "result_jsonb": _jsonb(health.model_dump(mode="json")),
+            "test_idempotency_key": test_idempotency_key,
             "created_at": utc_now(),
             "schema_version": 1,
         }
+        if test_idempotency_key:
+            existing = self.connection.execute(
+                "SELECT * FROM model_health_events "
+                "WHERE model_profile_uuid = %s AND test_idempotency_key = %s",
+                (model_profile_uuid, test_idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                return dict(existing)
         self.connection.execute(
             """
             INSERT INTO model_health_events (
                 health_event_uuid, model_profile_uuid, role, provider_type, model_name,
-                status, latency_ms, local_only_safe, detail_sanitized, created_at, schema_version
+                status, latency_ms, local_only_safe, detail_sanitized, result_jsonb,
+                test_idempotency_key, created_at, schema_version
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)
             """,
             tuple(values.values()),
         )
@@ -494,6 +541,49 @@ class PostgresModelControlRepository(ModelControlRepository):
         )
         values["acknowledged_data_sent"] = cast(Any, request.acknowledged_data_sent)
         values.pop("acknowledged_data_sent_jsonb", None)
+        return values
+
+    def record_embedding(
+        self,
+        model_profile_uuid: str,
+        source_type: str,
+        source_uuid: str,
+        content_hash: str,
+        vector_store_ref: str,
+        embedding_dimension: int | None = None,
+    ) -> dict[str, Any]:
+        values = {
+            "embedding_record_uuid": new_uuid(),
+            "model_profile_uuid": model_profile_uuid,
+            "source_type": source_type,
+            "source_uuid": source_uuid,
+            "content_hash": content_hash,
+            "embedding_dimension": embedding_dimension,
+            "vector_store_ref": vector_store_ref,
+            "created_at": utc_now(),
+            "stale_at": None,
+            "schema_version": 1,
+        }
+        self.connection.execute(
+            """
+            INSERT INTO embedding_records (
+                embedding_record_uuid, model_profile_uuid, source_type, source_uuid,
+                content_hash, embedding_dimension, vector_store_ref, created_at,
+                stale_at, schema_version
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT DO NOTHING
+            """,
+            tuple(values.values()),
+        )
+        self.record_usage_event(
+            UsageEventCreate(
+                role=ModelRole.EMBEDDING,
+                stage="embedding_recorded",
+                model_profile_uuid=model_profile_uuid,
+                embedding_count=1,
+                status="ok",
+            )
+        )
         return values
 
     def mark_embedding_records_stale(self, model_profile_uuid: str) -> int:

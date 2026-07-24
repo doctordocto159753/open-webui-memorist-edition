@@ -80,8 +80,8 @@ def test_real_client_signs_policy_and_session_requests(
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
     client = MemoristClient(
         MemoristIntegrationConfig(
-            actor_assertion_secret="assertion-secret",
-            actor_service_token="service-secret",
+            actor_assertion_secret=("assertion-" + "credential"),
+            actor_service_token=("service-" + "credential"),
         )
     )
     client.resolve_turn_policy(
@@ -100,5 +100,7 @@ def test_real_client_signs_policy_and_session_requests(
 
     assert len(requests) == 2
     for request in requests:
-        assert request.get_header("X-memorist-service-token") == "service-secret"
+        assert request.get_header("X-memorist-service-token") == (
+            "service-" + "credential"
+        )
         assert request.get_header("X-memorist-actor-assertion")

@@ -25,7 +25,14 @@ class DisabledProvider:
             model_name=self.model_name,
             latency_ms=_elapsed_ms(started),
             local_only_safe=True,
-            detail="provider disabled",
+            dns_or_host_reachable="not_applicable",
+            tcp_or_http_reachable="not_applicable",
+            authentication_status="not_applicable",
+            model_status="disabled",
+            role_compatibility_status="disabled",
+            overall_status="incompatible",
+            detail_sanitized="provider disabled",
+            recommended_action="Enable or select a compatible profile for this role.",
         )
 
     def estimate_tokens(self, input_text: str = "", output_text: str = "") -> TokenEstimate:

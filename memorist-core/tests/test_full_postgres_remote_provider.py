@@ -80,8 +80,8 @@ def test_full_postgres_remote_provider_background_worker_e2e(
     server = ThreadingHTTPServer(("127.0.0.1", 0), _ProviderHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    secret = "remote-provider-test-secret"
-    monkeypatch.setenv("MEMORIST_REMOTE_PROVIDER_SECRET", secret)
+    provider_credential = "remote-provider-test-credential"
+    monkeypatch.setenv("MEMORIST_REMOTE_PROVIDER_SECRET", provider_credential)
     settings = Settings(
         runtime_profile="full",
         canonical_store="postgres",
@@ -170,7 +170,8 @@ def test_full_postgres_remote_provider_background_worker_e2e(
         assert all(item["method"] == "POST" for item in _ProviderHandler.requests)
         assert all(item["model"] == "fake-import-model" for item in _ProviderHandler.requests)
         assert all(
-            item["authorization"] == f"Bearer {secret}" for item in _ProviderHandler.requests
+            item["authorization"] == f"Bearer {provider_credential}"
+            for item in _ProviderHandler.requests
         )
         assert all(
             item["response_format"] == {"type": "json_object"} for item in _ProviderHandler.requests
@@ -189,7 +190,7 @@ def test_full_postgres_remote_provider_background_worker_e2e(
         assert all(item["model_role"] == "import_reconstruction" for item in prompts)
         assert all(item["import_run_uuid"] == run_uuid for item in prompts)
         assert all(item["job_uuid"] for item in prompts)
-        assert secret not in database_rendering
+        assert provider_credential not in database_rendering
     finally:
         server.shutdown()
         server.server_close()
@@ -294,8 +295,8 @@ def test_full_postgres_remote_profile_failures_do_not_call_provider(
     server = ThreadingHTTPServer(("127.0.0.1", 0), _ProviderHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    secret = "negative-profile-secret"
-    monkeypatch.setenv("MEMORIST_NEGATIVE_PROFILE_SECRET", secret)
+    provider_credential = "negative-profile-credential"
+    monkeypatch.setenv("MEMORIST_NEGATIVE_PROFILE_SECRET", provider_credential)
     settings = Settings(
         runtime_profile="full",
         canonical_store="postgres",
@@ -446,7 +447,7 @@ def test_full_postgres_remote_profile_failures_do_not_call_provider(
         assert prompt_count == 0
         assert usage_count == 0
         assert report["processing_jobs_failed"] == 1
-        assert secret not in database_rendering
+        assert provider_credential not in database_rendering
     finally:
         server.shutdown()
         server.server_close()

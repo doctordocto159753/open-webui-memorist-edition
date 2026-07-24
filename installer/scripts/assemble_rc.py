@@ -220,6 +220,10 @@ def _copy_archive_docs() -> None:
             ROOT / "docs" / "reference" / "backup-restore.md",
             Path("docs/reference/backup-restore.md"),
         ),
+        (
+            ROOT / "docs" / "reference" / "model-control-plane.md",
+            Path("docs/reference/model-control-plane.md"),
+        ),
     ]:
         if not source.is_file():
             continue

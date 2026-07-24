@@ -120,6 +120,12 @@ def model_control_defaults(actor: AuthenticatedAdmin) -> dict[str, Any]:
     return _call(actor, "GET", "/model-control/defaults")
 
 
+@router.get("/model-control/effective")
+def model_control_effective(actor: AuthenticatedAdmin) -> dict[str, Any]:
+    workspace = quote(actor.workspace_uuid, safe="")
+    return _call(actor, "GET", f"/model-control/effective?workspace_uuid={workspace}")
+
+
 @router.post("/model-control/defaults")
 async def set_model_control_default(
     request: Request,
@@ -139,6 +145,18 @@ def model_control_health(actor: AuthenticatedAdmin) -> dict[str, Any]:
 @router.get("/model-control/privacy")
 def model_control_privacy(actor: AuthenticatedAdmin) -> dict[str, Any]:
     return _call(actor, "GET", "/model-control/privacy")
+
+
+@router.get("/memory-processing/runs/{processing_run_uuid}/stages")
+def memory_processing_stages(
+    processing_run_uuid: str,
+    actor: AuthenticatedAdmin,
+) -> dict[str, Any]:
+    return _call(
+        actor,
+        "GET",
+        f"/memory-processing/runs/{quote(processing_run_uuid, safe='')}/stages",
+    )
 
 
 @router.post("/model-control/privacy/acknowledge")

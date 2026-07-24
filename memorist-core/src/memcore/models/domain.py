@@ -238,6 +238,7 @@ class ModelProfile(DomainModel):
     requires_privacy_acknowledgement: bool = False
     is_enabled: bool = True
     privacy_acknowledged_at: str | None = None
+    setup_idempotency_key: str | None = None
     created_at: str = Field(default_factory=utc_now)
     updated_at: str | None = None
     schema_version: int = Field(default=1, ge=1)

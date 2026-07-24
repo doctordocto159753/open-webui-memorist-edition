@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import urllib.error
 import urllib.request
 from collections.abc import Sized
 from time import perf_counter
 from typing import cast
-from urllib.parse import urlsplit
 
+from memcore.model_control.endpoint import openai_operation_url
 from memcore.model_control.providers.base import (
     EmbeddingResponse,
     ProviderHealth,
@@ -40,8 +41,6 @@ class OpenAICompatibleLLMProvider:
 
     def health_check(self, timeout_seconds: float = 1.0) -> ProviderHealth:
         started = perf_counter()
-        status = "error"
-        detail: str | None = None
         supports_json_format = self.supports_json_mode or self.supports_structured_output
         payload: dict[str, object] = {
             "model": self.model_name,
@@ -65,46 +64,95 @@ class OpenAICompatibleLLMProvider:
             )
             with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
                 data = json.loads(response.read().decode("utf-8"))
-                if not 200 <= response.status < 300:
-                    detail = f"HTTP {response.status}"
-                else:
-                    content = _extract_chat_content(data)
-                    if content is None:
-                        detail = "Missing choices[0].message.content"
-                    else:
-                        marker = json.loads(content)
-                        if marker.get("memorist_provider_test") == "ok":
-                            status = "ok"
-                            detail = _health_detail_for_success(
-                                response.status,
-                                supports_json_format=bool(supports_json_format),
-                                requires_structured_extraction=self.requires_structured_extraction,
-                            )
-                        else:
-                            detail = "Provider health marker mismatch"
+                content = _extract_chat_content(data)
+                if content is None:
+                    return _connected_health(
+                        self,
+                        started,
+                        response.status,
+                        overall_status="incompatible",
+                        structured_output_status="invalid_response",
+                        role_compatibility_status="incompatible",
+                        detail="Missing choices[0].message.content",
+                        recommended_action="Select a chat-completions compatible model.",
+                    )
+                marker = _parse_json_content(content)
+                if marker is None:
+                    return _connected_health(
+                        self,
+                        started,
+                        response.status,
+                        overall_status="incompatible",
+                        structured_output_status="unsupported",
+                        role_compatibility_status="incompatible",
+                        detail="Malformed JSON in chat completion response.",
+                        recommended_action=(
+                            "Enable JSON mode or select a model with reliable structured output."
+                        ),
+                    )
+                if marker.get("memorist_provider_test") != "ok":
+                    return _connected_health(
+                        self,
+                        started,
+                        response.status,
+                        overall_status="incompatible",
+                        structured_output_status="valid_json",
+                        role_compatibility_status="incompatible",
+                        detail=(
+                            "Structured response was valid JSON but failed the role marker probe."
+                        ),
+                        recommended_action="Select a model that follows the role output contract.",
+                    )
+                return _connected_health(
+                    self,
+                    started,
+                    response.status,
+                    overall_status="ok",
+                    structured_output_status="supported",
+                    role_compatibility_status="compatible",
+                    detail=_health_detail_for_success(
+                        response.status,
+                        supports_json_format=bool(supports_json_format),
+                        requires_structured_extraction=self.requires_structured_extraction,
+                    ),
+                    recommended_action="No action required.",
+                )
         except json.JSONDecodeError as error:
-            detail = f"Malformed JSON response: {sanitize_error_message(str(error))}"
+            return _connected_health(
+                self,
+                started,
+                200,
+                overall_status="incompatible",
+                structured_output_status="malformed",
+                role_compatibility_status="incompatible",
+                detail=f"Malformed provider response: {sanitize_error_message(str(error))}",
+                recommended_action="Check the endpoint and select an OpenAI-compatible model.",
+            )
         except urllib.error.HTTPError as error:
             error_detail = _read_http_error_detail(error)
-            if supports_json_format and _looks_like_response_format_rejection(error_detail):
-                detail = (
-                    "Provider rejected JSON response_format; disable Supports JSON mode or "
-                    "choose a compatible model."
-                )
-            else:
-                detail = sanitize_error_message(error_detail)
+            return _http_error_health(
+                self,
+                started,
+                error,
+                error_detail,
+                response_format_rejected=(
+                    bool(supports_json_format)
+                    and _looks_like_response_format_rejection(error_detail)
+                ),
+            )
         except MissingSecretEnvironmentVariableError as error:
-            detail = str(error)
-        except (urllib.error.URLError, TimeoutError, OSError) as error:
-            detail = sanitize_error_message(str(error))
-        return ProviderHealth(
-            status=status,
-            provider_type=self.provider_type,
-            model_name=self.model_name,
-            latency_ms=_elapsed_ms(started),
-            local_only_safe=endpoint_is_local(self.endpoint_url),
-            detail=detail,
-        )
+            return _configuration_health(self, started, str(error))
+        except TimeoutError as error:
+            return _transport_health(self, started, error, timeout=True)
+        except urllib.error.URLError as error:
+            return _transport_health(
+                self,
+                started,
+                error,
+                timeout=isinstance(error.reason, (TimeoutError, socket.timeout)),
+            )
+        except OSError as error:
+            return _transport_health(self, started, error, timeout=False)
 
     def estimate_tokens(self, input_text: str = "", output_text: str = "") -> TokenEstimate:
         return TokenEstimate(
@@ -174,8 +222,6 @@ class OpenAICompatibleEmbeddingProvider(OpenAICompatibleLLMProvider):
 
     def health_check(self, timeout_seconds: float = 1.0) -> ProviderHealth:
         started = perf_counter()
-        status = "error"
-        detail: str | None = None
         payload = {"model": self.model_name, "input": ["Memorist embedding connectivity test."]}
         try:
             request = urllib.request.Request(
@@ -188,10 +234,31 @@ class OpenAICompatibleEmbeddingProvider(OpenAICompatibleLLMProvider):
                 data = json.loads(response.read().decode("utf-8"))
                 embedding = _extract_first_embedding(data)
                 if embedding is None:
-                    detail = "Missing data[0].embedding in embeddings response"
+                    return _connected_health(
+                        self,
+                        started,
+                        response.status,
+                        overall_status="incompatible",
+                        structured_output_status="not_applicable",
+                        role_compatibility_status="incompatible",
+                        detail="Missing data[0].embedding in embeddings response",
+                        recommended_action="Select an embeddings-compatible model.",
+                        chat_completion_status="not_applicable",
+                    )
                 elif not _is_non_empty_numeric_vector(embedding):
-                    detail = (
-                        "Embedding response data[0].embedding must be a non-empty numeric vector"
+                    return _connected_health(
+                        self,
+                        started,
+                        response.status,
+                        overall_status="incompatible",
+                        structured_output_status="not_applicable",
+                        role_compatibility_status="incompatible",
+                        detail=(
+                            "Embedding response data[0].embedding must be a non-empty numeric "
+                            "vector"
+                        ),
+                        recommended_action="Select a compatible embedding model.",
+                        chat_completion_status="not_applicable",
                     )
                 else:
                     dimension = len(cast(Sized, embedding))
@@ -199,32 +266,72 @@ class OpenAICompatibleEmbeddingProvider(OpenAICompatibleLLMProvider):
                         self.embedding_dimension is not None
                         and dimension != self.embedding_dimension
                     ):
-                        detail = (
-                            "Embedding dimension mismatch: profile expects "
-                            f"{self.embedding_dimension}, provider returned {dimension}. "
-                            "Update the profile embedding_dimension or choose a matching model."
+                        return _connected_health(
+                            self,
+                            started,
+                            response.status,
+                            overall_status="incompatible",
+                            structured_output_status="not_applicable",
+                            role_compatibility_status="incompatible",
+                            detail=(
+                                "Embedding dimension mismatch: profile expects "
+                                f"{self.embedding_dimension}, provider returned {dimension}. "
+                                "Update the profile embedding_dimension or choose a "
+                                "compatible model."
+                            ),
+                            recommended_action=(
+                                "Update embedding_dimension or choose a matching model."
+                            ),
+                            chat_completion_status="not_applicable",
                         )
-                    else:
-                        status = "ok"
-                        detail = (
-                            f"HTTP {response.status}; embeddings validated; dimension={dimension}"
-                        )
+                    return _connected_health(
+                        self,
+                        started,
+                        response.status,
+                        overall_status="ok",
+                        structured_output_status="not_applicable",
+                        role_compatibility_status="compatible",
+                        detail=(
+                            f"HTTP {response.status}; embeddings validated; "
+                            f"dimension={dimension}"
+                        ),
+                        recommended_action="No action required.",
+                        chat_completion_status="not_applicable",
+                    )
         except json.JSONDecodeError as error:
-            detail = f"Malformed JSON response: {sanitize_error_message(str(error))}"
+            return _connected_health(
+                self,
+                started,
+                200,
+                overall_status="incompatible",
+                structured_output_status="not_applicable",
+                role_compatibility_status="incompatible",
+                detail=f"Malformed embeddings response: {sanitize_error_message(str(error))}",
+                recommended_action="Check the endpoint and embedding model.",
+                chat_completion_status="not_applicable",
+            )
         except urllib.error.HTTPError as error:
-            detail = sanitize_error_message(_read_http_error_detail(error))
+            return _http_error_health(
+                self,
+                started,
+                error,
+                _read_http_error_detail(error),
+                response_format_rejected=False,
+                chat_completion_status="not_applicable",
+            )
         except MissingSecretEnvironmentVariableError as error:
-            detail = str(error)
-        except (urllib.error.URLError, TimeoutError, OSError) as error:
-            detail = sanitize_error_message(str(error))
-        return ProviderHealth(
-            status=status,
-            provider_type=self.provider_type,
-            model_name=self.model_name,
-            latency_ms=_elapsed_ms(started),
-            local_only_safe=endpoint_is_local(self.endpoint_url),
-            detail=detail,
-        )
+            return _configuration_health(self, started, str(error))
+        except TimeoutError as error:
+            return _transport_health(self, started, error, timeout=True)
+        except urllib.error.URLError as error:
+            return _transport_health(
+                self,
+                started,
+                error,
+                timeout=isinstance(error.reason, (TimeoutError, socket.timeout)),
+            )
+        except OSError as error:
+            return _transport_health(self, started, error, timeout=False)
 
     def embed(self, texts: list[str], timeout_seconds: float = 1.0) -> EmbeddingResponse:
         started = perf_counter()
@@ -270,7 +377,20 @@ class OllamaProvider(OpenAICompatibleLLMProvider):
             model_name=self.model_name,
             latency_ms=_elapsed_ms(started),
             local_only_safe=endpoint_is_local(self.endpoint_url),
-            detail=detail,
+            dns_or_host_reachable="reachable" if status == "ok" else "unknown",
+            tcp_or_http_reachable="reachable" if status == "ok" else "unreachable",
+            authentication_status="not_applicable",
+            model_status="available" if status == "ok" else "unknown",
+            chat_completion_status="not_tested",
+            structured_output_status="not_tested",
+            role_compatibility_status="connected_only" if status == "ok" else "unknown",
+            overall_status="connected_with_warning" if status == "ok" else "unreachable",
+            detail_sanitized=detail,
+            recommended_action=(
+                "Run a role-specific model test."
+                if status == "ok"
+                else "Check the Ollama endpoint and service."
+            ),
         )
 
 
@@ -288,6 +408,22 @@ def _extract_chat_content(data: object) -> str | None:
         return None
     content = message.get("content")
     return content if isinstance(content, str) and content else None
+
+
+def _parse_json_content(content: str) -> dict[str, object] | None:
+    text = content.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].strip().lower() in {"```", "```json"}:
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def _extract_first_embedding(data: object) -> object | None:
@@ -326,13 +462,162 @@ def _headers(secret_env_var_name: str | None) -> dict[str, str]:
 
 
 def _openai_url(endpoint_url: str, path: str) -> str:
-    base = endpoint_url.rstrip("/")
-    versioned_base = base if urlsplit(base).path.endswith("/v1") else f"{base}/v1"
-    return f"{versioned_base}/{path.lstrip('/')}"
+    return openai_operation_url(endpoint_url, path)
 
 
 def _elapsed_ms(started: float) -> int:
     return int((perf_counter() - started) * 1000)
+
+
+def _connected_health(
+    provider: OpenAICompatibleLLMProvider,
+    started: float,
+    http_status: int,
+    *,
+    overall_status: str,
+    structured_output_status: str,
+    role_compatibility_status: str,
+    detail: str,
+    recommended_action: str,
+    chat_completion_status: str = "supported",
+) -> ProviderHealth:
+    return ProviderHealth(
+        status="ok" if overall_status in {"ok", "connected_with_warning"} else "error",
+        provider_type=provider.provider_type,
+        model_name=provider.model_name,
+        latency_ms=_elapsed_ms(started),
+        local_only_safe=endpoint_is_local(provider.endpoint_url),
+        dns_or_host_reachable="reachable",
+        tcp_or_http_reachable="reachable",
+        authentication_status="valid",
+        model_status="available",
+        chat_completion_status=chat_completion_status,
+        structured_output_status=structured_output_status,
+        role_compatibility_status=role_compatibility_status,
+        overall_status=overall_status,
+        http_status=http_status,
+        detail_sanitized=sanitize_error_message(detail),
+        recommended_action=recommended_action,
+    )
+
+
+def _http_error_health(
+    provider: OpenAICompatibleLLMProvider,
+    started: float,
+    error: urllib.error.HTTPError,
+    detail: str,
+    *,
+    response_format_rejected: bool,
+    chat_completion_status: str = "failed",
+) -> ProviderHealth:
+    code = int(error.code)
+    authentication = "invalid" if code in {401, 403} else "valid"
+    model_status = "not_found" if code == 404 else "unknown"
+    overall = "unknown_error"
+    retryable = code == 429 or code >= 500
+    rate_limited = code == 429
+    role_status = "unknown"
+    structured_status = "unknown"
+    action = "Review the sanitized provider response and retry."
+    safe_detail = detail
+    if code in {401, 403}:
+        overall = "authentication_failed"
+        action = "Check the API-key environment-variable reference and provider permissions."
+    elif code == 404:
+        overall = "incompatible"
+        role_status = "incompatible"
+        action = "Check the model ID and the canonical /v1 provider endpoint."
+    elif code == 429:
+        overall = "rate_limited"
+        role_status = "temporarily_unavailable"
+        action = "Wait and retry, or check provider quota and rate limits."
+    elif response_format_rejected:
+        overall = "incompatible"
+        structured_status = "unsupported"
+        role_status = "incompatible"
+        safe_detail = (
+            "Provider rejected JSON response_format; disable Supports JSON mode or "
+            "choose a compatible model."
+        )
+        action = "Disable JSON mode or select a structured-output compatible model."
+    elif code >= 500:
+        overall = "unknown_error"
+        role_status = "temporarily_unavailable"
+        action = "Retry later; the provider returned a server error."
+    return ProviderHealth(
+        status="error",
+        provider_type=provider.provider_type,
+        model_name=provider.model_name,
+        latency_ms=_elapsed_ms(started),
+        local_only_safe=endpoint_is_local(provider.endpoint_url),
+        dns_or_host_reachable="reachable",
+        tcp_or_http_reachable="reachable",
+        authentication_status=authentication,
+        model_status=model_status,
+        chat_completion_status=chat_completion_status,
+        structured_output_status=structured_status,
+        role_compatibility_status=role_status,
+        overall_status=overall,
+        http_status=code,
+        retryable=retryable,
+        quota_or_rate_limited=rate_limited,
+        detail_sanitized=sanitize_error_message(safe_detail),
+        recommended_action=action,
+    )
+
+
+def _configuration_health(
+    provider: OpenAICompatibleLLMProvider,
+    started: float,
+    detail: str,
+) -> ProviderHealth:
+    return ProviderHealth(
+        status="error",
+        provider_type=provider.provider_type,
+        model_name=provider.model_name,
+        latency_ms=_elapsed_ms(started),
+        local_only_safe=endpoint_is_local(provider.endpoint_url),
+        authentication_status="missing_secret_reference",
+        model_status="not_tested",
+        chat_completion_status="not_tested",
+        structured_output_status="not_tested",
+        role_compatibility_status="not_tested",
+        overall_status="misconfigured",
+        detail_sanitized=sanitize_error_message(detail),
+        recommended_action="Set the named environment variable in the Memorist Core runtime.",
+    )
+
+
+def _transport_health(
+    provider: OpenAICompatibleLLMProvider,
+    started: float,
+    error: BaseException,
+    *,
+    timeout: bool,
+) -> ProviderHealth:
+    overall = "timeout" if timeout else "unreachable"
+    return ProviderHealth(
+        status="error",
+        provider_type=provider.provider_type,
+        model_name=provider.model_name,
+        latency_ms=_elapsed_ms(started),
+        local_only_safe=endpoint_is_local(provider.endpoint_url),
+        dns_or_host_reachable="unknown" if timeout else "unreachable",
+        tcp_or_http_reachable="timeout" if timeout else "unreachable",
+        authentication_status="not_tested",
+        model_status="not_tested",
+        chat_completion_status="not_tested",
+        structured_output_status="not_tested",
+        role_compatibility_status="not_tested",
+        overall_status=overall,
+        retryable=True,
+        detail_sanitized=sanitize_error_message(str(error)),
+        recommended_action=(
+            "Increase the configurable test timeout or check provider latency."
+            if timeout
+            else "Check DNS, container routing, port, and the provider base URL."
+        ),
+    )
 
 
 def _health_detail_for_success(

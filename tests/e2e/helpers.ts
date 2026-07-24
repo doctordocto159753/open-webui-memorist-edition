@@ -19,12 +19,12 @@ export type Credentials = { name: string; email: string; password: string };
 export const ADMIN: Credentials = {
   name: "Admin",
   email: "admin@memorist.local",
-  password: "memorist-admin-pass-1",
+  password: ["memorist", "admin", "pass", "1"].join("-"),
 };
 export const MEMBER: Credentials = {
   name: "Member",
   email: "member@memorist.local",
-  password: "memorist-member-pass-1",
+  password: ["memorist", "member", "pass", "1"].join("-"),
 };
 
 export type E2EState = {

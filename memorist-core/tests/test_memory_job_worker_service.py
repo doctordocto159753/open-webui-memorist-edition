@@ -7,8 +7,14 @@ from memcore.memory_worker.postgres.pipeline import _scope_for_message
 from memcore.memory_worker.service import MemoryJobWorkerService, _job_payload
 
 
-def test_memory_worker_is_disabled_outside_full_postgres() -> None:
+def test_memory_worker_is_enabled_for_lite_sqlite() -> None:
     service = MemoryJobWorkerService(Settings(enable_memory_worker=True))
+
+    assert service.enabled is True
+
+
+def test_memory_worker_is_disabled_when_feature_flag_is_off() -> None:
+    service = MemoryJobWorkerService(Settings(enable_memory_worker=False))
 
     service.start()
 
@@ -45,6 +51,9 @@ def test_memory_worker_accepts_jsonb_mapping_or_serialized_payload() -> None:
         "message_uuid": "message"
     }
     assert _job_payload({"payload_jsonb": '{"message_uuid":"message"}'}) == {
+        "message_uuid": "message"
+    }
+    assert _job_payload({"payload_ijson": '{"message_uuid":"message"}'}) == {
         "message_uuid": "message"
     }
 

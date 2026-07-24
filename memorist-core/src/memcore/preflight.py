@@ -15,6 +15,7 @@ from memcore.memory_worker.prompts.registry import (
 )
 from memcore.model_control.registry import provider_for_profile
 from memcore.model_control.repository import ModelControlRepository
+from memcore.model_control.resolution import RoleResolutionService
 from memcore.model_control.schemas import UsageEventCreate
 from memcore.model_control.security import sanitize_error_message
 from memcore.models import ModelRole, PreflightResponse, PreflightStatus
@@ -276,14 +277,26 @@ class PreflightService:
         effective_token_budget: int,
     ) -> None:
         repository = ModelControlRepository(self.connection)
-        resolved = repository.resolve_default(ModelRole.PREFLIGHT)
+        scope = self.connection.execute(
+            "SELECT workspace_uuid, project_uuid FROM sessions WHERE session_uuid = ?",
+            (request.session_uuid,),
+        ).fetchone()
+        resolution = RoleResolutionService(repository).resolve(
+            ModelRole.PREFLIGHT,
+            workspace_uuid=(
+                str(scope["workspace_uuid"]) if scope and scope["workspace_uuid"] else None
+            ),
+            project_uuid=(
+                str(scope["project_uuid"]) if scope and scope["project_uuid"] else None
+            ),
+        )
         profile = (
-            repository.get_profile(str(resolved["model_profile_uuid"]))
-            if resolved is not None and resolved.get("model_profile_uuid") is not None
+            repository.get_profile(resolution.model_profile_uuid)
+            if resolution.model_profile_uuid is not None
             else None
         )
         profile_uuid = profile.model_profile_uuid if profile else None
-        provider = provider_for_profile(profile)
+        provider = provider_for_profile(profile or resolution.runtime_profile())
         self.events.record_preflight_event(
             "preflight_model_started",
             {
@@ -434,12 +447,20 @@ class PreflightService:
     ) -> PreflightResponse:
         try:
             repository = ModelControlRepository(self.connection)
-            resolved = repository.resolve_default(ModelRole.PREFLIGHT)
-            model_profile_uuid = (
-                str(resolved["model_profile_uuid"])
-                if resolved is not None and resolved.get("model_profile_uuid") is not None
-                else None
+            scope = self.connection.execute(
+                "SELECT workspace_uuid, project_uuid FROM sessions WHERE session_uuid = ?",
+                (request.session_uuid,),
+            ).fetchone()
+            resolution = RoleResolutionService(repository).resolve(
+                ModelRole.PREFLIGHT,
+                workspace_uuid=(
+                    str(scope["workspace_uuid"]) if scope and scope["workspace_uuid"] else None
+                ),
+                project_uuid=(
+                    str(scope["project_uuid"]) if scope and scope["project_uuid"] else None
+                ),
             )
+            model_profile_uuid = resolution.model_profile_uuid
             repository.record_usage_event(
                 UsageEventCreate(
                     role=ModelRole.PREFLIGHT,

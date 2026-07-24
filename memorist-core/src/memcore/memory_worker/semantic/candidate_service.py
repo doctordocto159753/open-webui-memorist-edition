@@ -153,6 +153,14 @@ def build_candidate_draft(value: CandidateServiceInput) -> CandidateDraft | None
         "provider_type": value.provider_type,
         "model_name": value.model_name,
     }
+    if provenance.source_authority is SourceAuthority.ASSISTANT_CLAIM:
+        metadata.update(
+            {
+                "artifact_kind": "assistant_authored_project_artifact",
+                "authority_label": "earlier_assistant_produced_artifact",
+                "not_user_fact": True,
+            }
+        )
     return CandidateDraft(
         processing_run_uuid=value.processing_run_uuid,
         text_unit_uuid=value.text_unit_uuid,

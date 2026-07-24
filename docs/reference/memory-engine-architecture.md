@@ -9,8 +9,8 @@ This document is not meant to replace the root README. The root README introduce
 Defensible current status:
 
 ```text
-Version: 0.2.0-beta.1 development baseline
-Schema version: 18
+Version: 0.2.0-beta.2 development baseline
+Schema version: 19
 Lite Mode: beta-candidate
 Full Mode: certified in the tested local Docker environment
 Open WebUI integration: contract-tested; pinned container smoke pending/manual

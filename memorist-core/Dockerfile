@@ -9,7 +9,15 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY migrations ./migrations
 
-RUN pip install --no-cache-dir .
+# Package indexes and desktop proxies occasionally terminate a JSON response
+# mid-stream. Keep image creation bounded and retry the whole resolver request
+# so a transient index response does not make the one-click package unusable.
+RUN for attempt in 1 2 3; do \
+      pip install --no-cache-dir --timeout 60 --retries 5 . && exit 0; \
+      echo "pip install attempt ${attempt} failed; retrying"; \
+      sleep 2; \
+    done; \
+    exit 1
 
 EXPOSE 8777
 

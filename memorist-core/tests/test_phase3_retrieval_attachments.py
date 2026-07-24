@@ -13,7 +13,10 @@ from memcore.config import Settings, get_settings
 from memcore.memory_control.policy import normalize_turn_policy
 from memcore.memory_control.repository import MemoryControlRepository, ResolvedTurnPolicy
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
-from memcore.models import RetrievalMode
+from memcore.model_control.providers.base import EmbeddingResponse
+from memcore.model_control.repository import ModelControlRepository
+from memcore.model_control.schemas import ModelProfileCreate, ProviderType
+from memcore.models import ModelRole, RetrievalMode
 from memcore.preflight import PreflightRequest, PreflightService
 from memcore.repositories import (
     MessageRepository,
@@ -270,6 +273,82 @@ def test_semantic_paraphrase_retrieval_without_lite_mode(
 
     assert selection.selected
     assert "semantic" in generators
+
+
+def test_semantic_retrieval_uses_effective_embedding_processing_node(
+    connection: sqlite3.Connection,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = SessionRepository(connection).create_session()
+    source = MessageRepository(connection).create_message(
+        session.session_uuid,
+        role="user",
+        creator_type="user",
+        raw_text="I prefer concise answers.",
+    )
+    MemoryWorkerPipeline(connection, settings).process_message(source.message_uuid)
+
+    model_control = ModelControlRepository(connection)
+    profile = model_control.create_profile(
+        ModelProfileCreate(
+            provider_type=ProviderType.OPENAI_COMPATIBLE_EMBEDDING,
+            provider_name="local test embedding",
+            model_name="remote-embedding-3",
+            role=ModelRole.EMBEDDING,
+            endpoint_url="http://127.0.0.1:9999/v1",
+            endpoint_is_local=True,
+            supports_embeddings=True,
+            embedding_dimension=3,
+        )
+    )
+    model_control.set_default(ModelRole.EMBEDDING, profile.model_profile_uuid)
+
+    calls: list[list[str]] = []
+
+    class FakeConfiguredEmbeddingProvider:
+        def embed(
+            self,
+            texts: list[str],
+            timeout_seconds: float = 1.0,
+        ) -> EmbeddingResponse:
+            calls.append(texts)
+            return EmbeddingResponse(
+                vectors=[
+                    [float(sum(ord(char) for char in text) % 101), float(len(text)), 1.0]
+                    for text in texts
+                ],
+                input_tokens=sum(len(text.split()) for text in texts),
+                latency_ms=3,
+            )
+
+    monkeypatch.setattr(
+        "memcore.retrieval.semantic.provider_for_profile",
+        lambda _profile: FakeConfiguredEmbeddingProvider(),
+    )
+    plan = DeterministicRetrievalPlanner().plan(
+        "How verbose should your replies be?",
+        session,
+        RetrievalMode.STANDARD,
+        800,
+    )
+
+    generated = SemanticGenerator(connection).generate(plan)
+
+    assert generated
+    assert len(calls) >= 2  # one query vector and at least one memory vector
+    embedding = connection.execute(
+        "SELECT embedding_model, embedding_dimension FROM memory_version_embeddings"
+    ).fetchone()
+    assert dict(embedding) == {
+        "embedding_model": "remote-embedding-3",
+        "embedding_dimension": 3,
+    }
+    usage_count = connection.execute(
+        "SELECT COUNT(*) FROM model_usage_events "
+        "WHERE role = 'embedding' AND stage = 'retrieval_query_embedding'"
+    ).fetchone()[0]
+    assert usage_count >= 2
 
 
 def test_lite_mode_does_not_require_embeddings(

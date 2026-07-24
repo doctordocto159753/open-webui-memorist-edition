@@ -18,7 +18,7 @@ A release candidate is not ready until every gate below is complete.
 - Consistency and recovery gates pass: `make consistency-check` and `make recovery-tests`
 - RC package is assembled: `make assemble-rc`
 - RC ZIP schema regression passes: `make rc-schema-test`
-- Release package forbidden-file scan passes: `python -m release.scan_forbidden_files release/rc/memorist-openwebui-0.2.0-beta.1.zip`
+- Release package forbidden-file scan passes: `python -m release.scan_forbidden_files release/rc/memorist-openwebui-0.2.0-beta.2.zip`
 - Release gate report is generated with placeholder smoke scripts marked not-counted: `python -m release.tests.report --manifest release/test_manifest.ijson --external-gates-passed`
 - Package manifest exists: `release/package-manifest.ijson`
 - Docker build context excludes local DBs, env files, caches and VCS metadata via `.dockerignore`.

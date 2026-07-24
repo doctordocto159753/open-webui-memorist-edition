@@ -180,6 +180,14 @@ machine. Secrets are referenced by environment-variable name only — see
 The main chat model always belongs to Open WebUI; Memorist only observes its
 metadata to size attachment budgets.
 
+Provider output does not bypass the memory machine. The shared invocation
+boundary first resolves the effective scoped role, then validates structured
+output, records prompt/stage/usage audit rows, and only then permits the
+existing gate and provenance policy to act. Consequential candidates receive
+privacy and high-confidence passes before consolidation. Assistant-produced
+project artifacts remain `assistant_claim` evidence with an explicit
+`not_user_fact` marker and preceding-request link.
+
 ## Going deeper
 
 - [reference/memory-engine-architecture.md](reference/memory-engine-architecture.md) — full essay-form architecture of the memory engine

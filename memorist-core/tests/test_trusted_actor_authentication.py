@@ -15,8 +15,8 @@ from fastapi.testclient import TestClient
 from memcore.config import get_settings
 from memcore.main import create_app
 
-SECRET = "actor-assertion-test-secret-with-sufficient-entropy"
-SERVICE_TOKEN = "internal-service-test-token-with-sufficient-entropy"
+ASSERTION_CREDENTIAL = "actor-assertion-test-credential-with-sufficient-entropy"
+SERVICE_CREDENTIAL = "internal-service-test-credential-with-sufficient-entropy"
 
 
 def _b64(value: bytes) -> str:
@@ -34,7 +34,7 @@ def _assertion(
     issued_at: int | None = None,
     expires_at: int | None = None,
     nonce: str | None = None,
-    secret: str = SECRET,
+    signing_credential: str = ASSERTION_CREDENTIAL,
 ) -> str:
     now = int(time.time())
     claims = {
@@ -48,7 +48,9 @@ def _assertion(
         "nonce": nonce or uuid4().hex,
     }
     encoded = _b64(json.dumps(claims, sort_keys=True, separators=(",", ":")).encode())
-    signature = _b64(hmac.new(secret.encode(), encoded.encode(), sha256).digest())
+    signature = _b64(
+        hmac.new(signing_credential.encode(), encoded.encode(), sha256).digest()
+    )
     return f"{encoded}.{signature}"
 
 
@@ -56,8 +58,8 @@ def _client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
     runtime = os.getenv("MEMORIST_AUTH_TEST_RUNTIME", "lite")
     monkeypatch.setenv("MEMORIST_ENV", "test")
     monkeypatch.setenv("MEMORIST_ALLOW_LEGACY_ACTOR_HEADERS_FOR_TESTS", "false")
-    monkeypatch.setenv("MEMORIST_ACTOR_ASSERTION_SECRET", SECRET)
-    monkeypatch.setenv("MEMORIST_ACTOR_SERVICE_TOKEN", SERVICE_TOKEN)
+    monkeypatch.setenv("MEMORIST_ACTOR_ASSERTION_SECRET", ASSERTION_CREDENTIAL)
+    monkeypatch.setenv("MEMORIST_ACTOR_SERVICE_TOKEN", SERVICE_CREDENTIAL)
     monkeypatch.setenv("MEMORIST_RUNTIME_PROFILE", runtime)
     monkeypatch.setenv("MEMORIST_OBJECT_STORE_PATH", str(tmp_path / "objects"))
     if runtime == "full":
@@ -73,7 +75,7 @@ def _client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
     return TestClient(create_app())
 
 
-def _headers(token: str, *, service: str = SERVICE_TOKEN) -> dict[str, str]:
+def _headers(token: str, *, service: str = SERVICE_CREDENTIAL) -> dict[str, str]:
     return {
         "X-Memorist-Service-Token": service,
         "X-Memorist-Actor-Assertion": token,
@@ -120,7 +122,7 @@ def test_actor_claim_validation_and_scope_mismatch(
     }
     now = int(time.time())
     rejected = (
-        _assertion("POST", path, secret="wrong-signing-secret"),
+        _assertion("POST", path, signing_credential="wrong-signing-credential"),
         _assertion("POST", path, expires_at=now - 1),
         _assertion("POST", path, audience="wrong-audience"),
         _assertion("POST", path, issuer="wrong-issuer"),

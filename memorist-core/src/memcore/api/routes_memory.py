@@ -47,6 +47,134 @@ def get_processing_run(processing_run_uuid: str) -> dict[str, Any]:
         return run.model_dump(mode="json")
 
 
+@router.get("/memory-processing/runs/{processing_run_uuid}/stages", response_model=None)
+def get_processing_stages(processing_run_uuid: str) -> dict[str, Any]:
+    """Return a secret-free, stage-by-stage explanation of one processing run."""
+
+    settings = get_settings()
+    if _is_full_postgres(settings):
+        with _pg_connection(settings) as connection:
+            run = connection.execute(
+                "SELECT * FROM memory_processing_runs WHERE processing_run_uuid = %s",
+                (processing_run_uuid,),
+            ).fetchone()
+            if run is None:
+                raise HTTPException(status_code=404, detail="processing run not found")
+            stages = [
+                _jsonable_dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM processing_stage_runs "
+                    "WHERE processing_run_uuid = %s ORDER BY created_at, stage_execution_uuid",
+                    (processing_run_uuid,),
+                ).fetchall()
+            ]
+            return _processing_trace(connection, dict(run), stages, postgres=True)
+
+    with _connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM memory_processing_runs WHERE processing_run_uuid = ?",
+            (processing_run_uuid,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="processing run not found")
+        stages = [
+            _jsonable_dict(stage)
+            for stage in connection.execute(
+                "SELECT * FROM processing_stage_runs "
+                "WHERE processing_run_uuid = ? ORDER BY created_at, stage_execution_uuid",
+                (processing_run_uuid,),
+            ).fetchall()
+        ]
+        return _processing_trace(connection, dict(row), stages, postgres=False)
+
+
+def _processing_trace(
+    connection: Any,
+    run: dict[str, Any],
+    stages: list[dict[str, Any]],
+    *,
+    postgres: bool,
+) -> dict[str, Any]:
+    placeholder = "%s" if postgres else "?"
+    run_uuid = str(run["processing_run_uuid"])
+    message_uuid = str(run["message_uuid"])
+
+    def count(table: str, column: str, value: str) -> int:
+        result = connection.execute(
+            f"SELECT COUNT(*) AS count FROM {table} WHERE {column} = {placeholder}",
+            (value,),
+        ).fetchone()
+        return int(
+            result["count"]
+            if isinstance(result, dict) or hasattr(result, "keys")
+            else result[0]
+        )
+
+    candidate_rows = connection.execute(
+        f"SELECT status, COUNT(*) AS count FROM memory_candidates "
+        f"WHERE processing_run_uuid = {placeholder} GROUP BY status",
+        (run_uuid,),
+    ).fetchall()
+    candidate_statuses = {
+        str(item["status"]): int(item["count"]) for item in candidate_rows
+    }
+    # Full/PostgreSQL historically calls the safe automatic transition
+    # ``accepted`` while Lite/SQLite calls the equivalent lifecycle point
+    # ``ready_for_consolidation``. Keep the raw ledger values for audit and
+    # expose one canonical diagnostic contract for operators and the UI.
+    canonical_candidate_statuses: dict[str, int] = {}
+    for status, status_count in candidate_statuses.items():
+        canonical_status = (
+            "ready_for_consolidation" if status == "accepted" else status
+        )
+        canonical_candidate_statuses[canonical_status] = (
+            canonical_candidate_statuses.get(canonical_status, 0) + status_count
+        )
+    memory_count_row = connection.execute(
+        f"SELECT COUNT(DISTINCT mel.memory_uuid) AS count "
+        "FROM memory_evidence_links mel "
+        "JOIN memory_candidates mc ON mc.candidate_uuid = mel.candidate_uuid "
+        f"WHERE mc.processing_run_uuid = {placeholder}",
+        (run_uuid,),
+    ).fetchone()
+    memories = int(memory_count_row["count"])
+    no_memory_reason: str | None = None
+    if memories == 0:
+        if canonical_candidate_statuses.get(
+            "needs_review"
+        ) or canonical_candidate_statuses.get("ready_for_review"):
+            no_memory_reason = "candidate_waiting_for_review"
+        elif canonical_candidate_statuses.get("rejected"):
+            no_memory_reason = "all_candidates_rejected"
+        elif not canonical_candidate_statuses:
+            no_memory_reason = "no_gate_and_route_eligible_candidates"
+        else:
+            no_memory_reason = "consolidation_created_no_canonical_memory"
+    return {
+        "processing_run_uuid": run_uuid,
+        "message_uuid": message_uuid,
+        "capture_status": "captured",
+        "processing_status": run.get("status"),
+        "text_unit_count": count("text_units", "message_uuid", message_uuid),
+        "route_count": count("memory_signal_routes", "message_uuid", message_uuid),
+        "gate_count": count("memory_gate_decisions", "processing_run_uuid", run_uuid),
+        "candidate_count": sum(candidate_statuses.values()),
+        "candidate_statuses": canonical_candidate_statuses,
+        "candidate_statuses_raw": candidate_statuses,
+        "candidate_status_contract": "processing-candidate-lifecycle-v1",
+        "memories_created_or_updated": memories,
+        "stages": stages,
+        "external_provider_called": any(bool(stage.get("called_provider")) for stage in stages),
+        "fallback_used": any(bool(stage.get("fallback_used")) for stage in stages),
+        "retryable_failures": [
+            stage
+            for stage in stages
+            if stage.get("status") in {"failed_open", "retry", "failed"}
+        ],
+        "no_memory_reason": no_memory_reason,
+    }
+
+
 @router.get("/messages/{message_uuid}/memory-lineage", response_model=None)
 def get_message_lineage(message_uuid: str) -> dict[str, Any]:
     settings = get_settings()

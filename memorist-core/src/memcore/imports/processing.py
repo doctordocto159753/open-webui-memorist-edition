@@ -18,6 +18,7 @@ from memcore.memory_worker.pipeline import MemoryWorkerPipeline
 from memcore.memory_worker.postgres.pipeline import PostgresMemoryWorkerPipeline
 from memcore.model_control.postgres_repository import PostgresModelControlRepository
 from memcore.model_control.repository import ModelControlRepository
+from memcore.model_control.resolution import RoleResolutionService
 from memcore.model_control.schemas import UsageEventCreate
 from memcore.model_control.security import sanitize_error_message
 from memcore.models import ModelRole, new_uuid, utc_now
@@ -48,12 +49,26 @@ class ImportMessageProcessor:
         self, workspace_uuid: str | None = None, project_uuid: str | None = None
     ) -> dict[str, Any]:
         warnings: list[str] = []
-        for role in (ModelRole.IMPORT_RECONSTRUCTION, ModelRole.MEMORY_EXTRACTION):
+        resolution = RoleResolutionService(self.model_control).resolve(
+            ModelRole.IMPORT_RECONSTRUCTION,
+            workspace_uuid=workspace_uuid,
+            project_uuid=project_uuid,
+        )
+        if resolution.model_profile_uuid is not None:
             profile = self.model_control.resolve_default(
-                role, workspace_uuid=workspace_uuid, project_uuid=project_uuid
+                resolution.effective_role,
+                workspace_uuid=workspace_uuid,
+                project_uuid=project_uuid,
             )
-            target = self._usable_model_target(role, profile, warnings)
+            target = self._usable_model_target(
+                ModelRole.IMPORT_RECONSTRUCTION,
+                profile,
+                warnings,
+            )
             if target is not None:
+                target["effective_role"] = resolution.effective_role.value
+                target["inheritance_source"] = resolution.inheritance_source
+                target["scope_source"] = resolution.scope_source
                 return target
         if not self.settings.import_reconstruction_allow_deterministic_fallback:
             raise RuntimeError(
@@ -71,6 +86,10 @@ class ImportMessageProcessor:
             "privacy_acknowledged": True,
             "secret_configured": True,
             "warnings": warnings,
+            "effective_role": resolution.effective_role.value,
+            "inheritance_source": resolution.inheritance_source,
+            "scope_source": resolution.scope_source,
+            "fallback_reason": resolution.fallback_reason,
         }
 
     def _usable_model_target(
@@ -1245,7 +1264,10 @@ class ImportMessageProcessor:
             raise RuntimeError("scheduled model profile identity mismatch")
         if not profile.is_enabled:
             raise RuntimeError("scheduled model profile is disabled")
-        if profile.role.value != operational_role:
+        compatible_profile_roles = {operational_role}
+        if operational_role == ModelRole.IMPORT_RECONSTRUCTION.value:
+            compatible_profile_roles.add(ModelRole.MEMORY_EXTRACTION.value)
+        if profile.role.value not in compatible_profile_roles:
             raise RuntimeError("scheduled model profile role is not compatible")
         provider_type = str(profile.provider_type or profile.provider or "")
         if provider_type not in {"deterministic", "openai_compatible", "openai_compatible_llm"}:
