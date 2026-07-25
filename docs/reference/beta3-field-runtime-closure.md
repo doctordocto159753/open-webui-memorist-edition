@@ -85,10 +85,15 @@ Local and package evidence recorded on Windows with Docker Desktop:
 - RC timestamps are deterministic and content-derived. This preserves
   byte-for-byte reproducibility while ensuring Docker Desktop observes changed
   build inputs instead of reusing a stale same-size source context.
+- RC forbidden-file/local-path scanning and source-package tree scanning
+  passed; no live credential, private environment file, or user-local path was
+  packaged.
 - No Docker volume was deleted during installation, upgrade, restart, or
   certification.
 
 Remaining external evidence:
 
-- Secret/local-path source and package scan
-- GitHub Actions on the Draft PR
+- GitHub Actions on the Draft PR are queued because every authoritative job
+  requires `[self-hosted, linux, x64, memorist-ci]` and the repository
+  currently has no registered self-hosted runner. Current-head CI must execute
+  before this closure can receive a final `READY` verdict.
