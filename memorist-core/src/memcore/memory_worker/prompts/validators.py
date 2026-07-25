@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from memcore.memory_worker.prompts.contracts import get_contract
 from memcore.memory_worker.prompts.schemas import validate_jakobson_output
 from memcore.memory_worker.prompts.versions import JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID
 
@@ -95,9 +96,13 @@ def validate_required_input_keys(payload: Mapping[str, Any], required_keys: list
         raise PromptValidationError(f"prompt input missing required fields: {missing}")
 
 
-def validate_prompt_specific_output(prompt_id: str, output: dict[str, Any]) -> None:
+def validate_prompt_specific_output(
+    prompt_id: str,
+    output: dict[str, Any],
+    version: str | None = None,
+) -> None:
     if prompt_id == JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID:
-        _validate_jakobson_prompt_output(output)
+        _validate_jakobson_prompt_output(output, version)
     elif prompt_id == "memorist.unit_analysis":
         _validate_unit_analysis(output)
     elif prompt_id == "memorist.memory_signal_routing_assist":
@@ -149,7 +154,16 @@ def validate_prompt_output_against_input(
                         )
 
 
-def _validate_jakobson_prompt_output(output: dict[str, Any]) -> None:
+def _validate_jakobson_prompt_output(output: dict[str, Any], version: str | None = None) -> None:
+    contract = (
+        get_contract(JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID, version) if version is not None else None
+    )
+    if contract is not None:
+        issues = contract.validate(output)
+        if issues:
+            first = issues[0]
+            raise PromptValidationError(f"{first['path']}: {first['message']}")
+        return
     try:
         validate_jakobson_output(output)
     except ValueError as error:

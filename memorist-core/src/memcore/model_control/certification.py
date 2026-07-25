@@ -12,6 +12,29 @@ from memcore.validators.ijson import load_ijson
 _SELF_CERTIFYING_PROVIDERS = {"deterministic", "local_embedding"}
 
 
+def role_contract_hash(role_value: str) -> str | None:
+    """Return the active prompt-contract hash for a structured role, if any.
+
+    Roles that execute the Jakobson sentence-analysis contract must have their
+    certification invalidated whenever that contract (schema/version) changes, so
+    the contract hash is folded into the certification fingerprint below.
+    """
+
+    # Imported lazily to avoid a circular import with the prompt package.
+    from memcore.memory_worker.prompts.contracts import get_contract
+    from memcore.memory_worker.prompts.versions import (
+        JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
+        JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
+    )
+
+    if role_value in {"memory_extraction", "import_reconstruction"}:
+        contract = get_contract(
+            JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID, JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION
+        )
+        return contract.contract_hash if contract is not None else None
+    return None
+
+
 def profile_certification_fingerprint(profile: ModelProfile) -> str:
     """Hash fields that affect provider execution and role compatibility."""
 
@@ -31,6 +54,7 @@ def profile_certification_fingerprint(profile: ModelProfile) -> str:
         "secret_strategy": profile.secret_strategy,
         "secret_env_var_name": profile.secret_env_var_name,
         "is_enabled": profile.is_enabled,
+        "role_contract_hash": role_contract_hash(profile.role.value),
     }
     encoded = json.dumps(
         payload,

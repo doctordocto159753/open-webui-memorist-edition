@@ -18,6 +18,7 @@ from memcore.memory_worker.prompts.validators import (
 from memcore.memory_worker.prompts.versions import (
     JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
     JAKOBSON_SENTENCE_ANALYSIS_STAGE,
+    JAKOBSON_SENTENCE_ANALYSIS_V3_VERSION,
     PROMPT_PACK_ID,
     PROMPT_PACK_VERSION,
 )
@@ -307,7 +308,7 @@ def validate_prompt_output(
         prompt_version=prompt.prompt_version,
         output=prompt_output,
     )
-    validate_prompt_specific_output(prompt_id, prompt_output)
+    validate_prompt_specific_output(prompt_id, prompt_output, version=prompt.prompt_version)
     return ValidationResult(
         valid=True,
         prompt_id=prompt_id,
@@ -356,11 +357,12 @@ def _definition(
     blocking_path_allowed: bool = False,
     default_timeout_ms: int = 8000,
     is_legacy: bool = False,
+    version: str = PROMPT_VERSION,
 ) -> PromptDefinition:
     return PromptDefinition(
         metadata=PromptMetadata(
             prompt_id=prompt_id,
-            prompt_version=PROMPT_VERSION,
+            prompt_version=version,
             stage=stage,
             allowed_model_roles=roles,
             requires_evidence=requires_evidence,
@@ -422,6 +424,34 @@ PROMPT_LIST = [
             ],
         },
         default_timeout_ms=8000,
+    ),
+    _definition(
+        JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
+        JAKOBSON_SENTENCE_ANALYSIS_STAGE,
+        [ModelRole.MEMORY_EXTRACTION, ModelRole.IMPORT_RECONSTRUCTION],
+        "Primary sentence-level semantic analysis after message capture and segmentation.",
+        "jakobson_sentence_analysis_v3.md",
+        ["sentences"],
+        {
+            "analysis_level": "sentence",
+            "model": "jakobson_six_factor",
+            "canonical_collection": "items",
+            "required_top_level": [
+                "schema_version",
+                "prompt_id",
+                "prompt_version",
+                "status",
+                "warnings",
+                "items",
+                "analysis_level",
+                "model",
+                "input_language",
+                "sentence_count",
+                "overall_summary",
+            ],
+        },
+        default_timeout_ms=8000,
+        version=JAKOBSON_SENTENCE_ANALYSIS_V3_VERSION,
     ),
     _definition(
         "memorist.memory_signal_routing_assist",

@@ -2,6 +2,7 @@ import sqlite3
 from collections.abc import Callable, Sequence
 from hashlib import sha256
 from time import perf_counter
+from typing import Any
 
 from memcore.config import Settings
 from memcore.memory_worker.analysis.analyzer import StructuredAnalyzer
@@ -27,8 +28,11 @@ from memcore.memory_worker.jakobson.service import (
     JakobsonAnalysisService,
     OpenAICompatibleJakobsonProvider,
 )
-from memcore.memory_worker.jakobson.validator import validate_jakobson_provider_output
+from memcore.memory_worker.jakobson_runtime import execute_jakobson_contract
+from memcore.memory_worker.postgres.deterministic_fallback import deterministic_jakobson_output
 from memcore.memory_worker.prepared import PreparedJakobsonInference
+from memcore.memory_worker.prompts.contracts import canonical_sentence_items
+from memcore.memory_worker.prompts.versions import JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION
 from memcore.memory_worker.segmentation.sentence_segmenter import SentenceSegmenter
 from memcore.memory_worker.semantic.authority import LiteCandidateAuthorityResolver
 from memcore.memory_worker.semantic.project_artifact import structured_project_artifact
@@ -144,19 +148,49 @@ class MemoryWorkerPipeline:
             speaker_role=message.role.value,
             text=raw_text,
         )
-        provider = (
-            OpenAICompatibleJakobsonProvider(extraction_profile)
-            if provider_type in {"openai_compatible", "openai_compatible_llm"}
-            else DeterministicJakobsonProvider(
-                provider_type=provider_type,
-                model_name=model_name,
-            )
-        )
-        if provider_type in {"openai_compatible", "openai_compatible_llm"}:
+        input_payload = {
+            "sentences": [
+                {
+                    "id": index + 1,
+                    "unit_uuid": unit.text_unit_uuid,
+                    "message_uuid": message.message_uuid,
+                    "text": unit.text,
+                    "span_start": unit.start_char,
+                    "span_end": unit.end_char,
+                }
+                for index, unit in enumerate(units)
+            ]
+        }
+        is_remote = provider_type in {"openai_compatible", "openai_compatible_llm"}
+        if is_remote:
+            # End the read transaction before the potentially slow HTTP request.
             self.connection.commit()
-        started = perf_counter()
-        output = provider.analyze(units, raw_text)
-        validate_jakobson_provider_output(output)
+
+        def _deterministic() -> dict[str, Any]:
+            return deterministic_jakobson_output(
+                self,
+                [
+                    {
+                        "text_unit_uuid": unit.text_unit_uuid,
+                        "text": unit.text,
+                        "speaker_role": unit.speaker_role,
+                        "start_char": unit.start_char,
+                        "end_char": unit.end_char,
+                    }
+                    for unit in units
+                ],
+            )
+
+        outcome = execute_jakobson_contract(
+            profile={
+                **extraction_profile,
+                "provider_type": provider_type,
+                "model_name": model_name,
+            },
+            input_payload=input_payload,
+            deterministic_builder=_deterministic,
+        )
+        output = outcome.output
         return PreparedJakobsonInference(
             message_uuid=message.message_uuid,
             model_role=model_role,
@@ -167,13 +201,25 @@ class MemoryWorkerPipeline:
             input_content_hash=identity.input_content_hash,
             profile_fingerprint=execution_profile_fingerprint(extraction_profile),
             output=output,
-            input_tokens=int(
-                getattr(provider, "input_tokens", 0) or max(0, (len(raw_text) + 3) // 4)
+            input_tokens=(
+                outcome.input_tokens
+                if outcome.called_provider
+                else max(0, (len(raw_text) + 3) // 4)
             ),
-            output_tokens=int(
-                getattr(provider, "output_tokens", 0) or len(output.get("sentences", []))
-            ),
-            latency_ms=int(getattr(provider, "latency_ms", 0) or (perf_counter() - started) * 1000),
+            output_tokens=outcome.output_tokens or len(canonical_sentence_items(output)),
+            latency_ms=outcome.latency_ms,
+            prompt_version=JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
+            called_provider=outcome.called_provider,
+            provider_output_valid=outcome.provider_output_valid,
+            canonicalized=outcome.canonicalized,
+            repair_attempted=outcome.repair_attempted,
+            repair_succeeded=outcome.repair_succeeded,
+            fallback_used=outcome.fallback_used,
+            fallback_reason=outcome.fallback_reason,
+            capability_mode=outcome.capability_mode,
+            provider_response_id=outcome.provider_response_id,
+            parse_status=outcome.parse_status,
+            validation_error_paths=outcome.validation_error_paths,
         )
 
     def process_message(

@@ -45,7 +45,21 @@ def test_prompt_registry_v2_lists_all_prompts() -> None:
     prompt_ids = {prompt.prompt_id for prompt in prompts}
 
     assert prompt_ids >= REQUIRED_V2_PROMPTS
-    assert all(prompt.prompt_version == PROMPT_VERSION for prompt in prompts)
+    # Every prompt is registered at the v2 pack version except the canonical
+    # Jakobson v3 contract, which is an additive immutable version used for new
+    # executions (v2 remains registered for historical replay).
+    assert all(
+        prompt.prompt_version == PROMPT_VERSION
+        for prompt in prompts
+        if not (
+            prompt.prompt_id == "memorist.jakobson_sentence_analysis"
+            and prompt.prompt_version == "3.0"
+        )
+    )
+    assert any(
+        prompt.prompt_id == "memorist.jakobson_sentence_analysis" and prompt.prompt_version == "3.0"
+        for prompt in prompts
+    )
     assert all(prompt.public_dict()["prompt_pack_id"] == PROMPT_PACK_ID for prompt in prompts)
     assert get_prompt("memorist.jakobson_sentence_analysis").stage == "jakobson_sentence_analysis"
     assert get_prompt("memorist.unit_analysis").metadata.is_legacy is True
