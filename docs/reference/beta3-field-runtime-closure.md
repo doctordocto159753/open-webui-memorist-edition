@@ -63,13 +63,29 @@ Local and package evidence recorded on Windows with Docker Desktop:
 - Open WebUI Python integration tests passed: `53 passed`.
 - Frontend Vitest passed: `49 passed`; TypeScript typecheck and ESLint passed.
 - PowerShell/Pester installer tests passed on Windows PowerShell 5.1:
-  `25 passed`.
+  `39 passed`.
 - Installer static validation passed: `50 checks`; Lite and Full Compose
   validation passed.
 - The rebuilt Full package started all four services healthy. A controlled
   OpenAI-compatible provider completed health certification and two live
   memory-processing operations, and certification became stale after profile
   mutation until it was retested.
+- Final product-level Playwright certification against a fresh rebuilt Full
+  package passed: `10 passed`. The run covered setup, processing-node creation,
+  acknowledgement, capability declaration, certification/default assignment,
+  capture, later-chat retrieval, and visible disclosure.
+- The final audit found and closed one certification/runtime mismatch:
+  structured-processing profiles with neither JSON mode nor structured output
+  declared could previously certify healthy but were rejected by runtime
+  resolution. Such profiles now certify as incompatible at
+  `capability_declaration`; the controlled E2E profile explicitly declares the
+  JSON-mode capability it exercises.
+- Direct PostgreSQL evidence from that product run recorded `3` messages, `3`
+  captures, `6` jobs, `2` accepted candidates, `2` memories, `1` delivered
+  attachment, `2` attachment lifecycle events, `4` processing-stage runs, and
+  `10` usage records. All three extraction jobs used the certified controlled
+  OpenAI-compatible profile. The later request contained the active memory as a
+  `system` message named `memorist_context`.
 - Durable fail-open evidence was verified in PostgreSQL: a capture failure
   remained visible after an unrelated successful stage and cleared only after
   capture itself recovered.
@@ -80,8 +96,9 @@ Local and package evidence recorded on Windows with Docker Desktop:
   retained workspace/session/message/profile data counts, and reached schema
   `22` with every service healthy.
 - The generated RC contains `486` files (`485` declared payload entries) and
-  has SHA-256
-  `61d036d140f735acc932813578edb8041e81b4afe807a61e13d87c96becf8c50`.
+  has reproducible SHA-256
+  `fcbfd6621d9b30dc478147ddfbda308736895f7d1c40e8d6cc8f2c87c46cee85`
+  across three consecutive builds.
 - RC timestamps are deterministic and content-derived. This preserves
   byte-for-byte reproducibility while ensuring Docker Desktop observes changed
   build inputs instead of reusing a stale same-size source context.
@@ -91,9 +108,12 @@ Local and package evidence recorded on Windows with Docker Desktop:
 - No Docker volume was deleted during installation, upgrade, restart, or
   certification.
 
-Remaining external evidence:
+External-runner disposition:
 
-- GitHub Actions on the Draft PR are queued because every authoritative job
-  requires `[self-hosted, linux, x64, memorist-ci]` and the repository
-  currently has no registered self-hosted runner. Current-head CI must execute
-  before this closure can receive a final `READY` verdict.
+- GitHub Actions on the Draft PR remain queued because every authoritative job
+  requires `[self-hosted, linux, x64, memorist-ci]` and the repository has no
+  registered runner after the self-hosted server was retired. On 2026-07-25,
+  the repository owner explicitly authorized final closure from the complete
+  local test and runtime-certification record without waiting for those
+  unavailable Actions. The queued runs are therefore documented but non-gating
+  for this beta.3 field-closure verdict.

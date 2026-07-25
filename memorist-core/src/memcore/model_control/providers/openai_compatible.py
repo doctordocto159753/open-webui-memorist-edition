@@ -119,6 +119,27 @@ class OpenAICompatibleLLMProvider:
                         schema_mode=schema_mode,
                         probe_attempts=attempts,
                     )
+            if self.requires_structured_extraction and schema_mode == "none":
+                return _connected_health(
+                    self,
+                    started,
+                    response_status,
+                    overall_status="incompatible",
+                    structured_output_status="not_declared",
+                    role_compatibility_status="incompatible",
+                    detail=(
+                        "HTTP 200; authentication and chat completions validated, "
+                        "but this structured-processing role requires the profile "
+                        "to declare Supports JSON mode or Supports structured output."
+                    ),
+                    recommended_action=(
+                        "Enable a capability the provider actually supports, then "
+                        "retest the profile before assigning it as a default."
+                    ),
+                    failure_stage="capability_declaration",
+                    schema_mode=schema_mode,
+                    probe_attempts=attempts,
+                )
             return _connected_health(
                 self,
                 started,

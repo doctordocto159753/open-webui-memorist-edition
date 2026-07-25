@@ -224,6 +224,10 @@ test("processing nodes: create, acknowledge, test, and assign a profile", async 
   await form.locator('[name="provider_type"]').selectOption("openai_compatible");
   await form.locator('[name="model_name"]').fill("memorist-e2e-stub");
   await form.locator('[name="endpoint_url"]').fill(STUB_PROVIDER_URL);
+  // Memory extraction is a structured-processing role. Declare the JSON
+  // capability the controlled provider fixture exercises so certification and
+  // runtime resolution prove the same contract.
+  await form.locator('[name="supports_json_mode"]').check();
   // Declare the endpoint remote so the privacy boundary applies.
   await form.locator('[name="endpoint_is_local"]').uncheck();
   // Environment-variable NAME, never a key value.

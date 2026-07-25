@@ -29,7 +29,7 @@ def test_openai_compatible_health_check_validates_json_mode(
     assert handler.last_payload["response_format"] == {"type": "json_object"}
 
 
-def test_openai_compatible_health_check_warns_without_structured_flags(
+def test_structured_role_health_is_incompatible_without_declared_json_capability(
     openai_json_mode_server: tuple[str, type[Any]],
 ) -> None:
     endpoint, handler = openai_json_mode_server
@@ -41,11 +41,15 @@ def test_openai_compatible_health_check_warns_without_structured_flags(
 
     health = provider.health_check()
 
-    assert health.status == "ok"
+    assert health.status == "error"
+    assert health.overall_status == "incompatible"
+    assert health.role_compatibility_status == "incompatible"
+    assert health.structured_output_status == "not_declared"
+    assert health.failure_stage == "capability_declaration"
     assert "response_format" not in handler.last_payload
     assert health.detail is not None
-    assert "chat completions validated" in health.detail
-    assert "may be unsuitable for structured memory tasks" in health.detail
+    assert "authentication and chat completions validated" in health.detail
+    assert "requires the profile to declare Supports JSON mode" in health.detail
 
 
 def test_openai_compatible_health_check_reports_json_mode_unsupported(
