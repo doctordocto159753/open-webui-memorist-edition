@@ -7,7 +7,7 @@ import uuid
 from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from memcore.config import Settings
@@ -171,7 +171,7 @@ class ImportMessageProcessor:
             "profile_enabled": enabled,
             "privacy_acknowledged": privacy_acknowledged,
             "secret_configured": secret_configured,
-            "latest_health": dict(health) if health is not None else None,
+            "latest_health": _json_safe_db_row(health) if health is not None else None,
             "warnings": warnings,
         }
         fingerprint_material = (
@@ -241,9 +241,7 @@ class ImportMessageProcessor:
             "prompt_version": identity.prompt_version,
             "input_content_hash": identity.input_content_hash,
             "processing_identity_hash": identity.identity_hash,
-            "execution_profile_fingerprint": model_target.get(
-                "execution_profile_fingerprint"
-            ),
+            "execution_profile_fingerprint": model_target.get("execution_profile_fingerprint"),
         }
         if not eligible:
             return self._upsert_status(
@@ -1092,9 +1090,7 @@ class ImportMessageProcessor:
                         job_uuid,
                     ),
                 ).fetchone()
-                prompt_execution_uuid = (
-                    execution["prompt_execution_uuid"] if execution else None
-                )
+                prompt_execution_uuid = execution["prompt_execution_uuid"] if execution else None
             with self._result_transaction():
                 require_fence(lock=True)
                 finished = utc_now()
@@ -1282,14 +1278,11 @@ class ImportMessageProcessor:
             scheduled == prepared_identity == prepared_target_identity == commit_target_identity
         ):
             raise RuntimeError("scheduled model profile execution identity changed")
-        if (
-            prepared.profile_fingerprint != execution_profile_fingerprint(prepared_target)
-            or prepared.profile_fingerprint != execution_profile_fingerprint(commit_target)
-        ):
+        if prepared.profile_fingerprint != execution_profile_fingerprint(
+            prepared_target
+        ) or prepared.profile_fingerprint != execution_profile_fingerprint(commit_target):
             raise RuntimeError("scheduled model profile configuration changed")
-        scheduled_profile_fingerprint = status_row.get(
-            "execution_profile_fingerprint"
-        )
+        scheduled_profile_fingerprint = status_row.get("execution_profile_fingerprint")
         if (
             scheduled_profile_fingerprint
             and str(scheduled_profile_fingerprint) != prepared.profile_fingerprint
@@ -1425,9 +1418,7 @@ class ImportMessageProcessor:
             "retry_count": 0,
             "error_sanitized": values.get("error_sanitized"),
             "processing_identity_hash": values.get("processing_identity_hash"),
-            "execution_profile_fingerprint": values.get(
-                "execution_profile_fingerprint"
-            ),
+            "execution_profile_fingerprint": values.get("execution_profile_fingerprint"),
             "created_at": now,
             "updated_at": now,
             "last_transition_at": now,
@@ -1540,6 +1531,17 @@ def _worker_id() -> str:
 
 def _add_seconds(timestamp: str, seconds: int) -> str:
     return (datetime.fromisoformat(timestamp) + timedelta(seconds=seconds)).isoformat()
+
+
+def _json_safe_db_row(row: Any) -> dict[str, Any]:
+    """Normalize driver-native values before storing a canonical import plan."""
+
+    result = dict(row)
+    for key, value in result.items():
+        if isinstance(value, datetime):
+            normalized = value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
+            result[key] = normalized.isoformat().replace("+00:00", "Z")
+    return result
 
 
 def _classify_error(error_class: str, message: str) -> tuple[str, bool]:

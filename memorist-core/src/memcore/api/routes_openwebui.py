@@ -4,8 +4,9 @@ import importlib
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from hashlib import sha256
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict
@@ -13,6 +14,8 @@ from pydantic import BaseModel, ConfigDict
 from memcore.config import Settings, get_settings
 from memcore.memory_control import MemoryControlRepository, memory_control_connection
 from memcore.memory_control.repository import ResolvedTurnPolicy
+from memcore.model_control.security import sanitize_error_message
+from memcore.model_control.storage import model_control_repository
 from memcore.models import new_uuid, utc_now
 from memcore.openwebui.commands import (
     CaptureIdempotencyConflict,
@@ -37,6 +40,33 @@ from memcore.storage.sqlite import connect
 from memcore.version import SCHEMA_VERSION, __version__
 
 router = APIRouter(prefix="/memcore/openwebui", tags=["openwebui-integration"])
+
+
+class IntegrationOutcomeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    stage: Literal[
+        "policy",
+        "session",
+        "capture",
+        "recall",
+        "attachment",
+        "assistant_completion",
+        "provider",
+        "fallback",
+        "chat_inlet",
+        "chat_outlet",
+    ]
+    outcome: Literal[
+        "ok",
+        "degraded",
+        "failed_open",
+        "fallback",
+        "disabled",
+        "private",
+        "no_recall",
+    ]
+    degraded_reason: str | None = None
+    detail_sanitized: str | None = None
 
 
 class SessionResolveRequest(BaseModel):
@@ -311,6 +341,56 @@ def session_lineage(session_uuid: str) -> dict[str, Any]:
         }
 
 
+@router.post("/outcomes", response_model=None)
+def record_integration_outcome(request: IntegrationOutcomeRequest) -> dict[str, Any]:
+    settings = get_settings()
+    actor = optional_memorist_actor()
+    if actor is None and not settings.allow_legacy_actor_headers_for_tests:
+        raise HTTPException(status_code=401, detail="authenticated Memorist actor required")
+    if actor is None:
+        raise HTTPException(status_code=401, detail="authenticated Memorist actor required")
+    values = {
+        "outcome_uuid": new_uuid(),
+        "user_uuid": actor.user_uuid,
+        "workspace_uuid": actor.workspace_uuid,
+        "stage": request.stage,
+        "outcome": request.outcome,
+        "degraded_reason": sanitize_error_message(request.degraded_reason),
+        "detail_sanitized": sanitize_error_message(request.detail_sanitized),
+        "created_at": datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        "schema_version": 1,
+    }
+    if _is_full_postgres(settings):
+        with _pg_connection(settings) as connection, connection.transaction():
+            connection.execute(
+                """
+                INSERT INTO openwebui_integration_outcomes (
+                    outcome_uuid, user_uuid, workspace_uuid, stage, outcome,
+                    degraded_reason, detail_sanitized, created_at, schema_version
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                tuple(values.values()),
+            )
+    else:
+        with _connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO openwebui_integration_outcomes (
+                    outcome_uuid, user_uuid, workspace_uuid, stage, outcome,
+                    degraded_reason, detail_sanitized, created_at, schema_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                tuple(values.values()),
+            )
+            connection.commit()
+    return {
+        "recorded": True,
+        "stage": request.stage,
+        "outcome": request.outcome,
+        "created_at": values["created_at"],
+    }
+
+
 @router.get("/status", response_model=None)
 def integration_status() -> dict[str, Any]:
     settings = get_settings()
@@ -348,6 +428,23 @@ def integration_status() -> dict[str, Any]:
                 """,
                 (actor.user_uuid, actor.workspace_uuid) if actor is not None else (None, None),
             ).fetchone()
+            last_outcome = connection.execute(
+                """
+                SELECT stage, outcome, degraded_reason, detail_sanitized, created_at
+                FROM openwebui_integration_outcomes
+                WHERE user_uuid = %s AND workspace_uuid = %s
+                ORDER BY created_at DESC, outcome_uuid DESC
+                LIMIT 1
+                """,
+                (actor.user_uuid, actor.workspace_uuid) if actor is not None else (None, None),
+            ).fetchone()
+            stage_outcomes = _integration_stage_outcomes(
+                connection,
+                actor.user_uuid if actor is not None else None,
+                actor.workspace_uuid if actor is not None else None,
+                postgres=True,
+            )
+            degraded, last_error = _integration_degraded_status(stage_outcomes)
             return {
                 "memorist_core": "connected",
                 "version": __version__,
@@ -358,7 +455,10 @@ def integration_status() -> dict[str, Any]:
                 "preflight": "enabled" if settings.preflight_enabled else "disabled",
                 "memory_processing": _jsonable_dict(memory_processing),
                 "last_attachment": _jsonable_dict(last_attachment) if last_attachment else None,
-                "last_error": None,
+                "integration_outcome": (_jsonable_dict(last_outcome) if last_outcome else None),
+                "stage_outcomes": stage_outcomes,
+                "degraded": degraded,
+                "last_error": last_error,
             }
     with _connection() as connection:
         consistency = run_consistency_check(connection)
@@ -372,6 +472,23 @@ def integration_status() -> dict[str, Any]:
             """,
             (actor.user_uuid, actor.workspace_uuid) if actor is not None else (None, None),
         ).fetchone()
+        last_outcome = connection.execute(
+            """
+            SELECT stage, outcome, degraded_reason, detail_sanitized, created_at
+            FROM openwebui_integration_outcomes
+            WHERE user_uuid = ? AND workspace_uuid = ?
+            ORDER BY created_at DESC, outcome_uuid DESC
+            LIMIT 1
+            """,
+            (actor.user_uuid, actor.workspace_uuid) if actor is not None else (None, None),
+        ).fetchone()
+        stage_outcomes = _integration_stage_outcomes(
+            connection,
+            actor.user_uuid if actor is not None else None,
+            actor.workspace_uuid if actor is not None else None,
+            postgres=False,
+        )
+        degraded, last_error = _integration_degraded_status(stage_outcomes)
         return {
             "memorist_core": "connected",
             "version": __version__,
@@ -381,8 +498,64 @@ def integration_status() -> dict[str, Any]:
             "memory_mode": settings.retrieval_mode,
             "preflight": "enabled" if settings.preflight_enabled else "disabled",
             "last_attachment": dict(last_attachment) if last_attachment else None,
-            "last_error": None,
+            "integration_outcome": dict(last_outcome) if last_outcome else None,
+            "stage_outcomes": stage_outcomes,
+            "degraded": degraded,
+            "last_error": last_error,
         }
+
+
+def _integration_stage_outcomes(
+    connection: Any,
+    user_uuid: str | None,
+    workspace_uuid: str | None,
+    *,
+    postgres: bool,
+) -> list[dict[str, Any]]:
+    placeholder = "%s" if postgres else "?"
+    rows = connection.execute(
+        f"""
+        WITH ranked AS (
+            SELECT stage, outcome, degraded_reason, detail_sanitized, created_at,
+                   MAX(CASE WHEN outcome = 'ok' THEN created_at END)
+                       OVER (PARTITION BY stage) AS last_success_at,
+                   MAX(CASE WHEN outcome IN ('degraded', 'failed_open', 'fallback')
+                            THEN created_at END)
+                       OVER (PARTITION BY stage) AS last_failure_at,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY stage
+                       ORDER BY created_at DESC, outcome_uuid DESC
+                   ) AS stage_rank
+            FROM openwebui_integration_outcomes
+            WHERE user_uuid = {placeholder} AND workspace_uuid = {placeholder}
+        )
+        SELECT stage, outcome, degraded_reason, detail_sanitized, created_at,
+               last_success_at, last_failure_at
+        FROM ranked
+        WHERE stage_rank = 1
+        ORDER BY stage
+        """,
+        (user_uuid, workspace_uuid),
+    ).fetchall()
+    return [_jsonable_dict(row) if postgres else dict(row) for row in rows]
+
+
+def _integration_degraded_status(
+    stage_outcomes: list[dict[str, Any]],
+) -> tuple[bool, str | None]:
+    failing = [
+        item
+        for item in stage_outcomes
+        if item.get("outcome") in {"degraded", "failed_open", "fallback"}
+    ]
+    if not failing:
+        return False, None
+    latest = max(failing, key=lambda item: str(item.get("created_at") or ""))
+    return True, str(
+        latest.get("detail_sanitized")
+        or latest.get("degraded_reason")
+        or "Memorist workflow degraded"
+    )
 
 
 @contextmanager
@@ -699,6 +872,7 @@ def _capture_message_full(
                 session_uuid=session_uuid,
                 message_uuid=message_uuid,
                 now=now,
+                settings=settings,
             )
             result = {
                 "session_uuid": session_uuid,
@@ -755,13 +929,18 @@ def _pg_enqueue_capture_jobs(
     session_uuid: str,
     message_uuid: str,
     now: str,
+    settings: Settings,
 ) -> None:
     compat_connection = (
         connection
         if isinstance(connection, PostgresCompatConnection)
         else PostgresCompatConnection(connection)
     )
-    identity = resolve_scoped_model_identity(compat_connection, session_uuid)
+    identity = resolve_scoped_model_identity(
+        compat_connection,
+        session_uuid,
+        repository=model_control_repository(compat_connection, settings),
+    )
     model_identity = identity.as_payload()
     jobs = [("text_unitization", 100), ("memory_extraction", 60)]
     for job_type, priority in jobs:

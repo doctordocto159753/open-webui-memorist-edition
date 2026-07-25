@@ -142,13 +142,14 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
       <td>${escapeHtml(profile.model_name)}</td>
       <td>${profile.endpoint_is_local ? "Local" : "Remote"}</td>
       <td><span class="badge ${privacy}">${escapeHtml(privacy)}</span></td>
-      <td>${profile.secret_configured ? "Env var configured" : "No secret configured"}</td>
+      <td>${secretState(profile)}</td>
       <td>${profile.is_enabled ? "Enabled" : "Disabled"}</td>
       <td>${isDefaultFor.length ? isDefaultFor.map(escapeHtml).join(", ") : "—"}</td>
       <td>${this.healthCell(profile, health)}</td>
       <td>
         <button type="button" data-action="edit" data-profile="${profile.model_profile_uuid}">Edit</button>
         <button type="button" data-action="test" data-profile="${profile.model_profile_uuid}">Test</button>
+        ${isDefaultFor.map((role) => `<button type="button" data-action="remove-default" data-role="${escapeHtml(role)}">Remove ${escapeHtml(role)} default</button>`).join("")}
         ${profile.endpoint_is_local || profile.privacy_acknowledged_at ? "" : `<button type="button" data-action="ack" data-profile="${profile.model_profile_uuid}">Acknowledge privacy</button>`}
       </td>
     </tr>`;
@@ -216,6 +217,7 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
     this.querySelectorAll('[data-action="edit"]').forEach((button) => button.addEventListener("click", () => this.editProfile((button as HTMLElement).dataset.profile || "")));
     this.querySelectorAll('[data-action="test"]').forEach((button) => button.addEventListener("click", () => void this.testProfile((button as HTMLElement).dataset.profile || "")));
     this.querySelectorAll('[data-action="ack"]').forEach((button) => button.addEventListener("click", () => void this.acknowledgePrivacy((button as HTMLElement).dataset.profile || "")));
+    this.querySelectorAll('[data-action="remove-default"]').forEach((button) => button.addEventListener("click", () => void this.removeDefault((button as HTMLElement).dataset.role as MemoristModelRole)));
     this.querySelector('[data-action="save-profile"]')?.addEventListener("submit", (event) => void this.saveProfile(event));
     this.querySelector('[data-action="set-default"]')?.addEventListener("click", () => void this.setDefault());
   }
@@ -276,14 +278,9 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
       this.setState({ error: PRIVACY_ACK_REQUIRED_ERROR });
       return;
     }
-    const tested = this.state.testResults[modelProfileUuid];
-    if (
-      !tested
-      || tested.health.overall_status !== "ok"
-      || tested.health.role_compatibility_status !== "compatible"
-    ) {
+    if (!profile?.certification_current) {
       this.setState({
-        error: "Test this exact profile successfully for role compatibility before setting it as default.",
+        error: `Test this exact profile successfully before setting it as default (certification: ${profile?.certification_status || "missing"}).`,
       });
       return;
     }
@@ -294,6 +291,15 @@ export class MemoristProcessingNodesSettings extends HTMLElement {
       if (active?.model_profile_uuid !== modelProfileUuid) {
         this.setState({ error: "The server did not confirm the intended profile as effective." });
       }
+    } catch (error) {
+      this.setState({ error: errorMessage(error) });
+    }
+  }
+
+  private async removeDefault(role: MemoristModelRole): Promise<void> {
+    try {
+      await this.client.removeModelControlDefault(role);
+      await this.refresh();
     } catch (error) {
       this.setState({ error: errorMessage(error) });
     }
@@ -362,6 +368,12 @@ function effectiveState(item: ModelControlEffectiveRole): string {
   if (item.inheritance_source) return `inherited from ${item.inheritance_source}`;
   if (item.scope_source === "built_in_fallback") return "built-in fallback";
   return `configured and active (${item.scope_source})`;
+}
+
+function secretState(profile: ModelControlProfile): string {
+  if (!profile.secret_reference_configured) return "Not required";
+  if (!profile.secret_available_in_core) return "Reference missing in Core";
+  return `Available; auth ${profile.authentication_status || "not validated"}; certification ${profile.certification_status || "unknown"}`;
 }
 
 function escapeHtml(value: string): string {

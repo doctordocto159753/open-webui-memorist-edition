@@ -317,6 +317,7 @@ jobs:
           pg_password=$(openssl rand -hex 16)
           {
             printf 'MEMORIST_MODE=full\n'
+            printf 'MEMORIST_INSTALLATION_ID=%s\n' "$(python3 -c 'import uuid;print(uuid.uuid4())')"
             printf 'WEBUI_SECRET_KEY=%s\n' "$(openssl rand -hex 32)"
             printf 'MEMORIST_ACTOR_ASSERTION_SECRET=%s\n' "$(openssl rand -hex 32)"
             printf 'MEMORIST_ACTOR_SERVICE_TOKEN=%s\n' "$(openssl rand -hex 32)"
@@ -332,6 +333,7 @@ jobs:
             printf 'ENABLE_OLLAMA_API=false\n'
             printf 'MEMORIST_MEMORY_EXTRACTION_API_KEY=stub-extraction-env-value\n'
             printf 'OPEN_WEBUI_PORT=3000\n'
+            printf 'MEMORIST_CORE_HOST_PORT=8777\n'
             printf 'MEMORIST_PORT=8777\n'
           } > "${MEMORIST_PACKAGE_DIR}/.env"
       - name: Clear persisted stack state from previous runs

@@ -19,6 +19,8 @@ from memcore.imports.service import ImportService
 from memcore.imports.worker import ImportReconstructionWorkerService
 from memcore.memory_worker.prompts.schemas import valid_jakobson_output
 from memcore.model_control.postgres_repository import PostgresModelControlRepository
+from memcore.model_control.providers.base import ProviderHealth
+from memcore.model_control.registry import test_profile_health as run_profile_health
 from memcore.model_control.schemas import ModelProfileCreate, ProviderType
 from memcore.models import ModelRole
 
@@ -29,10 +31,15 @@ class _ProviderHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length).decode("utf-8"))
-        input_payload = json.loads(payload["messages"][1]["content"])
-        output = valid_jakobson_output()
-        output["sentences"][0]["id"] = input_payload["sentences"][0]["id"]
-        output["sentences"][0]["text"] = input_payload["sentences"][0]["text"]
+        user_content = payload["messages"][1]["content"]
+        output: dict[str, Any]
+        if "memorist_provider_test" in user_content:
+            output = {"memorist_provider_test": "ok"}
+        else:
+            input_payload = json.loads(user_content)
+            output = valid_jakobson_output()
+            output["sentences"][0]["id"] = input_payload["sentences"][0]["id"]
+            output["sentences"][0]["text"] = input_payload["sentences"][0]["text"]
         type(self).requests.append(
             {
                 "path": self.path,
@@ -121,6 +128,12 @@ def test_full_postgres_remote_provider_background_worker_e2e(
                     privacy_acknowledged=True,
                 )
             )
+            model_control.record_health_event(
+                profile.model_profile_uuid,
+                run_profile_health(profile, timeout_seconds=5),
+            )
+            assert len(_ProviderHandler.requests) == 1
+            _ProviderHandler.requests = []
             model_control.set_default(ModelRole.IMPORT_RECONSTRUCTION, profile.model_profile_uuid)
             service = ImportService(connection, settings.object_store_path)
             run = service.upload(str(_remote_archive(tmp_path, messages=2)))
@@ -234,6 +247,19 @@ def test_full_postgres_scheduled_profile_cannot_be_hard_deleted(
                 privacy_acknowledged=True,
             )
         )
+        model_control.record_health_event(
+            profile.model_profile_uuid,
+            ProviderHealth(
+                status="ok",
+                provider_type=profile.provider_type,
+                model_name=profile.model_name,
+                latency_ms=1,
+                local_only_safe=False,
+                authentication_status="valid",
+                role_compatibility_status="compatible",
+                overall_status="ok",
+            ),
+        )
         model_control.set_default(ModelRole.IMPORT_RECONSTRUCTION, profile.model_profile_uuid)
         service = ImportService(connection, settings.object_store_path)
         run = service.upload(str(_remote_archive(tmp_path, messages=1)))
@@ -334,6 +360,12 @@ def test_full_postgres_remote_profile_failures_do_not_call_provider(
                     privacy_acknowledged=True,
                 )
             )
+            model_control.record_health_event(
+                profile.model_profile_uuid,
+                run_profile_health(profile, timeout_seconds=5),
+            )
+            assert len(_ProviderHandler.requests) == 1
+            _ProviderHandler.requests = []
             model_control.set_default(ModelRole.IMPORT_RECONSTRUCTION, profile.model_profile_uuid)
             service = ImportService(connection, settings.object_store_path)
             run = service.upload(str(_remote_archive(tmp_path, messages=1)))

@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import zipfile
+from datetime import datetime, timedelta
 from pathlib import Path
 
 VERSION = "0.2.0-beta.3"
@@ -32,11 +33,13 @@ from release.scan_forbidden_files import scan_path  # noqa: E402
 
 from memcore.version import SCHEMA_VERSION, __version__  # noqa: E402
 
-# Fixed archive-entry timestamp so the ZIP is byte-reproducible across clean
-# checkouts. Git does not preserve file mtimes, so without this the embedded
-# per-entry timestamps (and therefore the archive digest) would vary run to run
-# even though the packaged contents are identical. 1980-01-01 is the ZIP epoch.
-DETERMINISTIC_DATE_TIME = (1980, 1, 1, 0, 0, 0)
+# Archive timestamps are derived from the final content manifest. This keeps
+# identical packages byte-reproducible, while ensuring a changed package gets
+# different extracted mtimes. Docker Desktop's local-context cache can reuse a
+# stale same-size file when ZIPs always extract with the 1980 epoch timestamp;
+# content-derived mtimes make upgrades cache-safe without using wall-clock time.
+DETERMINISTIC_DATE_TIME_BASE = datetime(2000, 1, 1)
+DETERMINISTIC_DATE_TIME_SPAN_SECONDS = 20 * 365 * 24 * 60 * 60
 
 RC_ROOT = ROOT / "release" / "rc"
 TARGET = RC_ROOT / f"memorist-openwebui-{VERSION}"
@@ -132,10 +135,18 @@ def assemble() -> dict[str, str]:
 
     if ZIP_PATH.exists():
         ZIP_PATH.unlink()
+    archive_date_time = _content_derived_date_time(
+        (TARGET / "package-manifest.ijson").read_bytes()
+    )
     with zipfile.ZipFile(ZIP_PATH, "w", zipfile.ZIP_DEFLATED) as package:
         for path in sorted(TARGET.rglob("*"), key=lambda p: p.relative_to(TARGET).as_posix()):
             if path.is_file():
-                _write_deterministic(package, path, path.relative_to(RC_ROOT).as_posix())
+                _write_deterministic(
+                    package,
+                    path,
+                    path.relative_to(RC_ROOT).as_posix(),
+                    archive_date_time,
+                )
 
     digest = hashlib.sha256(ZIP_PATH.read_bytes()).hexdigest()
     SHA_PATH.write_text(f"{digest}  {ZIP_PATH.name}\n", encoding="utf-8")
@@ -148,14 +159,36 @@ def assemble() -> dict[str, str]:
     return {"zip": str(ZIP_PATH), "sha256": str(SHA_PATH), "digest": digest}
 
 
-def _write_deterministic(package: zipfile.ZipFile, path: Path, arcname: str) -> None:
-    """Add ``path`` to the archive with a fixed timestamp for reproducibility.
+def _content_derived_date_time(material: bytes) -> tuple[int, int, int, int, int, int]:
+    """Return a reproducible ZIP timestamp that changes with package content."""
+
+    seed = int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
+    offset = seed % DETERMINISTIC_DATE_TIME_SPAN_SECONDS
+    # ZIP/DOS timestamps have two-second resolution.
+    timestamp = DETERMINISTIC_DATE_TIME_BASE + timedelta(seconds=offset - (offset % 2))
+    return (
+        timestamp.year,
+        timestamp.month,
+        timestamp.day,
+        timestamp.hour,
+        timestamp.minute,
+        timestamp.second,
+    )
+
+
+def _write_deterministic(
+    package: zipfile.ZipFile,
+    path: Path,
+    arcname: str,
+    date_time: tuple[int, int, int, int, int, int],
+) -> None:
+    """Add ``path`` with a content-derived timestamp for reproducibility.
 
     Only the entry's stored mtime is normalized; file content and Unix mode
     (git preserves the executable bit) are carried through unchanged, so the
     integrity layers that hash file bytes are unaffected.
     """
-    info = zipfile.ZipInfo(arcname, date_time=DETERMINISTIC_DATE_TIME)
+    info = zipfile.ZipInfo(arcname, date_time=date_time)
     info.compress_type = zipfile.ZIP_DEFLATED
     info.external_attr = (path.stat().st_mode & 0xFFFF) << 16
     package.writestr(info, path.read_bytes())

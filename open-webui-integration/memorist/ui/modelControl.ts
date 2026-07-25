@@ -29,6 +29,11 @@ export type ModelControlProfile = {
   privacy_profile?: Record<string, unknown>;
   privacy_acknowledged_at?: string | null;
   secret_configured: boolean;
+  secret_reference_configured?: boolean;
+  secret_available_in_core?: boolean;
+  authentication_status?: string;
+  certification_status?: string;
+  certification_current?: boolean;
   is_enabled?: boolean;
 };
 

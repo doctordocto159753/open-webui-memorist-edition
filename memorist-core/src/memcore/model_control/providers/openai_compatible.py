@@ -41,82 +41,121 @@ class OpenAICompatibleLLMProvider:
 
     def health_check(self, timeout_seconds: float = 1.0) -> ProviderHealth:
         started = perf_counter()
-        supports_json_format = self.supports_json_mode or self.supports_structured_output
-        payload: dict[str, object] = {
-            "model": self.model_name,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "Memorist connectivity test. Reply only with valid JSON.",
-                },
-                {"role": "user", "content": '{"memorist_provider_test":"ok"}'},
-            ],
-        }
-        if supports_json_format:
-            payload["response_format"] = {"type": "json_object"}
+        deadline = started + timeout_seconds
+        schema_mode = _schema_mode(self)
+        payload = _health_probe_payload(self.model_name, schema_mode=schema_mode)
 
         try:
-            request = urllib.request.Request(
-                _openai_url(self.endpoint_url, "chat/completions"),
-                data=json.dumps(payload).encode("utf-8"),
-                headers=_headers(self.secret_env_var_name),
-                method="POST",
+            response_status, content = self._send_health_probe(
+                payload,
+                timeout_seconds=_remaining_timeout(deadline),
             )
-            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-                data = json.loads(response.read().decode("utf-8"))
-                content = _extract_chat_content(data)
-                if content is None:
-                    return _connected_health(
-                        self,
-                        started,
-                        response.status,
-                        overall_status="incompatible",
-                        structured_output_status="invalid_response",
-                        role_compatibility_status="incompatible",
-                        detail="Missing choices[0].message.content",
-                        recommended_action="Select a chat-completions compatible model.",
-                    )
-                marker = _parse_json_content(content)
-                if marker is None:
-                    return _connected_health(
-                        self,
-                        started,
-                        response.status,
-                        overall_status="incompatible",
-                        structured_output_status="unsupported",
-                        role_compatibility_status="incompatible",
-                        detail="Malformed JSON in chat completion response.",
-                        recommended_action=(
-                            "Enable JSON mode or select a model with reliable structured output."
-                        ),
-                    )
-                if marker.get("memorist_provider_test") != "ok":
-                    return _connected_health(
-                        self,
-                        started,
-                        response.status,
-                        overall_status="incompatible",
-                        structured_output_status="valid_json",
-                        role_compatibility_status="incompatible",
-                        detail=(
-                            "Structured response was valid JSON but failed the role marker probe."
-                        ),
-                        recommended_action="Select a model that follows the role output contract.",
-                    )
+            if content is None:
                 return _connected_health(
                     self,
                     started,
-                    response.status,
-                    overall_status="ok",
-                    structured_output_status="supported",
-                    role_compatibility_status="compatible",
-                    detail=_health_detail_for_success(
-                        response.status,
-                        supports_json_format=bool(supports_json_format),
-                        requires_structured_extraction=self.requires_structured_extraction,
-                    ),
-                    recommended_action="No action required.",
+                    response_status,
+                    overall_status="incompatible",
+                    structured_output_status="invalid_response",
+                    role_compatibility_status="incompatible",
+                    detail="Missing choices[0].message.content",
+                    recommended_action="Select a chat-completions compatible model.",
+                    failure_stage="response_shape",
+                    schema_mode=schema_mode,
                 )
+            marker = _parse_json_content(content)
+            if marker is None:
+                return _connected_health(
+                    self,
+                    started,
+                    response_status,
+                    overall_status="incompatible",
+                    structured_output_status="malformed",
+                    role_compatibility_status="incompatible",
+                    detail="Malformed JSON in chat completion response.",
+                    recommended_action=(
+                        "Enable JSON mode or select a model with reliable structured output."
+                    ),
+                    failure_stage="json_decode",
+                    schema_mode=schema_mode,
+                )
+            attempts = 1
+            if marker.get("memorist_provider_test") != "ok":
+                attempts = 2
+                corrective = _health_probe_payload(
+                    self.model_name,
+                    schema_mode=schema_mode,
+                    corrective=True,
+                )
+                response_status, corrected_content = self._send_health_probe(
+                    corrective,
+                    timeout_seconds=_remaining_timeout(deadline),
+                )
+                corrected = (
+                    _parse_json_content(corrected_content)
+                    if corrected_content is not None
+                    else None
+                )
+                if corrected is None or corrected.get("memorist_provider_test") != "ok":
+                    return _connected_health(
+                        self,
+                        started,
+                        response_status,
+                        overall_status="incompatible",
+                        structured_output_status=(
+                            "valid_json_wrong_marker"
+                            if corrected is not None
+                            else "invalid_response"
+                        ),
+                        role_compatibility_status="incompatible",
+                        detail=(
+                            "Provider returned JSON but did not satisfy the exact "
+                            "memorist_provider_test marker after one corrective retry."
+                        ),
+                        recommended_action=(
+                            "Select a model that follows exact JSON field and value constraints."
+                        ),
+                        failure_stage="semantic_marker",
+                        schema_mode=schema_mode,
+                        probe_attempts=attempts,
+                    )
+            if self.requires_structured_extraction and schema_mode == "none":
+                return _connected_health(
+                    self,
+                    started,
+                    response_status,
+                    overall_status="incompatible",
+                    structured_output_status="not_declared",
+                    role_compatibility_status="incompatible",
+                    detail=(
+                        "HTTP 200; authentication and chat completions validated, "
+                        "but this structured-processing role requires the profile "
+                        "to declare Supports JSON mode or Supports structured output."
+                    ),
+                    recommended_action=(
+                        "Enable a capability the provider actually supports, then "
+                        "retest the profile before assigning it as a default."
+                    ),
+                    failure_stage="capability_declaration",
+                    schema_mode=schema_mode,
+                    probe_attempts=attempts,
+                )
+            return _connected_health(
+                self,
+                started,
+                response_status,
+                overall_status="ok",
+                structured_output_status="supported",
+                role_compatibility_status="compatible",
+                detail=_health_detail_for_success(
+                    response_status,
+                    supports_json_format=schema_mode != "none",
+                    requires_structured_extraction=self.requires_structured_extraction,
+                ),
+                recommended_action="No action required.",
+                schema_mode=schema_mode,
+                probe_attempts=attempts,
+            )
         except json.JSONDecodeError as error:
             return _connected_health(
                 self,
@@ -136,9 +175,9 @@ class OpenAICompatibleLLMProvider:
                 error,
                 error_detail,
                 response_format_rejected=(
-                    bool(supports_json_format)
-                    and _looks_like_response_format_rejection(error_detail)
+                    schema_mode != "none" and _looks_like_response_format_rejection(error_detail)
                 ),
+                schema_mode=schema_mode,
             )
         except MissingSecretEnvironmentVariableError as error:
             return _configuration_health(self, started, str(error))
@@ -153,6 +192,22 @@ class OpenAICompatibleLLMProvider:
             )
         except OSError as error:
             return _transport_health(self, started, error, timeout=False)
+
+    def _send_health_probe(
+        self,
+        payload: dict[str, object],
+        *,
+        timeout_seconds: float,
+    ) -> tuple[int, str | None]:
+        request = urllib.request.Request(
+            _openai_url(self.endpoint_url, "chat/completions"),
+            data=json.dumps(payload).encode("utf-8"),
+            headers=_headers(self.secret_env_var_name),
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            return int(response.status), _extract_chat_content(data)
 
     def estimate_tokens(self, input_text: str = "", output_text: str = "") -> TokenEstimate:
         return TokenEstimate(
@@ -292,8 +347,7 @@ class OpenAICompatibleEmbeddingProvider(OpenAICompatibleLLMProvider):
                         structured_output_status="not_applicable",
                         role_compatibility_status="compatible",
                         detail=(
-                            f"HTTP {response.status}; embeddings validated; "
-                            f"dimension={dimension}"
+                            f"HTTP {response.status}; embeddings validated; dimension={dimension}"
                         ),
                         recommended_action="No action required.",
                         chat_completion_status="not_applicable",
@@ -480,6 +534,9 @@ def _connected_health(
     detail: str,
     recommended_action: str,
     chat_completion_status: str = "supported",
+    failure_stage: str | None = None,
+    schema_mode: str = "none",
+    probe_attempts: int = 1,
 ) -> ProviderHealth:
     return ProviderHealth(
         status="ok" if overall_status in {"ok", "connected_with_warning"} else "error",
@@ -498,6 +555,9 @@ def _connected_health(
         http_status=http_status,
         detail_sanitized=sanitize_error_message(detail),
         recommended_action=recommended_action,
+        failure_stage=failure_stage,
+        schema_mode=schema_mode,
+        probe_attempts=probe_attempts,
     )
 
 
@@ -509,6 +569,7 @@ def _http_error_health(
     *,
     response_format_rejected: bool,
     chat_completion_status: str = "failed",
+    schema_mode: str = "none",
 ) -> ProviderHealth:
     code = int(error.code)
     authentication = "invalid" if code in {401, 403} else "valid"
@@ -563,6 +624,8 @@ def _http_error_health(
         quota_or_rate_limited=rate_limited,
         detail_sanitized=sanitize_error_message(safe_detail),
         recommended_action=action,
+        failure_stage="http",
+        schema_mode=schema_mode,
     )
 
 
@@ -585,6 +648,7 @@ def _configuration_health(
         overall_status="misconfigured",
         detail_sanitized=sanitize_error_message(detail),
         recommended_action="Set the named environment variable in the Memorist Core runtime.",
+        failure_stage="configuration",
     )
 
 
@@ -617,6 +681,7 @@ def _transport_health(
             if timeout
             else "Check DNS, container routing, port, and the provider base URL."
         ),
+        failure_stage="timeout" if timeout else "transport",
     )
 
 
@@ -650,3 +715,64 @@ def _looks_like_response_format_rejection(detail: str) -> bool:
     return "response_format" in lowered or (
         "json" in lowered and any(term in lowered for term in ("unsupported", "reject", "invalid"))
     )
+
+
+def _schema_mode(provider: OpenAICompatibleLLMProvider) -> str:
+    if provider.supports_structured_output:
+        return "json_schema"
+    if provider.supports_json_mode:
+        return "json_object"
+    return "none"
+
+
+def _health_probe_payload(
+    model_name: str,
+    *,
+    schema_mode: str,
+    corrective: bool = False,
+) -> dict[str, object]:
+    instruction = (
+        "Correct the previous response. Return exactly one JSON object with exactly "
+        'one field named "memorist_provider_test" whose string value is "ok".'
+        if corrective
+        else "Return exactly one JSON object with exactly one field named "
+        '"memorist_provider_test" whose string value is exactly "ok". '
+        "Do not add fields, prose, or markdown."
+    )
+    payload: dict[str, object] = {
+        "model": model_name,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "This is a Memorist provider compatibility test. Follow the "
+                    "requested JSON contract exactly."
+                ),
+            },
+            {"role": "user", "content": instruction},
+        ],
+    }
+    if schema_mode == "json_schema":
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "memorist_provider_health",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {"memorist_provider_test": {"type": "string", "const": "ok"}},
+                    "required": ["memorist_provider_test"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    elif schema_mode == "json_object":
+        payload["response_format"] = {"type": "json_object"}
+    return payload
+
+
+def _remaining_timeout(deadline: float) -> float:
+    remaining = deadline - perf_counter()
+    if remaining <= 0:
+        raise TimeoutError("provider compatibility test exceeded its total timeout")
+    return max(0.001, remaining)

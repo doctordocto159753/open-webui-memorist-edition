@@ -17,6 +17,7 @@ from memcore.memory_worker.providers.base import ProviderResponse
 from memcore.memory_worker.providers.openai_compatible import (
     OpenAICompatibleMemoryExtractionProvider,
 )
+from memcore.model_control.providers.base import ProviderHealth
 from memcore.model_control.repository import ModelControlRepository
 from memcore.model_control.schemas import ModelProfileCreate, ProviderType
 from memcore.models import ModelRole
@@ -376,6 +377,19 @@ def test_configured_memory_extraction_profile_is_recorded_for_import(
             supports_json_mode=True,
             privacy_acknowledged=True,
         )
+    )
+    model_control.record_health_event(
+        profile.model_profile_uuid,
+        ProviderHealth(
+            status="ok",
+            provider_type=profile.provider_type,
+            model_name=profile.model_name,
+            latency_ms=1,
+            local_only_safe=False,
+            authentication_status="ok",
+            role_compatibility_status="compatible",
+            overall_status="ok",
+        ),
     )
     model_control.set_default(ModelRole.MEMORY_EXTRACTION, profile.model_profile_uuid)
     service, run_uuid = _reconstructed_service(connection, tmp_path)

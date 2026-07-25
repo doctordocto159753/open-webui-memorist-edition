@@ -39,6 +39,8 @@ REQUIRED_SCRIPTS = [
 REQUIRED_FUNCTIONS = [
     "Test-MemoristDocker",
     "Test-MemoristPortFree",
+    "Get-MemoristExcludedTcpPortRanges",
+    "Get-MemoristAvailablePort",
     "Get-MemoristFreeDiskGb",
     "New-MemoristSecret",
     "Get-MemoristMaskedSecret",
@@ -52,14 +54,18 @@ REQUIRED_FUNCTIONS = [
     "Get-MemoristInstalledMode",
     "Get-MemoristComposeOverlay",
     "Test-MemoristFullReadiness",
+    "Get-MemoristProjectEnvironment",
+    "Test-MemoristNamedVolumeExists",
 ]
 
 # PR5-C role -> env var names the installer must write and Compose must pass.
 API_KEY_VARS = [
+    "MEMORIST_PREFLIGHT_API_KEY",
     "MEMORIST_MEMORY_EXTRACTION_API_KEY",
     "MEMORIST_HIGH_CONFIDENCE_EXTRACTION_API_KEY",
     "MEMORIST_EMBEDDING_API_KEY",
     "MEMORIST_PRIVACY_SENSITIVITY_API_KEY",
+    "MEMORIST_BLOCK_COMPACTION_API_KEY",
     "MEMORIST_IMPORT_RECONSTRUCTION_API_KEY",
 ]
 
@@ -68,6 +74,8 @@ REQUIRED_ENV_VARS = [
     "MEMORIST_ACTOR_SERVICE_TOKEN",
     "WEBUI_SECRET_KEY",
     "OPEN_WEBUI_PORT",
+    "MEMORIST_CORE_HOST_PORT",
+    "MEMORIST_INSTALLATION_ID",
     "MEMORIST_PORT",
     "COMPOSE_PROJECT_NAME",
     "MEMORIST_MODE",

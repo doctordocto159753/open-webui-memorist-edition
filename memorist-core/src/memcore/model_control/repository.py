@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from typing import Any
 
+from memcore.model_control.certification import (
+    certification_status,
+    profile_certification_fingerprint,
+)
 from memcore.model_control.providers.base import ProviderHealth
 from memcore.model_control.roles import MODEL_ROLE_SPECS
 from memcore.model_control.schemas import (
@@ -215,6 +220,12 @@ class ModelControlRepository:
             raise PrivacyAcknowledgementRequired(
                 "external or non-local profiles require explicit privacy acknowledgement before use"
             )
+        certification = self.profile_certification(profile)
+        if not certification["certification_current"]:
+            raise RepositoryError(
+                "model profile requires a current successful role certification "
+                f"before default assignment (status={certification['certification_status']})"
+            )
 
         previous = self.resolve_default(model_role, workspace_uuid, project_uuid)
         with self.connection:
@@ -299,10 +310,53 @@ class ModelControlRepository:
         values = dict(row)
         resolved_workspace = values.pop("resolved_workspace_uuid", None)
         resolved_project = values.pop("resolved_project_uuid", None)
-        payload = public_profile(_profile_from_sqlite_values(values))
+        resolved_profile = _profile_from_sqlite_values(values)
+        payload = public_profile(
+            resolved_profile,
+            self.profile_certification(resolved_profile),
+        )
         payload["workspace_uuid"] = resolved_workspace
         payload["project_uuid"] = resolved_project
         return payload
+
+    def remove_default(
+        self,
+        role: ModelRole | str,
+        workspace_uuid: str | None = None,
+        project_uuid: str | None = None,
+    ) -> dict[str, Any]:
+        model_role = _model_role(role)
+        previous = self.resolve_default(model_role, workspace_uuid, project_uuid)
+        previous_profile_uuid = (
+            str(previous["model_profile_uuid"])
+            if previous is not None and previous.get("model_profile_uuid")
+            else None
+        )
+        with self.connection:
+            cursor = self.connection.execute(
+                """
+                DELETE FROM model_role_defaults
+                WHERE role = ?
+                  AND COALESCE(workspace_uuid, '') = COALESCE(?, '')
+                  AND COALESCE(project_uuid, '') = COALESCE(?, '')
+                """,
+                (model_role.value, workspace_uuid, project_uuid),
+            )
+            reindex_required = bool(
+                cursor.rowcount
+                and model_role is ModelRole.EMBEDDING
+                and previous_profile_uuid is not None
+            )
+            if reindex_required:
+                assert previous_profile_uuid is not None
+                self.mark_embedding_records_stale(previous_profile_uuid)
+        return {
+            "role": model_role.value,
+            "workspace_uuid": workspace_uuid,
+            "project_uuid": project_uuid,
+            "removed": cursor.rowcount > 0,
+            "reindex_required": reindex_required,
+        }
 
     def record_usage_event(self, event: UsageEventCreate) -> dict[str, Any]:
         model_profile_uuid = event.model_profile_uuid
@@ -404,10 +458,9 @@ class ModelControlRepository:
             "latency_ms": health.latency_ms,
             "local_only_safe": health.local_only_safe,
             "detail_sanitized": sanitize_error_message(health.detail),
-            "result_ijson": prepare_ijson_field(
-                "metadata_ijson", health.model_dump(mode="json")
-            ),
+            "result_ijson": prepare_ijson_field("metadata_ijson", health.model_dump(mode="json")),
             "test_idempotency_key": test_idempotency_key,
+            "profile_fingerprint": profile_certification_fingerprint(profile),
             "created_at": utc_now(),
             "schema_version": 1,
         }
@@ -422,6 +475,25 @@ class ModelControlRepository:
                     return dict(existing)
             self.sqlite.insert("model_health_events", values)
         return values
+
+    def profile_certification(
+        self,
+        profile: ModelProfile | str,
+    ) -> dict[str, Any]:
+        resolved = self.get_profile(profile) if isinstance(profile, str) else profile
+        if resolved is None:
+            raise RepositoryError(f"model profile not found: {profile}")
+        row = self.connection.execute(
+            """
+            SELECT *
+            FROM model_health_events
+            WHERE model_profile_uuid = ?
+            ORDER BY created_at DESC, health_event_uuid DESC
+            LIMIT 1
+            """,
+            (resolved.model_profile_uuid,),
+        ).fetchone()
+        return certification_status(resolved, dict(row) if row is not None else None)
 
     def health(self) -> dict[str, Any]:
         profile_count = int(
@@ -626,7 +698,10 @@ def requires_privacy_acknowledgement(profile: ModelProfile) -> bool:
     return str(privacy_profile.get("risk_level", "low")).lower() in {"medium", "high", "external"}
 
 
-def public_profile(profile: ModelProfile) -> dict[str, Any]:
+def public_profile(
+    profile: ModelProfile,
+    certification: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     payload = profile.model_dump(mode="json")
     payload["endpoint_url"] = redact_endpoint(profile.endpoint_url)
     payload["cost_profile"] = _profile_ijson(profile, "cost_profile_ijson")
@@ -639,7 +714,21 @@ def public_profile(profile: ModelProfile) -> dict[str, Any]:
     payload.pop("latency_profile_ijson", None)
     payload.pop("pricing_ijson", None)
     payload.pop("metadata_ijson", None)
-    payload["secret_configured"] = profile.secret_strategy != "none"
+    reference_configured = bool(
+        profile.secret_strategy == "env_var" and profile.secret_env_var_name
+    )
+    reference_available = not reference_configured or bool(
+        os.environ.get(str(profile.secret_env_var_name))
+    )
+    payload["secret_configured"] = reference_configured
+    payload["secret_reference_configured"] = reference_configured
+    payload["secret_available_in_core"] = reference_available
+    payload["secret_available"] = reference_available
+    payload["authentication_status"] = "not_validated"
+    payload["certification_status"] = "unknown"
+    payload["certification_current"] = False
+    if certification:
+        payload.update(certification)
     payload.pop("secret_env_var_name", None)
     return payload
 

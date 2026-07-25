@@ -197,7 +197,7 @@ def test_openai_compatible_health_check_validates_json_mode(
     assert handler.last_payload["response_format"] == {"type": "json_object"}
 
 
-def test_openai_compatible_health_check_warns_without_structured_flags(
+def test_structured_role_health_is_incompatible_without_declared_json_capability(
     openai_json_mode_server: tuple[str, type[Any]],
 ) -> None:
     endpoint, handler = openai_json_mode_server
@@ -209,11 +209,15 @@ def test_openai_compatible_health_check_warns_without_structured_flags(
 
     health = provider.health_check()
 
-    assert health.status == "ok"
+    assert health.status == "error"
+    assert health.overall_status == "incompatible"
+    assert health.role_compatibility_status == "incompatible"
+    assert health.structured_output_status == "not_declared"
+    assert health.failure_stage == "capability_declaration"
     assert "response_format" not in handler.last_payload
     assert health.detail is not None
-    assert "chat completions validated" in health.detail
-    assert "may be unsuitable for structured memory tasks" in health.detail
+    assert "authentication and chat completions validated" in health.detail
+    assert "requires the profile to declare Supports JSON mode" in health.detail
 
 
 def test_openai_compatible_health_check_reports_json_mode_unsupported(
@@ -350,16 +354,15 @@ def test_remote_ack_required(client_and_db: tuple[TestClient, Path]) -> None:
     )
     assert ack["role"] == "memory_extraction"
     assert ack["acknowledged_data_sent"]["sends_raw_user_text"] is True
-    accepted = _assert_ok(
-        client.post(
-            "/memcore/model-control/defaults",
-            json={
-                "role": "memory_extraction",
-                "model_profile_uuid": created["model_profile_uuid"],
-            },
-        )
+    uncertified = client.post(
+        "/memcore/model-control/defaults",
+        json={
+            "role": "memory_extraction",
+            "model_profile_uuid": created["model_profile_uuid"],
+        },
     )
-    assert accepted["model_profile_uuid"] == created["model_profile_uuid"]
+    assert uncertified.status_code == 400
+    assert "certification" in uncertified.json()["detail"]
 
     rejected = client.post(
         "/memcore/model-control/profiles",
@@ -371,6 +374,78 @@ def test_remote_ack_required(client_and_db: tuple[TestClient, Path]) -> None:
         },
     )
     assert rejected.status_code == 422
+
+
+def test_certification_is_server_authoritative_stale_and_removable(
+    client_and_db: tuple[TestClient, Path],
+    openai_compatible_server: str,
+) -> None:
+    client, _db_path = client_and_db
+    _OpenAICompatibleHandler.reset()
+    created = _assert_ok(
+        client.post(
+            "/memcore/model-control/profiles",
+            json={
+                "provider_type": "openai_compatible_llm",
+                "provider_name": "controlled-local",
+                "model_name": "mock-chat",
+                "role": "memory_extraction",
+                "endpoint_url": openai_compatible_server,
+                "endpoint_is_local": True,
+                "supports_json_mode": True,
+            },
+        )
+    )
+    profile_uuid = created["model_profile_uuid"]
+    assert created["certification_status"] == "missing"
+    assert created["certification_current"] is False
+
+    blocked = client.post(
+        "/memcore/model-control/defaults",
+        json={"role": "memory_extraction", "model_profile_uuid": profile_uuid},
+    )
+    assert blocked.status_code == 400
+    assert "status=missing" in blocked.json()["detail"]
+
+    tested = _assert_ok(
+        client.post(f"/memcore/model-control/profiles/{profile_uuid}/test", json={})
+    )
+    assert tested["certification"]["certification_status"] == "current"
+    assert tested["certification"]["certification_current"] is True
+    refreshed = _assert_ok(client.get("/memcore/model-control/profiles"))["items"]
+    persisted = next(item for item in refreshed if item["model_profile_uuid"] == profile_uuid)
+    assert persisted["certification_current"] is True
+
+    _assert_ok(
+        client.post(
+            "/memcore/model-control/defaults",
+            json={"role": "memory_extraction", "model_profile_uuid": profile_uuid},
+        )
+    )
+    changed = _assert_ok(
+        client.patch(
+            f"/memcore/model-control/profiles/{profile_uuid}",
+            json={"model_name": "changed-model"},
+        )
+    )
+    assert changed["certification_status"] == "stale"
+    assert changed["certification_current"] is False
+    effective = _assert_ok(client.get("/memcore/model-control/defaults?role=memory_extraction"))[
+        "item"
+    ]
+    assert effective["scope_source"] == "built_in_fallback"
+    assert effective["fallback_reason"] == "provider_certification_stale"
+
+    stale_blocked = client.post(
+        "/memcore/model-control/defaults",
+        json={"role": "memory_extraction", "model_profile_uuid": profile_uuid},
+    )
+    assert stale_blocked.status_code == 400
+    assert "status=stale" in stale_blocked.json()["detail"]
+
+    removed = _assert_ok(client.delete("/memcore/model-control/defaults?role=memory_extraction"))
+    assert removed["removed"] is True
+    assert _assert_ok(client.get("/memcore/model-control/defaults"))["items"] == []
 
 
 def test_preflight_provider_fail_open(client_and_db: tuple[TestClient, Path]) -> None:
@@ -414,6 +489,8 @@ def test_preflight_model_lifecycle_records_before_attachment(
     openai_compatible_server: str,
 ) -> None:
     client, db_path = client_and_db
+    _OpenAICompatibleHandler.reset()
+    _OpenAICompatibleHandler.expected_chat_model = "mock-preflight"
     profile = _assert_ok(
         client.post(
             "/memcore/model-control/profiles",
@@ -429,10 +506,17 @@ def test_preflight_model_lifecycle_records_before_attachment(
     )
     _assert_ok(
         client.post(
+            f"/memcore/model-control/profiles/{profile['model_profile_uuid']}/test",
+            json={},
+        )
+    )
+    _assert_ok(
+        client.post(
             "/memcore/model-control/defaults",
             json={"role": "preflight", "model_profile_uuid": profile["model_profile_uuid"]},
         )
     )
+    _OpenAICompatibleHandler.response_content = "not-json"
     session = _assert_ok(client.post("/memcore/sessions", json={"title": "preflight-model"}))
     message = _assert_ok(
         client.post(

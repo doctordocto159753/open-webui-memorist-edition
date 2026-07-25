@@ -109,9 +109,7 @@ class MemoryWorkerPipeline:
             target_message_uuid=message.message_uuid,
             raw_text=message.raw_text or "",
             model_target=profile,
-            model_role=str(
-                profile.get("model_role") or ModelRole.MEMORY_EXTRACTION.value
-            ),
+            model_role=str(profile.get("model_role") or ModelRole.MEMORY_EXTRACTION.value),
         )
         return {
             "input_content_hash": identity.input_content_hash,
@@ -446,9 +444,7 @@ class MemoryWorkerPipeline:
             workspace_uuid=(
                 str(scope["workspace_uuid"]) if scope and scope["workspace_uuid"] else None
             ),
-            project_uuid=(
-                str(scope["project_uuid"]) if scope and scope["project_uuid"] else None
-            ),
+            project_uuid=(str(scope["project_uuid"]) if scope and scope["project_uuid"] else None),
         )
         if resolution.model_profile_uuid:
             profile = repository.get_profile(resolution.model_profile_uuid)
@@ -636,8 +632,7 @@ class MemoryWorkerPipeline:
         if artifact is None:
             return None
         execution = self.connection.execute(
-            "SELECT prompt_execution_uuid FROM jakobson_analysis_runs "
-            "WHERE analysis_run_uuid = ?",
+            "SELECT prompt_execution_uuid FROM jakobson_analysis_runs WHERE analysis_run_uuid = ?",
             (analysis_run_uuid,),
         ).fetchone()
         candidate = MemoryCandidate(
@@ -693,9 +688,7 @@ class MemoryWorkerPipeline:
         for candidate in candidates:
             evidence_rows = self.candidates.list_evidence(candidate.candidate_uuid)
             evidence_text = (
-                evidence_rows[0].evidence_text
-                if evidence_rows
-                else candidate.normalized_text
+                evidence_rows[0].evidence_text if evidence_rows else candidate.normalized_text
             )
             privacy = invoker.invoke_structured(
                 StageInvocationRequest(
@@ -720,9 +713,7 @@ class MemoryWorkerPipeline:
                 deterministic_output=deterministic_privacy,
                 lease_fence=lease_fence,
             )
-            privacy_classification = str(
-                (privacy.output or {}).get("classification") or "abstain"
-            )
+            privacy_classification = str((privacy.output or {}).get("classification") or "abstain")
             with fenced_write(self.connection, lease_fence):
                 self._apply_privacy_result(candidate, privacy_classification)
             results.append(privacy.model_dump(mode="json", exclude={"output"}))
@@ -902,8 +893,7 @@ class MemoryWorkerPipeline:
                 projection_sql += " AND embedding_dimension = ?"
                 projection_params += (expected_dimension,)
             projection_exists = (
-                self.connection.execute(projection_sql, projection_params).fetchone()
-                is not None
+                self.connection.execute(projection_sql, projection_params).fetchone() is not None
             )
             if projection_exists:
                 attempt_row = self.connection.execute(
@@ -991,9 +981,7 @@ class MemoryWorkerPipeline:
                         (utc_now(), version_uuid),
                     )
             else:
-                terminal_status = (
-                    "skipped" if result.status == "abstained" else "pending"
-                )
+                terminal_status = "skipped" if result.status == "abstained" else "pending"
                 with fenced_write(self.connection, lease_fence):
                     self.connection.execute(
                         "UPDATE embedding_outbox SET status = ?, "

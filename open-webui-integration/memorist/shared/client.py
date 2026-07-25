@@ -4,6 +4,7 @@ import base64
 import hmac
 import json
 import secrets
+import socket
 import time
 import urllib.error
 import urllib.parse
@@ -12,7 +13,13 @@ from hashlib import sha256
 from typing import Any
 
 from .config import MemoristIntegrationConfig, load_config
-from .errors import MemoristCoreUnavailable, UnsafeMemoristUrl, sanitize_error
+from .errors import (
+    MemoristCoreHTTPError,
+    MemoristCoreTimeout,
+    MemoristCoreUnavailable,
+    UnsafeMemoristUrl,
+    sanitize_error,
+)
 from .schemas import CapturedMessage, PreflightResult, ResolvedSession, ResolvedTurnPolicy
 
 _ALLOWED_HOSTS = {"localhost", "127.0.0.1", "::1", "memorist-core", "host.docker.internal"}
@@ -32,6 +39,29 @@ class MemoristClient:
             "GET",
             "/memcore/openwebui/status",
             retry=True,
+            actor_user_id=user_id,
+            actor_workspace_id=workspace_uuid,
+        )
+
+    def record_integration_outcome(
+        self,
+        *,
+        user_id: str,
+        workspace_uuid: str,
+        stage: str,
+        outcome: str,
+        degraded_reason: str | None = None,
+        detail_sanitized: str | None = None,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/memcore/openwebui/outcomes",
+            {
+                "stage": stage,
+                "outcome": outcome,
+                "degraded_reason": degraded_reason,
+                "detail_sanitized": detail_sanitized,
+            },
             actor_user_id=user_id,
             actor_workspace_id=workspace_uuid,
         )
@@ -282,6 +312,7 @@ class MemoristClient:
             path.startswith("/memcore/memory-control/")
             or path.startswith("/memcore/model-control/")
             or path.startswith("/memcore/memory-processing/runs/")
+            or path == "/memcore/openwebui/outcomes"
             or path == "/memcore/openwebui/status"
         ):
             raise MemoristCoreUnavailable("backend actor proxy path is not allowed")
@@ -317,6 +348,11 @@ class MemoristClient:
                 last_error = error
                 if attempt + 1 < attempts:
                     time.sleep(0.05)
+        if _is_timeout_error(last_error):
+            raise MemoristCoreTimeout(
+                f"Memorist Core request timed out after "
+                f"{self.config.timeout_seconds_for(path):g}s"
+            )
         raise MemoristCoreUnavailable(sanitize_error(last_error or "request failed"))
 
     def _send(
@@ -340,8 +376,14 @@ class MemoristClient:
             headers=headers,
             method=method,
         )
-        with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as response:
-            body = response.read().decode("utf-8")
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=self.config.timeout_seconds_for(path),
+            ) as response:
+                body = response.read().decode("utf-8")
+        except urllib.error.HTTPError as error:
+            raise _core_http_error(error) from error
         decoded = json.loads(body) if body else {}
         if not isinstance(decoded, dict):
             raise MemoristCoreUnavailable("Memorist Core returned non-object response")
@@ -395,5 +437,26 @@ def _payload_identity(payload: dict[str, Any] | None, *keys: str) -> str | None:
     return None
 
 
+def _is_timeout_error(error: BaseException | None) -> bool:
+    return isinstance(error, (TimeoutError, socket.timeout)) or (
+        isinstance(error, urllib.error.URLError)
+        and isinstance(error.reason, (TimeoutError, socket.timeout))
+    )
+
+
 def _b64(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode()
+
+
+def _core_http_error(error: urllib.error.HTTPError) -> MemoristCoreHTTPError:
+    try:
+        raw = error.read(4096).decode("utf-8", errors="replace")
+        payload = json.loads(raw) if raw else {}
+        detail_value = payload.get("detail") if isinstance(payload, dict) else None
+        detail = sanitize_error(
+            detail_value if isinstance(detail_value, str) else f"Core HTTP {error.code}"
+        )
+    except (OSError, json.JSONDecodeError):
+        detail = f"Core HTTP {error.code}"
+    status = int(error.code) if 400 <= int(error.code) < 500 else 502
+    return MemoristCoreHTTPError(status, detail)

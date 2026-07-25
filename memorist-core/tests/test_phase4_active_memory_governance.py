@@ -18,7 +18,7 @@ from memcore.governance.privacy import PrivacyService
 from memcore.governance.repositories import GovernanceRepository
 from memcore.memory_worker.fencing import LeaseFenceRejected
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
-from memcore.model_control.providers.base import StructuredCompletionResponse
+from memcore.model_control.providers.base import ProviderHealth, StructuredCompletionResponse
 from memcore.model_control.repository import ModelControlRepository
 from memcore.model_control.schemas import ModelProfileCreate, ProviderType
 from memcore.models import MemoryBlockType, Message, ModelRole
@@ -170,9 +170,7 @@ def test_configured_compaction_provider_changes_block_and_replays_idempotently(
                         {
                             "text": source.normalized_text,
                             "source_memory_uuids": [source.memory_uuid],
-                            "source_memory_version_uuids": [
-                                source.memory_version_uuid
-                            ],
+                            "source_memory_version_uuids": [source.memory_version_uuid],
                         }
                     ],
                     "excluded_memory_version_uuids": [],
@@ -396,9 +394,12 @@ def test_compaction_lease_loss_after_provider_fences_stage_and_block_writes(
     with pytest.raises(LeaseFenceRejected, match="test lease lost"):
         BlockCompactor(connection).compact(block.block_uuid, lease_fence=fence)
 
-    assert connection.execute(
-        "SELECT COUNT(*) FROM processing_stage_runs WHERE stage = 'block_compaction'"
-    ).fetchone()[0] == 0
+    assert (
+        connection.execute(
+            "SELECT COUNT(*) FROM processing_stage_runs WHERE stage = 'block_compaction'"
+        ).fetchone()[0]
+        == 0
+    )
     assert len(ActiveMemoryRepository(connection).list_versions(block.block_uuid)) == 0
 
 
@@ -655,6 +656,19 @@ def _configure_compaction_profile(connection: sqlite3.Connection) -> str:
             supports_json_mode=True,
             privacy_acknowledged=True,
         )
+    )
+    repository.record_health_event(
+        profile.model_profile_uuid,
+        ProviderHealth(
+            status="ok",
+            provider_type=profile.provider_type,
+            model_name=profile.model_name,
+            latency_ms=1,
+            local_only_safe=True,
+            authentication_status="not_required",
+            role_compatibility_status="compatible",
+            overall_status="ok",
+        ),
     )
     repository.set_default(ModelRole.BLOCK_COMPACTION, profile.model_profile_uuid)
     return profile.model_profile_uuid

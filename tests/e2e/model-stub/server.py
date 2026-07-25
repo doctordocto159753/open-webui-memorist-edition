@@ -51,6 +51,8 @@ def _deterministic_answer(messages: list[dict]) -> str:
             else:
                 question = str(content or "")
             break
+    if "memorist_provider_test" in question:
+        return json.dumps({"memorist_provider_test": "ok"})
     try:
         provider_test = json.loads(question)
     except (json.JSONDecodeError, TypeError):

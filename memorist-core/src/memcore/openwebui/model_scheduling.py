@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from memcore.model_control.repository import ModelControlRepository
 from memcore.model_control.resolution import RoleResolutionService
+from memcore.model_control.storage import ModelControlStorage, model_control_repository
 from memcore.models import ModelRole
 
 
@@ -32,6 +32,8 @@ def resolve_scoped_model_identity(
     connection: Any,
     session_uuid: str,
     role: ModelRole = ModelRole.MEMORY_EXTRACTION,
+    *,
+    repository: ModelControlStorage | None = None,
 ) -> ScheduledModelIdentity:
     session = connection.execute(
         "SELECT workspace_uuid, project_uuid FROM sessions WHERE session_uuid = ?",
@@ -41,7 +43,8 @@ def resolve_scoped_model_identity(
         raise LookupError(f"session not found for model scheduling: {session_uuid}")
     workspace_uuid = _text(session["workspace_uuid"])
     project_uuid = _text(session["project_uuid"])
-    resolution = RoleResolutionService(ModelControlRepository(connection)).resolve(
+    selected_repository = repository or model_control_repository(connection)
+    resolution = RoleResolutionService(selected_repository).resolve(
         role,
         workspace_uuid=workspace_uuid,
         project_uuid=project_uuid,

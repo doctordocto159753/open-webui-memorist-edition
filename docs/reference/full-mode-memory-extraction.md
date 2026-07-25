@@ -68,7 +68,7 @@ Other local gateways, self-hosted runtimes, or remote OpenAI-compatible services
 1. Select **Create processing node** from **Settings → Memorist → Processing Nodes**.
 2. Enter the OpenAI-compatible fields above and save the node as a Model Control profile.
 3. To change a provider, open the profile from the processing-node list, edit the endpoint, model, locality, secret env-var name, or capability flags, and save again.
-4. Use **Test profile** before assigning the profile as a default. The test validates real role capability, not just endpoint reachability: LLM roles call `POST /v1/chat/completions`, while the `embedding` role calls `POST /v1/embeddings`. `GET /v1/models` is optional diagnostic metadata only and is not the success gate. The test must resolve the configured secret environment variable from the Memorist backend container/process environment, receive a compatible response, and actively validate JSON object responses with `response_format: {"type": "json_object"}` when `supports_json_mode` or `supports_structured_output` is enabled.
+4. Use **Test profile** before assigning the profile as a default. The test validates real role capability, not just endpoint reachability: LLM roles call `POST /v1/chat/completions`, while the `embedding` role calls `POST /v1/embeddings`. `GET /v1/models` is optional diagnostic metadata only and is not the success gate. The test resolves the configured secret reference inside Core and persists a fingerprinted certification. Strict structured-output profiles receive an exact constant JSON schema; JSON-object profiles receive an exact marker instruction and one bounded corrective retry.
 5. Review the resolved profile details after saving. For Full Mode extraction, the worker should resolve this profile for the `memory_extraction` role.
 
 ### Acknowledge privacy for remote endpoints
@@ -79,13 +79,19 @@ Acknowledgement records the profile, risk level, and data categories in Model Co
 
 ### Assign role defaults
 
-After the profile is saved, tested, and privacy-acknowledged when required:
+After the exact profile is saved, successfully certified, and
+privacy-acknowledged when required:
 
 1. Open **Settings → Memorist → Processing Nodes → Role defaults**.
 2. Choose the role, usually `memory_extraction` for Full Mode memory extraction.
 3. Select the tested processing node profile.
 4. Save the default assignment.
 5. Confirm the resolved default shown by the UI. After this, `/memcore/memory-worker/process-message/{message_uuid}` uses the configured profile and should record `provider_type=openai_compatible` plus a non-null `model_profile_uuid` in `memory_processing_runs`, `prompt_execution_runs`, and `model_usage_events`.
+
+Endpoint, model, capability, enabled-state, or secret-reference edits make the
+certification stale. Runtime then uses the role's documented safe fallback
+rather than calling an uncertified profile. Retest before reassigning. The UI
+also supports removing a global role default without deleting the profile.
 
 API keys must be supplied through the named environment variable in the Memorist backend container/process environment. Model Control stores only `secret_env_var_name`; raw keys must not be included in endpoint URLs, profile metadata, cost, quality, latency, privacy payloads, or diagnostics. Raw API keys are not persisted or returned.
 
@@ -116,6 +122,10 @@ curl -X POST http://localhost:8777/memcore/model-control/profiles \
 Set it as the memory extraction default:
 
 ```bash
+# First certify PROFILE_UUID_FROM_CREATE_RESPONSE with:
+curl -X POST http://localhost:8777/memcore/model-control/profiles/PROFILE_UUID_FROM_CREATE_RESPONSE/test \
+  -H 'Content-Type: application/json' -d '{}'
+
 curl -X POST http://localhost:8777/memcore/model-control/defaults \
   -H 'Content-Type: application/json' \
   -d '{
@@ -136,5 +146,5 @@ Official ChatGPT/OpenAI imports use the same canonical `memory_extraction` role 
 schema as live capture. `full_memory_reconstruction` schedules one durable low-priority job
 per eligible imported user or assistant message, records prompt/model usage provenance, and
 does not sample for cost reasons. See `docs/reference/import.md` for the bounded processing and retry
-contract. The import API control plane is currently SQLite-backed; direct PostgreSQL import
-orchestration parity remains explicitly tracked as follow-up work.
+contract. In Full Mode the import control plane and its processing-node
+authority are PostgreSQL-backed; SQLite remains the Lite canonical store.

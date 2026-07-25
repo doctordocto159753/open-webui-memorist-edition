@@ -23,6 +23,9 @@
     Skip all prompts and accept safe defaults (local deterministic, no API key).
     Useful for CI and unattended installs.
 
+.PARAMETER EnableOllama
+    Explicitly enable Open WebUI's Ollama integration. It is off by default.
+
 .EXAMPLE
     .\Install-Memorist.ps1
 
@@ -37,6 +40,7 @@ param(
     [ValidateSet('lite', 'full')][string]$Mode,
     [switch]$DryRun,
     [switch]$NonInteractive,
+    [switch]$EnableOllama,
     [switch]$NoBrowser
 )
 
@@ -52,10 +56,24 @@ Set-Location $root
 # An existing .env is authoritative. A mode change requires the certified data
 # migration workflow and is never performed implicitly by this installer.
 $envPath = Join-Path $root '.env'
+$hadExistingEnv = Test-Path -LiteralPath $envPath
 $installedMode = $null
+$recoveredEnvironment = @{}
 if (Test-Path -LiteralPath $envPath) {
     try { $installedMode = Get-MemoristInstalledMode -Root $root } catch {
         Write-MemoristLog $_.Exception.Message 'FAIL'; exit 1
+    }
+} elseif (Get-Command (Get-MemoristDockerCli) -ErrorAction SilentlyContinue) {
+    $recoveredEnvironment = Get-MemoristProjectEnvironment -ProjectName 'memorist'
+    if ($recoveredEnvironment.Count -gt 0) {
+        $recoveredMode = [string]$recoveredEnvironment['MEMORIST_MODE']
+        if ([string]::IsNullOrWhiteSpace($recoveredMode)) {
+            $recoveredMode = [string]$recoveredEnvironment['MEMORIST_RUNTIME_PROFILE']
+        }
+        if ($recoveredMode -in @('lite', 'full')) {
+            $installedMode = $recoveredMode
+            Write-MemoristLog 'Recovered the existing Memorist installation identity from the stable Docker project.' 'OK'
+        }
     }
 }
 if ([string]::IsNullOrWhiteSpace($Mode)) {
@@ -102,14 +120,44 @@ if (-not $docker.Ready) {
 
 # --- 2. Port + disk checks ---------------------------------------------------
 Write-MemoristLog 'Checking ports and disk...' 'STEP'
-$webPort = 3000
-$corePort = 8777
-foreach ($p in @(@{Name = 'Open WebUI'; Port = $webPort }, @{Name = 'Memorist Core'; Port = $corePort })) {
-    if (Test-MemoristPortFree -Port $p.Port) {
-        Write-MemoristLog ("Port {0} is free ({1})" -f $p.Port, $p.Name) 'OK'
-    } else {
-        Write-MemoristLog ("Port {0} is in use. Set OPEN_WEBUI_PORT / MEMORIST_PORT in .env or stop the other app." -f $p.Port) 'WARN'
+$existing = if (Test-Path -LiteralPath $envPath) {
+    Read-MemoristEnvLines -Path $envPath
+} else {
+    @($recoveredEnvironment.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
+}
+function Get-ExistingValue {
+    param([string]$Key)
+    foreach ($l in $existing) {
+        if ($l -match "^\s*$([regex]::Escape($Key))=(.*)$") { return $Matches[1] }
     }
+    return ''
+}
+
+if ($Mode -eq 'full' -and $docker.Ready -and $existing.Count -eq 0 -and
+    (Test-MemoristNamedVolumeExists -Name 'memorist_memorist-postgres-data')) {
+    Write-MemoristLog 'An existing Memorist PostgreSQL data volume was found, but no authoritative installation credentials could be recovered.' 'FAIL'
+    Write-Host '  Restore the previous .env beside this package, or restore/start the previous Memorist containers and rerun.' -ForegroundColor Yellow
+    Write-Host '  The installer will not generate a replacement password or alter the PostgreSQL role.' -ForegroundColor Yellow
+    exit 1
+}
+
+$existingWebPort = Get-ExistingValue 'OPEN_WEBUI_PORT'
+$existingCorePort = Get-ExistingValue 'MEMORIST_CORE_HOST_PORT'
+if ([string]::IsNullOrWhiteSpace($existingCorePort)) {
+    $existingCorePort = Get-ExistingValue 'MEMORIST_PORT'
+}
+if ($existingWebPort -match '^\d+$' -and $existingCorePort -match '^\d+$') {
+    $webPort = [int]$existingWebPort
+    $corePort = [int]$existingCorePort
+    Write-MemoristLog ("Reusing installed host ports {0} (Open WebUI) and {1} (Core)." -f $webPort, $corePort) 'OK'
+} else {
+    $excludedRanges = @(Get-MemoristExcludedTcpPortRanges)
+    $webPort = Get-MemoristAvailablePort -PreferredPort 3000 -ExcludedRanges $excludedRanges
+    $corePort = Get-MemoristAvailablePort -PreferredPort 8777 -ExcludedRanges $excludedRanges -PortProbe {
+        param($candidate)
+        return ($candidate -ne $webPort -and (Test-MemoristPortFree -Port $candidate))
+    }
+    Write-MemoristLog ("Selected host ports {0} (Open WebUI) and {1} (Core); active and excluded ranges were skipped." -f $webPort, $corePort) 'OK'
 }
 $freeGb = Get-MemoristFreeDiskGb -Path $root
 $minimumDiskGb = if ($Mode -eq 'full') { 8 } else { 4 }
@@ -141,22 +189,13 @@ if (-not $lines -or $lines.Count -eq 0) {
     if (-not $DryRun) { exit 1 }
 }
 
-# Session/actor secrets: generate only when absent so re-runs stay idempotent.
-$existing = Read-MemoristEnvLines -Path $envPath
-function Get-ExistingValue {
-    param([string]$Key)
-    foreach ($l in $existing) {
-        if ($l -match "^\s*$([regex]::Escape($Key))=(.*)$") { return $Matches[1] }
-    }
-    return ''
-}
-
 # Parentheses keep the release forbidden-file scanner from flagging these as
 # "keyword = <long token>" false positives; no real secret is present here.
 $actorAssertion = (Get-ExistingValue 'MEMORIST_ACTOR_ASSERTION_SECRET')
 $actorToken = (Get-ExistingValue 'MEMORIST_ACTOR_SERVICE_TOKEN')
 $webuiSecret = (Get-ExistingValue 'WEBUI_SECRET_KEY')
 $postgresPassword = (Get-ExistingValue 'MEMORIST_POSTGRES_PASSWORD')
+$installationId = (Get-ExistingValue 'MEMORIST_INSTALLATION_ID')
 if ([string]::IsNullOrWhiteSpace($actorAssertion)) { $actorAssertion = (New-MemoristSecret) }
 if ([string]::IsNullOrWhiteSpace($actorToken)) { $actorToken = (New-MemoristSecret) }
 if ([string]::IsNullOrWhiteSpace($webuiSecret)) { $webuiSecret = (New-MemoristSecret) }
@@ -165,14 +204,19 @@ if ($Mode -eq 'full' -and [string]::IsNullOrWhiteSpace($postgresPassword)) {
     # in POSTGRES_PASSWORD and the PostgreSQL URI without lossy encoding.
     $postgresPassword = (New-MemoristSecret -Bytes 32)
 }
+if ([string]::IsNullOrWhiteSpace($installationId)) {
+    $installationId = [guid]::NewGuid().ToString()
+}
 
 $lines = Set-MemoristEnvValue -Lines $lines -Key 'COMPOSE_PROJECT_NAME' -Value 'memorist'
+$lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_INSTALLATION_ID' -Value $installationId
 $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_MODE' -Value $Mode
 $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_LOCAL_ONLY' -Value 'true'
 $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_ACTOR_ASSERTION_SECRET' -Value $actorAssertion
 $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_ACTOR_SERVICE_TOKEN' -Value $actorToken
 $lines = Set-MemoristEnvValue -Lines $lines -Key 'WEBUI_SECRET_KEY' -Value $webuiSecret
 $lines = Set-MemoristEnvValue -Lines $lines -Key 'OPEN_WEBUI_PORT' -Value $webPort.ToString()
+$lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_CORE_HOST_PORT' -Value $corePort.ToString()
 $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_PORT' -Value $corePort.ToString()
 if ($Mode -eq 'full') {
     $lines = Set-MemoristEnvValue -Lines $lines -Key 'MEMORIST_RUNTIME_PROFILE' -Value 'full'
@@ -238,7 +282,7 @@ if ($choice -eq '2') {
 
             $shareAll = 'n'
             if (-not $NonInteractive) {
-                $shareAll = Read-Host 'Reuse this key for the other memory roles (embedding, privacy, import, high-confidence)? [y/N]'
+                $shareAll = Read-Host 'Reuse this key for all other processing roles? [y/N]'
             }
             if ($shareAll -match '^(y|yes)$') {
                 foreach ($kv in $roles.GetEnumerator()) {
@@ -263,6 +307,24 @@ if ($choice -eq '2') {
     Write-MemoristLog 'Using local deterministic memory extraction (no API key).' 'OK'
 }
 
+$ollamaValue = (Get-ExistingValue 'ENABLE_OLLAMA_API')
+if ([string]::IsNullOrWhiteSpace($ollamaValue)) { $ollamaValue = 'false' }
+if ($EnableOllama) {
+    $ollamaValue = 'true'
+} elseif (-not $hadExistingEnv -and -not $NonInteractive -and -not $DryRun) {
+    $ollamaAnswer = Read-Host 'Enable Open WebUI Ollama discovery on this machine? [y/N]'
+    $ollamaValue = if ($ollamaAnswer -match '^(y|yes)$') { 'true' } else { 'false' }
+}
+$lines = Set-MemoristEnvValue -Lines $lines -Key 'ENABLE_OLLAMA_API' -Value $ollamaValue
+$ragEmbeddingEngine = (Get-ExistingValue 'OPENWEBUI_RAG_EMBEDDING_ENGINE')
+if ([string]::IsNullOrWhiteSpace($ragEmbeddingEngine)) { $ragEmbeddingEngine = 'openai' }
+$lines = Set-MemoristEnvValue -Lines $lines -Key 'OPENWEBUI_RAG_EMBEDDING_ENGINE' -Value $ragEmbeddingEngine
+if ($ollamaValue -eq 'true') {
+    Write-MemoristLog 'Ollama integration explicitly enabled; confirm its endpoint in Open WebUI.' 'OK'
+} else {
+    Write-MemoristLog 'Ollama integration disabled; no missing-service discovery probes will run.' 'OK'
+}
+
 # --- 6. Write .env -----------------------------------------------------------
 if ($DryRun) {
     Write-MemoristLog ("Dry run: would write {0} ({1} keys, secrets generated in-memory only)." -f $envPath, $lines.Count) 'OK'
@@ -273,16 +335,18 @@ if ($DryRun) {
 
 # --- 7. Validate + start services -------------------------------------------
 $composeFile = Get-MemoristComposeFile -Root $root
-if ($DryRun -or -not $docker.Ready) {
-    Write-MemoristLog 'Validating Compose configuration...' 'STEP'
-    if (-not $docker.Ready) {
-        Write-MemoristLog 'Docker/Compose is required to validate the effective package configuration.' 'FAIL'
+Write-MemoristLog 'Validating the final rendered Compose configuration...' 'STEP'
+if (-not $docker.Ready) {
+    Write-MemoristLog 'Docker/Compose is required to validate the effective package configuration.' 'FAIL'
+    if ($DryRun) {
         Write-MemoristLog 'Dry run failed. No containers were started and no secrets were written.' 'FAIL'
-        exit 1
     }
-
+    exit 1
+}
+if ($DryRun) {
     # Compose validation uses process-scoped values only; dry-run never writes
     # them to disk or prints them.
+    $env:MEMORIST_INSTALLATION_ID = $installationId
     $env:WEBUI_SECRET_KEY = $webuiSecret
     $env:MEMORIST_ACTOR_ASSERTION_SECRET = $actorAssertion
     $env:MEMORIST_ACTOR_SERVICE_TOKEN = $actorToken
@@ -291,23 +355,45 @@ if ($DryRun -or -not $docker.Ready) {
         $env:MEMORIST_POSTGRES_PASSWORD = $postgresPassword
         $env:MEMORIST_POSTGRES_DSN = ("postgresql://memorist:{0}@postgres:5432/memorist" -f $postgresPassword)
     }
-    $rc = Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments @('config', '-q')
-    if ($rc -ne 0) {
-        Write-MemoristLog 'Compose configuration failed to validate.' 'FAIL'
+}
+$rc = Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments @('config', '-q')
+if ($rc -ne 0) {
+    Write-MemoristLog 'Compose configuration failed to validate; no application services were started.' 'FAIL'
+    if ($DryRun) {
         Write-MemoristLog 'Dry run failed. No containers were started and no secrets were written.' 'FAIL'
-        exit 1
     }
-    Write-MemoristLog 'Compose configuration is valid.' 'OK'
+    exit 1
+}
+Write-MemoristLog 'Compose configuration is valid.' 'OK'
+if ($DryRun) {
     Write-Host ''
     Write-MemoristLog 'Dry run complete. No containers were started and no secrets were written.' 'OK'
     exit 0
 }
 
 Write-MemoristLog 'Starting Docker-backed services (first run pulls/builds images)...' 'STEP'
+if ($Mode -eq 'full') {
+    Write-MemoristLog 'Reconciling the preserved PostgreSQL credential before starting application services...' 'STEP'
+    $postgresStart = Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments @('up', '-d', 'postgres')
+    if ($postgresStart -ne 0) {
+        Write-MemoristLog 'PostgreSQL could not be started for credential preflight.' 'FAIL'
+        exit 1
+    }
+    $postgresCredentialOk = Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments @(
+        'exec', '-T', 'postgres', 'sh', '-ec',
+        'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT 1" >/dev/null'
+    )
+    if ($postgresCredentialOk -ne 0) {
+        Write-MemoristLog 'The configured PostgreSQL credential does not match the preserved database volume.' 'FAIL'
+        Write-Host '  Restore the authoritative previous .env and rerun. No database role or data was changed.' -ForegroundColor Yellow
+        exit 1
+    }
+    Write-MemoristLog 'Preserved PostgreSQL credential preflight passed.' 'OK'
+}
 $upArgs = @('up', '-d', '--build', '--remove-orphans')
 $rc = Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments $upArgs
 if ($rc -ne 0) {
-    Write-MemoristLog 'Compose failed to start services. Run Show-Memorist-Logs.ps1 to inspect.' 'FAIL'
+    Write-MemoristLog ("Compose failed to start services. Confirm host ports {0} and {1} are still available, edit OPEN_WEBUI_PORT / MEMORIST_CORE_HOST_PORT if needed, then rerun. Run Show-Memorist-Logs.ps1 to inspect." -f $webPort, $corePort) 'FAIL'
     exit 1
 }
 

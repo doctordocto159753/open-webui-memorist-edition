@@ -9,6 +9,9 @@ services:
       MEMORIST_ACTOR_ASSERTION_SECRET: ${MEMORIST_ACTOR_ASSERTION_SECRET:?required}
       MEMORIST_ACTOR_SERVICE_TOKEN: ${MEMORIST_ACTOR_SERVICE_TOKEN:?required}
       MEMORIST_OPENWEBUI_WORKSPACE_UUID: ${MEMORIST_OPENWEBUI_WORKSPACE_UUID:?required}
+      ENABLE_OLLAMA_API: ${ENABLE_OLLAMA_API:-false}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      RAG_EMBEDDING_ENGINE: ${OPENWEBUI_RAG_EMBEDDING_ENGINE:-openai}
       PYTHONPATH: /memorist-integration
     command: ["python", "-m", "memorist.backend.openwebui_entrypoint"]
     ports:
@@ -52,7 +55,7 @@ services:
       MEMORIST_ACTOR_ASSERTION_SECRET: ${MEMORIST_ACTOR_ASSERTION_SECRET:?required}
       MEMORIST_ACTOR_SERVICE_TOKEN: ${MEMORIST_ACTOR_SERVICE_TOKEN:?required}
     ports:
-      - "127.0.0.1:${MEMORIST_PORT:-8777}:8777"
+      - "127.0.0.1:${MEMORIST_CORE_HOST_PORT:-${MEMORIST_PORT:-8777}}:8777"
     volumes:
       - memorist-objects:/data/objects
       - memorist-imports:/data/imports

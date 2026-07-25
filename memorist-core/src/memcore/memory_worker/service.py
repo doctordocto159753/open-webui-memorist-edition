@@ -181,8 +181,7 @@ class MemoryJobWorkerService:
                     prepared.input_content_hash != expected_snapshot["input_content_hash"]
                     or prepared.processing_identity_hash
                     != expected_snapshot["processing_identity_hash"]
-                    or prepared.profile_fingerprint
-                    != expected_snapshot["profile_fingerprint"]
+                    or prepared.profile_fingerprint != expected_snapshot["profile_fingerprint"]
                 ):
                     raise LeaseFenceRejected(
                         "memory processing identity changed before provider completion"
@@ -234,8 +233,7 @@ class MemoryJobWorkerService:
                     prepared.input_content_hash != expected_snapshot["input_content_hash"]
                     or prepared.processing_identity_hash
                     != expected_snapshot["processing_identity_hash"]
-                    or prepared.profile_fingerprint
-                    != expected_snapshot["profile_fingerprint"]
+                    or prepared.profile_fingerprint != expected_snapshot["profile_fingerprint"]
                 ):
                     raise LeaseFenceRejected(
                         "memory processing identity changed before provider completion"
@@ -279,8 +277,7 @@ class MemoryJobWorkerService:
                         last_error_sanitized = COALESCE(last_error_sanitized, 'lease expired')
                 WHERE job_type = 'memory_extraction' AND status = 'running'
                       AND (lease_expires_at IS NULL OR lease_expires_at < ?)
-                    """
-                    ,
+                    """,
                     (utc_now(),),
                 )
                 connection.commit()

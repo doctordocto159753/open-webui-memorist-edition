@@ -48,9 +48,7 @@ def _assertion(
         "nonce": nonce or uuid4().hex,
     }
     encoded = _b64(json.dumps(claims, sort_keys=True, separators=(",", ":")).encode())
-    signature = _b64(
-        hmac.new(signing_credential.encode(), encoded.encode(), sha256).digest()
-    )
+    signature = _b64(hmac.new(signing_credential.encode(), encoded.encode(), sha256).digest())
     return f"{encoded}.{signature}"
 
 
@@ -108,6 +106,55 @@ def test_signed_actor_boundary_and_replay_protection(
         == 401
     )
     assert client.post(path, json=body, headers=_headers(token, service="wrong")).status_code == 401
+
+
+def test_fail_open_outcomes_remain_visible_until_the_stage_recovers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = _client(monkeypatch, tmp_path)
+    user = f"outcome-{uuid4().hex}"
+    workspace = str(uuid4())
+    outcome_path = "/memcore/openwebui/outcomes"
+
+    def record(stage: str, outcome: str, detail: str | None = None) -> None:
+        response = client.post(
+            outcome_path,
+            json={
+                "stage": stage,
+                "outcome": outcome,
+                "degraded_reason": f"{stage}_failed" if detail else None,
+                "detail_sanitized": detail,
+            },
+            headers=_headers(_assertion("POST", outcome_path, user=user, workspace=workspace)),
+        )
+        assert response.status_code == 200, response.text
+
+    record("capture", "failed_open", "capture request returned HTTP 500")
+    record("chat_outlet", "ok")
+    status_path = "/memcore/openwebui/status"
+    status = client.get(
+        status_path,
+        headers=_headers(_assertion("GET", status_path, user=user, workspace=workspace)),
+    ).json()
+
+    assert status["integration_outcome"]["stage"] == "chat_outlet"
+    assert status["degraded"] is True
+    assert status["last_error"] == "capture request returned HTTP 500"
+    capture = next(item for item in status["stage_outcomes"] if item["stage"] == "capture")
+    assert capture["outcome"] == "failed_open"
+    assert capture["last_failure_at"]
+    assert capture["last_success_at"] is None
+
+    record("capture", "ok")
+    recovered = client.get(
+        status_path,
+        headers=_headers(_assertion("GET", status_path, user=user, workspace=workspace)),
+    ).json()
+    assert recovered["degraded"] is False
+    capture = next(item for item in recovered["stage_outcomes"] if item["stage"] == "capture")
+    assert capture["outcome"] == "ok"
+    assert capture["last_success_at"]
+    assert capture["last_failure_at"]
 
 
 def test_actor_claim_validation_and_scope_mismatch(

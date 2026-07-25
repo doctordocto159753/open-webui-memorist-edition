@@ -251,8 +251,7 @@ class PostgresMemoryWorkerPipeline:
         if prepared_inference is not None and (
             prepared_inference.processing_identity_hash != identity.identity_hash
             or prepared_inference.input_content_hash != identity.input_content_hash
-            or prepared_inference.profile_fingerprint
-            != execution_profile_fingerprint(profile)
+            or prepared_inference.profile_fingerprint != execution_profile_fingerprint(profile)
         ):
             raise RuntimeError("prepared inference processing identity mismatch")
         content_hash = identity.input_content_hash
@@ -461,9 +460,7 @@ class PostgresMemoryWorkerPipeline:
             workspace_uuid=(
                 str(message["workspace_uuid"]) if message.get("workspace_uuid") else None
             ),
-            project_uuid=(
-                str(message["project_uuid"]) if message.get("project_uuid") else None
-            ),
+            project_uuid=(str(message["project_uuid"]) if message.get("project_uuid") else None),
         )
         if resolution.model_profile_uuid:
             profile = repository.get_profile(resolution.model_profile_uuid)
@@ -1169,8 +1166,7 @@ class PostgresMemoryWorkerPipeline:
                 projection_sql += " AND embedding_dimension = %s"
                 projection_params += (expected_dimension,)
             projection_exists = (
-                self.connection.execute(projection_sql, projection_params).fetchone()
-                is not None
+                self.connection.execute(projection_sql, projection_params).fetchone() is not None
             )
             if projection_exists:
                 attempt_row = self.connection.execute(

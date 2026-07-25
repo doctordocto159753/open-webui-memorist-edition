@@ -42,9 +42,7 @@ def structured_project_artifact(
 
     assistant_authored = message_role == "assistant"
     authority = (
-        SourceAuthority.ASSISTANT_CLAIM
-        if assistant_authored
-        else SourceAuthority.USER_EXPLICIT
+        SourceAuthority.ASSISTANT_CLAIM if assistant_authored else SourceAuthority.USER_EXPLICIT
     )
     artifact_kind = (
         "assistant_produced_project_artifact"
@@ -54,9 +52,7 @@ def structured_project_artifact(
     return StructuredProjectArtifact(
         normalized_text=text,
         source_authority=authority,
-        explicitness=(
-            Explicitness.INFERRED if assistant_authored else Explicitness.EXPLICIT
-        ),
+        explicitness=(Explicitness.INFERRED if assistant_authored else Explicitness.EXPLICIT),
         confidence=0.62 if assistant_authored else 0.9,
         importance=0.82,
         object_payload={

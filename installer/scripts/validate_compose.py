@@ -38,10 +38,12 @@ FULL_ENV = {
     "MEMORIST_ENABLE_FORGETTING_PIPELINE": "true",
 }
 API_KEYS = {
+    "MEMORIST_PREFLIGHT_API_KEY",
     "MEMORIST_MEMORY_EXTRACTION_API_KEY",
     "MEMORIST_HIGH_CONFIDENCE_EXTRACTION_API_KEY",
     "MEMORIST_EMBEDDING_API_KEY",
     "MEMORIST_PRIVACY_SENSITIVITY_API_KEY",
+    "MEMORIST_BLOCK_COMPACTION_API_KEY",
     "MEMORIST_IMPORT_RECONSTRUCTION_API_KEY",
 }
 
@@ -59,11 +61,15 @@ def detect_compose() -> list[str] | None:
     return None
 
 
-def validation_env(mode: str) -> dict[str, str]:
+def validation_env(
+    mode: str,
+    overrides: dict[str, str] | None = None,
+) -> dict[str, str]:
     env = os.environ.copy()
     env.update(
         {
             "COMPOSE_PROJECT_NAME": "memorist-validation",
+            "MEMORIST_INSTALLATION_ID": "00000000-0000-0000-0000-000000000099",
             "WEBUI_SECRET_KEY": "ci-webui-secret",
             "MEMORIST_ACTOR_ASSERTION_SECRET": "ci-actor-secret",
             "MEMORIST_ACTOR_SERVICE_TOKEN": "ci-service-token",
@@ -75,15 +81,24 @@ def validation_env(mode: str) -> dict[str, str]:
         env["MEMORIST_POSTGRES_DSN"] = (
             "postgresql://memorist:ci-postgres-password@postgres:5432/memorist"
         )
+    env.update(overrides or {})
     return env
 
 
-def render(compose: list[str], mode: str) -> dict[str, object]:
+def render(
+    compose: list[str],
+    mode: str,
+    overrides: dict[str, str] | None = None,
+) -> dict[str, object]:
     command = compose + [
         "-f", str(BASE), "-f", str(OVERLAYS[mode]), "config", "--format", "json"
     ]
     result = subprocess.run(
-        command, cwd=PACKAGE, env=validation_env(mode), capture_output=True, text=True
+        command,
+        cwd=PACKAGE,
+        env=validation_env(mode, overrides),
+        capture_output=True,
+        text=True,
     )
     if result.returncode:
         raise RuntimeError((result.stderr or result.stdout).strip())
@@ -116,6 +131,52 @@ def validate_mode(compose: list[str], mode: str) -> list[str]:
     missing_keys = API_KEYS - set(core_env)
     if missing_keys:
         failures.append(f"{mode}: API-key passthrough missing {sorted(missing_keys)}")
+    webui_env = services.get("open-webui", {}).get("environment", {})
+    if str(webui_env.get("ENABLE_OLLAMA_API", "")).lower() != "false":
+        failures.append(f"{mode}: Ollama must be opt-in and disabled by default")
+    if webui_env.get("RAG_EMBEDDING_ENGINE") != "openai":
+        failures.append(
+            f"{mode}: RAG embedding engine must default to the no-local-download adapter"
+        )
+    if webui_env.get("MEMORIST_CORE_URL") != "http://memorist-core:8777":
+        failures.append(f"{mode}: internal Core URL must stay on memorist-core:8777")
+    ollama_only = render(
+        compose,
+        mode,
+        {
+            "ENABLE_OLLAMA_API": "true",
+            "OLLAMA_BASE_URL": "http://host.docker.internal:11434",
+        },
+    )["services"]["open-webui"]["environment"]
+    if str(ollama_only.get("ENABLE_OLLAMA_API", "")).lower() != "true":
+        failures.append(f"{mode}: intentional local Ollama cannot be enabled")
+    if ollama_only.get("OLLAMA_BASE_URL") != "http://host.docker.internal:11434":
+        failures.append(f"{mode}: intentional local Ollama endpoint was not preserved")
+    openai_only = render(
+        compose,
+        mode,
+        {
+            "ENABLE_OLLAMA_API": "false",
+            "OPENAI_API_BASE_URL": "http://host.docker.internal:9800/v1",
+        },
+    )["services"]["open-webui"]["environment"]
+    if openai_only.get("OPENAI_API_BASE_URL") != "http://host.docker.internal:9800/v1":
+        failures.append(f"{mode}: OpenAI-compatible-only endpoint was not preserved")
+    both = render(
+        compose,
+        mode,
+        {
+            "ENABLE_OLLAMA_API": "true",
+            "OLLAMA_BASE_URL": "http://host.docker.internal:11434",
+            "OPENAI_API_BASE_URL": "http://host.docker.internal:9800/v1",
+        },
+    )["services"]["open-webui"]["environment"]
+    if (
+        str(both.get("ENABLE_OLLAMA_API", "")).lower() != "true"
+        or both.get("OPENAI_API_BASE_URL")
+        != "http://host.docker.internal:9800/v1"
+    ):
+        failures.append(f"{mode}: intentional Ollama + OpenAI configuration was not preserved")
 
     package_root = PACKAGE.resolve()
     build_context = Path(core.get("build", {}).get("context", "")).resolve()

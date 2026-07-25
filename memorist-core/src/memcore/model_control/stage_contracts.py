@@ -35,9 +35,7 @@ def deterministic_high_confidence(payload: dict[str, Any]) -> dict[str, Any]:
             if decision == "approved"
             else "evidence_alignment_uncertain"
         ],
-        "evidence_spans": [
-            {"start": 0, "end": len(evidence), "text": evidence}
-        ]
+        "evidence_spans": [{"start": 0, "end": len(evidence), "text": evidence}]
         if evidence
         else [],
     }
@@ -134,29 +132,22 @@ def deterministic_compaction(payload: dict[str, Any]) -> dict[str, Any]:
         for source in sources:
             if not isinstance(source, dict):
                 continue
-            sources_by_key.setdefault(str(source.get("canonical_key") or ""), []).append(
-                source
-            )
+            sources_by_key.setdefault(str(source.get("canonical_key") or ""), []).append(source)
             items.append(
                 {
                     "text": str(source.get("normalized_text") or ""),
                     "source_memory_uuids": [str(source.get("memory_uuid"))],
-                    "source_memory_version_uuids": [
-                        str(source.get("memory_version_uuid"))
-                    ],
+                    "source_memory_version_uuids": [str(source.get("memory_version_uuid"))],
                 }
             )
     conflicts = []
     for grouped_sources in sources_by_key.values():
-        normalized_values = {
-            str(source.get("normalized_text") or "") for source in grouped_sources
-        }
+        normalized_values = {str(source.get("normalized_text") or "") for source in grouped_sources}
         if len(grouped_sources) > 1 and len(normalized_values) > 1:
             conflicts.append(
                 {
                     "memory_version_uuids": [
-                        str(source.get("memory_version_uuid"))
-                        for source in grouped_sources
+                        str(source.get("memory_version_uuid")) for source in grouped_sources
                     ],
                     "status": "unresolved",
                 }

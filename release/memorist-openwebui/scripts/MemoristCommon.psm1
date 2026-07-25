@@ -37,10 +37,12 @@ function Get-MemoristDockerCli {
 # installer writes locally; the browser Memory Setup UI references the *name*
 # only and the backend resolves the value from its own process environment.
 $script:MemoristApiKeyRoles = [ordered]@{
+    'preflight'                  = 'MEMORIST_PREFLIGHT_API_KEY'
     'memory_extraction'          = 'MEMORIST_MEMORY_EXTRACTION_API_KEY'
     'high_confidence_extraction' = 'MEMORIST_HIGH_CONFIDENCE_EXTRACTION_API_KEY'
     'embedding'                  = 'MEMORIST_EMBEDDING_API_KEY'
     'privacy_sensitivity'        = 'MEMORIST_PRIVACY_SENSITIVITY_API_KEY'
+    'block_compaction'           = 'MEMORIST_BLOCK_COMPACTION_API_KEY'
     'import_reconstruction'      = 'MEMORIST_IMPORT_RECONSTRUCTION_API_KEY'
 }
 
@@ -169,6 +171,65 @@ function Test-MemoristPortFree {
     }
 }
 
+function Get-MemoristExcludedTcpPortRanges {
+    <#
+        Returns Windows excluded TCP ranges as objects with Start/End fields.
+        Tests may pass captured netsh output; production queries both IPv4 and
+        IPv6. Parsing is numeric and therefore independent of OS language.
+    #>
+    param([AllowEmptyCollection()][string[]]$NetshOutput)
+    $lines = @($NetshOutput)
+    if (-not $PSBoundParameters.ContainsKey('NetshOutput')) {
+        if (-not (Test-MemoristWindows)) { return @() }
+        $lines = @()
+        foreach ($family in @('ipv4', 'ipv6')) {
+            try {
+                $lines += @(& netsh interface $family show excludedportrange protocol=tcp 2>$null)
+            } catch {
+                Write-MemoristLog "Could not query $family excluded TCP ranges." 'WARN'
+            }
+        }
+    }
+    $ranges = @()
+    foreach ($line in $lines) {
+        if ([string]$line -match '^\s*(\d+)\s+(\d+)(?:\s+\*)?\s*$') {
+            $start = [int]$Matches[1]
+            $end = [int]$Matches[2]
+            if ($start -ge 1 -and $end -ge $start -and $end -le 65535) {
+                $ranges += [pscustomobject]@{ Start = $start; End = $end }
+            }
+        }
+    }
+    return @($ranges | Sort-Object Start, End -Unique)
+}
+
+function Test-MemoristPortExcluded {
+    param(
+        [Parameter(Mandatory = $true)][int]$Port,
+        [AllowEmptyCollection()][object[]]$ExcludedRanges = @()
+    )
+    foreach ($range in $ExcludedRanges) {
+        if ($Port -ge [int]$range.Start -and $Port -le [int]$range.End) { return $true }
+    }
+    return $false
+}
+
+function Get-MemoristAvailablePort {
+    <# Deterministically selects the first bindable, non-excluded host port. #>
+    param(
+        [Parameter(Mandatory = $true)][ValidateRange(1, 65535)][int]$PreferredPort,
+        [AllowEmptyCollection()][object[]]$ExcludedRanges = @(),
+        [scriptblock]$PortProbe = { param($candidate) Test-MemoristPortFree -Port $candidate }
+    )
+    for ($candidate = $PreferredPort; $candidate -le 65535; $candidate++) {
+        if ((Test-MemoristPortExcluded -Port $candidate -ExcludedRanges $ExcludedRanges)) {
+            continue
+        }
+        if (& $PortProbe $candidate) { return $candidate }
+    }
+    throw "No available host TCP port found at or above $PreferredPort."
+}
+
 function Get-MemoristFreeDiskGb {
     <# Free space (GB) on the drive that hosts the given path, or -1 if unknown. #>
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -256,6 +317,50 @@ function Get-MemoristInstalledMode {
         throw 'The installed MEMORIST_MODE is missing or invalid. Repair .env or rerun the installer.'
     }
     return $mode
+}
+
+function Get-MemoristProjectEnvironment {
+    <#
+        Recovers only the allow-listed installation settings from containers in
+        the stable Compose project. Values are returned to the installer and
+        are never written to console output.
+    #>
+    param([string]$ProjectName = 'memorist')
+    $dockerCli = Get-MemoristDockerCli
+    $ids = @(& $dockerCli ps -a --filter "label=com.docker.compose.project=$ProjectName" --format '{{.ID}}' 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $ids.Count -eq 0) { return @{} }
+    $allowed = @(
+        'MEMORIST_INSTALLATION_ID', 'MEMORIST_MODE', 'MEMORIST_RUNTIME_PROFILE',
+        'MEMORIST_POSTGRES_PASSWORD', 'POSTGRES_PASSWORD', 'MEMORIST_POSTGRES_DSN',
+        'MEMORIST_ACTOR_ASSERTION_SECRET', 'MEMORIST_ACTOR_SERVICE_TOKEN',
+        'MEMORIST_OPENWEBUI_WORKSPACE_UUID', 'WEBUI_SECRET_KEY',
+        'OPEN_WEBUI_PORT', 'MEMORIST_CORE_HOST_PORT', 'MEMORIST_PORT'
+    ) + @((Get-MemoristApiKeyRoles).Values)
+    $result = @{}
+    foreach ($id in $ids) {
+        $environment = @(& $dockerCli inspect --format '{{range .Config.Env}}{{println .}}{{end}}' $id 2>$null)
+        if ($LASTEXITCODE -ne 0) { continue }
+        foreach ($assignment in $environment) {
+            $separator = ([string]$assignment).IndexOf('=')
+            if ($separator -le 0) { continue }
+            $key = ([string]$assignment).Substring(0, $separator)
+            if ($key -notin $allowed -or $result.ContainsKey($key)) { continue }
+            $result[$key] = ([string]$assignment).Substring($separator + 1)
+        }
+    }
+    if (-not $result.ContainsKey('MEMORIST_POSTGRES_PASSWORD') -and
+        $result.ContainsKey('POSTGRES_PASSWORD')) {
+        $result['MEMORIST_POSTGRES_PASSWORD'] = $result['POSTGRES_PASSWORD']
+    }
+    $result.Remove('POSTGRES_PASSWORD')
+    return $result
+}
+
+function Test-MemoristNamedVolumeExists {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    $dockerCli = Get-MemoristDockerCli
+    & $dockerCli volume inspect $Name *> $null
+    return ($LASTEXITCODE -eq 0)
 }
 
 function Set-MemoristEnvValue {
