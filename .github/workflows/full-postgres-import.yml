@@ -116,7 +116,7 @@ jobs:
         working-directory: memorist-core
         run: |
           test -n "$MEMORIST_POSTGRES_DSN"
-          uv run pytest tests/test_full_postgres_remote_provider.py -q --junitxml=remote-provider-results.xml
+          uv run pytest tests/test_full_postgres_remote_provider.py tests/test_full_postgres_processing_nodes.py -q --junitxml=remote-provider-results.xml
           uv run python -c "import xml.etree.ElementTree as E; r=E.parse('remote-provider-results.xml').getroot(); cases=list(r.iter('testcase')); assert cases and not list(r.iter('skipped'))"
 
   pr3-worker-lifecycle-and-concurrency:

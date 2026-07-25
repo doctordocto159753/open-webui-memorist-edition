@@ -203,9 +203,7 @@ def _record_structured_project_artifact(
         raw_text=raw_text,
         message_role=str(message.get("role") or ""),
         list_item_count=sum(str(unit.get("unit_type")) == "list_item" for unit in units),
-        has_cross_session_scope=bool(
-            message.get("project_uuid") or message.get("workspace_uuid")
-        ),
+        has_cross_session_scope=bool(message.get("project_uuid") or message.get("workspace_uuid")),
         preceding_user_message_uuid=None,
     )
     if artifact is None or not message.get("created_at"):
@@ -229,9 +227,7 @@ def _record_structured_project_artifact(
         raw_text=raw_text,
         message_role=str(message.get("role") or ""),
         list_item_count=sum(str(unit.get("unit_type")) == "list_item" for unit in units),
-        has_cross_session_scope=bool(
-            message.get("project_uuid") or message.get("workspace_uuid")
-        ),
+        has_cross_session_scope=bool(message.get("project_uuid") or message.get("workspace_uuid")),
         preceding_user_message_uuid=(
             str(preceding["message_uuid"]) if preceding is not None else None
         ),

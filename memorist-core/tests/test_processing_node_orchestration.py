@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from memcore.model_control.endpoint import (
     EndpointConfigurationError,
     normalize_openai_endpoint,
 )
+from memcore.model_control.providers.base import ProviderHealth
 from memcore.model_control.repository import ModelControlRepository
 from memcore.model_control.resolution import RoleResolutionService
 from memcore.model_control.schemas import (
@@ -31,7 +33,7 @@ from memcore.validators.ijson import canonical_hash_ijson, dump_ijson, load_ijso
 
 
 @pytest.fixture
-def orchestration_connection(tmp_path: Path) -> sqlite3.Connection:
+def orchestration_connection(tmp_path: Path) -> Iterator[sqlite3.Connection]:
     connection = connect(tmp_path / "orchestration.sqlite")
     apply_migrations(connection)
     yield connection
@@ -64,6 +66,29 @@ def _profile(
     return profile.model_profile_uuid
 
 
+def _certify(repository: ModelControlRepository, profile_uuid: str) -> None:
+    profile = repository.get_profile(profile_uuid)
+    assert profile is not None
+    repository.record_health_event(
+        profile_uuid,
+        ProviderHealth(
+            status="ok",
+            provider_type=profile.provider_type,
+            model_name=profile.model_name,
+            latency_ms=1,
+            local_only_safe=profile.endpoint_is_local,
+            dns_or_host_reachable="reachable",
+            tcp_or_http_reachable="reachable",
+            authentication_status="valid",
+            model_status="available",
+            chat_completion_status="supported",
+            structured_output_status="supported",
+            role_compatibility_status="compatible",
+            overall_status="ok",
+        ),
+    )
+
+
 def test_role_resolution_uses_project_workspace_global_precedence(
     orchestration_connection: sqlite3.Connection,
 ) -> None:
@@ -90,12 +115,12 @@ def test_role_resolution_uses_project_workspace_global_precedence(
     )
     resolver = RoleResolutionService(repository)
 
-    project = resolver.resolve(
+    project_result = resolver.resolve(
         ModelRole.MEMORY_EXTRACTION,
         workspace_uuid=workspace.workspace_uuid,
         project_uuid=project.project_uuid,
     )
-    workspace = resolver.resolve(
+    workspace_result = resolver.resolve(
         ModelRole.MEMORY_EXTRACTION,
         workspace_uuid=workspace.workspace_uuid,
         project_uuid="project-other",
@@ -105,8 +130,11 @@ def test_role_resolution_uses_project_workspace_global_precedence(
         workspace_uuid="workspace-other",
     )
 
-    assert (project.model_profile_uuid, project.scope_source) == (project_uuid, "project")
-    assert (workspace.model_profile_uuid, workspace.scope_source) == (
+    assert (project_result.model_profile_uuid, project_result.scope_source) == (
+        project_uuid,
+        "project",
+    )
+    assert (workspace_result.model_profile_uuid, workspace_result.scope_source) == (
         workspace_uuid,
         "workspace",
     )
@@ -123,9 +151,7 @@ def test_role_resolution_exposes_inheritance_and_unusable_fallback_reason(
     repository = ModelControlRepository(orchestration_connection)
     extraction_uuid = _profile(repository, ModelRole.MEMORY_EXTRACTION, "extractor")
     repository.set_default(ModelRole.MEMORY_EXTRACTION, extraction_uuid)
-    inherited = RoleResolutionService(repository).resolve(
-        ModelRole.HIGH_CONFIDENCE_EXTRACTION
-    )
+    inherited = RoleResolutionService(repository).resolve(ModelRole.HIGH_CONFIDENCE_EXTRACTION)
 
     assert inherited.requested_role is ModelRole.HIGH_CONFIDENCE_EXTRACTION
     assert inherited.effective_role is ModelRole.MEMORY_EXTRACTION
@@ -145,6 +171,8 @@ def test_role_resolution_exposes_inheritance_and_unusable_fallback_reason(
             privacy_acknowledged=True,
         )
     )
+    monkeypatch.setenv("MEMORIST_MISSING_TEST_SECRET", "test-only")
+    _certify(repository, remote.model_profile_uuid)
     repository.set_default(ModelRole.PRIVACY_SENSITIVITY, remote.model_profile_uuid)
     monkeypatch.delenv("MEMORIST_MISSING_TEST_SECRET", raising=False)
     fallback = RoleResolutionService(repository).resolve(ModelRole.PRIVACY_SENSITIVITY)
@@ -153,9 +181,7 @@ def test_role_resolution_exposes_inheritance_and_unusable_fallback_reason(
     assert fallback.inheritance_source == "memory_extraction"
 
     repository.patch_profile(extraction_uuid, ModelProfilePatch(is_enabled=False))
-    disabled_fallback = RoleResolutionService(repository).resolve(
-        ModelRole.PRIVACY_SENSITIVITY
-    )
+    disabled_fallback = RoleResolutionService(repository).resolve(ModelRole.PRIVACY_SENSITIVITY)
     assert disabled_fallback.model_profile_uuid is None
     assert disabled_fallback.scope_source == "built_in_fallback"
     assert disabled_fallback.fallback_reason == "secret_reference_unavailable"
@@ -188,6 +214,16 @@ def test_role_resolution_exposes_inheritance_and_unusable_fallback_reason(
             "https://provider.example/v1",
             "https://provider.example/v1/chat/completions",
         ),
+        (
+            "https://provider.example/custom/openai/",
+            "https://provider.example/custom/openai",
+            "https://provider.example/custom/openai/chat/completions",
+        ),
+        (
+            "https://provider.example/custom/openai/chat/completions/",
+            "https://provider.example/custom/openai",
+            "https://provider.example/custom/openai/chat/completions",
+        ),
     ],
 )
 def test_endpoint_normalization_never_duplicates_operation_paths(
@@ -208,6 +244,8 @@ def test_endpoint_normalization_never_duplicates_operation_paths(
         "https://user:secret@provider.example/v1",
         "https://provider.example/v1?api_key=secret",
         "https://provider.example/v1#fragment",
+        "https://provider.example/v1/chat/completions/v1/chat/completions",
+        "https://provider.example/v1/chat/completions/proxy",
     ],
 )
 def test_endpoint_normalization_rejects_unsafe_values(endpoint: str) -> None:
@@ -266,16 +304,23 @@ def test_setup_profile_and_stage_invocation_are_idempotent_and_audited(
     # deterministic retry downgrades candidate lifecycle decisions to "abstain".
     assert first.output is not None
     assert replay.output == first.output
-    assert orchestration_connection.execute(
-        "SELECT COUNT(*) FROM processing_stage_runs"
-    ).fetchone()[0] == 1
-    assert orchestration_connection.execute(
-        "SELECT COUNT(*) FROM prompt_execution_runs "
-        "WHERE prompt_id = 'memorist.privacy_sensitivity'"
-    ).fetchone()[0] == 1
-    assert orchestration_connection.execute(
-        "SELECT COUNT(*) FROM model_usage_events WHERE stage = 'privacy_sensitivity'"
-    ).fetchone()[0] == 1
+    assert (
+        orchestration_connection.execute("SELECT COUNT(*) FROM processing_stage_runs").fetchone()[0]
+        == 1
+    )
+    assert (
+        orchestration_connection.execute(
+            "SELECT COUNT(*) FROM prompt_execution_runs "
+            "WHERE prompt_id = 'memorist.privacy_sensitivity'"
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        orchestration_connection.execute(
+            "SELECT COUNT(*) FROM model_usage_events WHERE stage = 'privacy_sensitivity'"
+        ).fetchone()[0]
+        == 1
+    )
     stored = orchestration_connection.execute(
         "SELECT output_ijson, output_hash FROM processing_stage_runs"
     ).fetchone()
@@ -418,6 +463,7 @@ def test_concurrent_stage_writers_return_one_authoritative_output(tmp_path: Path
     def invoke() -> tuple[str, dict[str, object] | None]:
         connection = connect(db_path)
         try:
+
             def simultaneous(payload: dict[str, object]) -> dict[str, object]:
                 barrier.wait(timeout=5)
                 return deterministic_privacy(payload)
@@ -462,9 +508,12 @@ def test_embedding_stage_disabled_resolution_records_abstained_result(
     assert result.status == "abstained"
     assert result.called_provider is False
     assert vectors == []
-    assert orchestration_connection.execute(
-        "SELECT COUNT(*) FROM processing_stage_runs WHERE source_uuid = 'version-disabled'"
-    ).fetchone()[0] == 1
+    assert (
+        orchestration_connection.execute(
+            "SELECT COUNT(*) FROM processing_stage_runs WHERE source_uuid = 'version-disabled'"
+        ).fetchone()[0]
+        == 1
+    )
 
 
 def test_disabled_embedding_is_audited_and_outbox_is_terminally_skipped(
@@ -498,18 +547,14 @@ def test_disabled_embedding_is_audited_and_outbox_is_terminally_skipped(
         WHERE stage = 'embedding_generation'
         """
     ).fetchone()
-    outbox = connection.execute(
-        "SELECT status, attempts FROM embedding_outbox"
-    ).fetchone()
+    outbox = connection.execute("SELECT status, attempts FROM embedding_outbox").fetchone()
     assert dict(stage) == {
         "status": "abstained",
         "called_provider": 0,
         "embedding_count": 0,
     }
     assert dict(outbox) == {"status": "skipped", "attempts": 1}
-    assert connection.execute(
-        "SELECT COUNT(*) FROM memory_version_embeddings"
-    ).fetchone()[0] == 0
+    assert connection.execute("SELECT COUNT(*) FROM memory_version_embeddings").fetchone()[0] == 0
     connection.close()
 
 
@@ -542,9 +587,12 @@ def test_embedding_stage_replay_bypass_regenerates_vectors(
     # replay short-circuit and obtain real vectors again.
     assert regenerated.idempotent_replay is False
     assert regenerated_vectors == first_vectors
-    assert orchestration_connection.execute(
-        "SELECT COUNT(*) FROM processing_stage_runs WHERE source_uuid = 'version-1'"
-    ).fetchone()[0] == 1
+    assert (
+        orchestration_connection.execute(
+            "SELECT COUNT(*) FROM processing_stage_runs WHERE source_uuid = 'version-1'"
+        ).fetchone()[0]
+        == 1
+    )
 
 
 def test_embedding_projection_recovers_after_stage_persisted_crash(
@@ -588,23 +636,20 @@ def test_embedding_projection_recovers_after_stage_persisted_crash(
         MemoryWorkerPipeline(connection, settings).process_message(message.message_uuid)
 
     memory_count = int(connection.execute("SELECT COUNT(*) FROM memories").fetchone()[0])
-    assert connection.execute(
-        "SELECT COUNT(*) FROM processing_stage_runs WHERE stage = 'embedding_generation'"
-    ).fetchone()[0] == 1
-    assert connection.execute(
-        "SELECT COUNT(*) FROM memory_version_embeddings"
-    ).fetchone()[0] == 0
-    outbox = connection.execute(
-        "SELECT status, attempts FROM embedding_outbox"
-    ).fetchone()
+    assert (
+        connection.execute(
+            "SELECT COUNT(*) FROM processing_stage_runs WHERE stage = 'embedding_generation'"
+        ).fetchone()[0]
+        == 1
+    )
+    assert connection.execute("SELECT COUNT(*) FROM memory_version_embeddings").fetchone()[0] == 0
+    outbox = connection.execute("SELECT status, attempts FROM embedding_outbox").fetchone()
     assert dict(outbox) == {"status": "running", "attempts": 1}
 
     MemoryWorkerPipeline(connection, settings).process_message(message.message_uuid)
 
     assert int(connection.execute("SELECT COUNT(*) FROM memories").fetchone()[0]) == memory_count
-    assert connection.execute(
-        "SELECT COUNT(*) FROM memory_version_embeddings"
-    ).fetchone()[0] == 1
+    assert connection.execute("SELECT COUNT(*) FROM memory_version_embeddings").fetchone()[0] == 1
     recovered_outbox = connection.execute(
         "SELECT status, attempts FROM embedding_outbox"
     ).fetchone()

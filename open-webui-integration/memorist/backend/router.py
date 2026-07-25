@@ -7,6 +7,11 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..shared.client import MemoristClient
+from ..shared.errors import (
+    MemoristCoreHTTPError,
+    MemoristCoreTimeout,
+    MemoristCoreUnavailable,
+)
 
 
 @dataclass(frozen=True)
@@ -54,13 +59,20 @@ def _call(
     path: str,
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return MemoristClient().actor_request(
-        method,
-        f"/memcore{path}",
-        user_id=actor.user_uuid,
-        workspace_uuid=actor.workspace_uuid,
-        payload=payload,
-    )
+    try:
+        return MemoristClient().actor_request(
+            method,
+            f"/memcore{path}",
+            user_id=actor.user_uuid,
+            workspace_uuid=actor.workspace_uuid,
+            payload=payload,
+        )
+    except MemoristCoreHTTPError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except MemoristCoreTimeout as error:
+        raise HTTPException(status_code=504, detail=str(error)) from error
+    except MemoristCoreUnavailable as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
 
 
 @router.get("/model-control/setup/status")
@@ -135,6 +147,15 @@ async def set_model_control_default(
     payload.pop("workspace_uuid", None)
     payload.pop("project_uuid", None)
     return _call(actor, "POST", "/model-control/defaults", payload)
+
+
+@router.delete("/model-control/defaults/{role}")
+def remove_model_control_default(role: str, actor: AuthenticatedAdmin) -> dict[str, Any]:
+    return _call(
+        actor,
+        "DELETE",
+        f"/model-control/defaults?role={quote(role, safe='')}",
+    )
 
 
 @router.get("/model-control/health")
@@ -228,9 +249,27 @@ def openwebui_diagnostics(request: Request, actor: AuthenticatedAdmin) -> dict[s
     except Exception:  # pragma: no cover - only outside the real host app
         host_version = "unknown"
     integration = getattr(request.app.state, "memorist_integration", None) or {}
+    runtime_status = MemoristClient().status(
+        user_id=actor.user_uuid,
+        workspace_uuid=actor.workspace_uuid,
+    )
+    safe_runtime_status = {
+        key: runtime_status.get(key)
+        for key in (
+            "memorist_core",
+            "degraded",
+            "last_error",
+            "stage_outcomes",
+            "integration_outcome",
+            "last_attachment",
+            "memory_processing",
+        )
+        if key in runtime_status
+    }
     return {
         "core_health": safe_health,
         "integration": integration,
+        "runtime_status": safe_runtime_status,
         "openwebui_version": host_version,
     }
 

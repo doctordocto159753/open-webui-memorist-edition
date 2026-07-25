@@ -24,6 +24,9 @@ class ProviderHealth(BaseModel):
     quota_or_rate_limited: bool = False
     detail_sanitized: str | None = None
     recommended_action: str | None = None
+    failure_stage: str | None = None
+    schema_mode: str = "none"
+    probe_attempts: int = Field(default=1, ge=0, le=2)
 
     @property
     def detail(self) -> str | None:

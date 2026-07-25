@@ -22,9 +22,11 @@ class FakeResponse:
 
 class FakeAsyncClient:
     calls: list[dict[str, Any]] = []
+    timeouts: list[float] = []
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.kwargs = kwargs
+        self.timeouts.append(float(kwargs["timeout"]))
 
     async def __aenter__(self) -> FakeAsyncClient:
         return self
@@ -46,7 +48,11 @@ class FakeMemoristClient:
 
     def __init__(self) -> None:
         self.base_url = "http://memorist-core:8777"
-        self.config = SimpleNamespace(timeout_seconds=5)
+        self.config = SimpleNamespace(
+            timeout_seconds_for=lambda path: 300.0
+            if path.startswith("/memcore/imports")
+            else 1.2
+        )
 
     def _actor_headers(
         self,
@@ -75,6 +81,7 @@ def test_import_proxy_requires_verified_admin() -> None:
 
 def test_import_proxy_forwards_only_after_admin_auth(monkeypatch: Any) -> None:
     FakeAsyncClient.calls.clear()
+    FakeAsyncClient.timeouts.clear()
     FakeMemoristClient.actor_calls.clear()
     monkeypatch.setattr(import_proxy, "MemoristClient", FakeMemoristClient)
     monkeypatch.setattr(import_proxy.httpx, "AsyncClient", FakeAsyncClient)
@@ -88,10 +95,12 @@ def test_import_proxy_forwards_only_after_admin_auth(monkeypatch: Any) -> None:
     ]
     assert FakeAsyncClient.calls[0]["url"] == "http://memorist-core:8777/memcore/imports"
     assert FakeAsyncClient.calls[0]["params"] == [("limit", "10")]
+    assert FakeAsyncClient.timeouts == [300.0]
 
 
 def test_import_upload_forces_server_scope(monkeypatch: Any) -> None:
     FakeAsyncClient.calls.clear()
+    FakeAsyncClient.timeouts.clear()
     FakeMemoristClient.actor_calls.clear()
     monkeypatch.setattr(import_proxy, "MemoristClient", FakeMemoristClient)
     monkeypatch.setattr(import_proxy.httpx, "AsyncClient", FakeAsyncClient)
@@ -114,6 +123,7 @@ def test_import_upload_forces_server_scope(monkeypatch: Any) -> None:
     assert FakeMemoristClient.actor_calls == [
         ("POST", "/memcore/imports/upload-file", "admin-user", "server-workspace")
     ]
+    assert FakeAsyncClient.timeouts == [300.0]
 
 
 def test_managed_filter_overwrites_browser_workspace(monkeypatch: Any) -> None:

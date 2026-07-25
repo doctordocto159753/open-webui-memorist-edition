@@ -4,15 +4,19 @@ from pathlib import Path
 
 ROUTES = Path("memorist-core/src/memcore/api/routes_model_control.py")
 PG_REPO = Path("memorist-core/src/memcore/model_control/postgres_repository.py")
+STORAGE = Path("memorist-core/src/memcore/model_control/storage.py")
 PIPELINE = Path("memorist-core/src/memcore/memory_worker/postgres/pipeline.py")
 
 
 def test_model_control_routes_use_postgres_repository_in_full_mode() -> None:
     source = ROUTES.read_text(encoding="utf-8")
-    assert "PostgresModelControlRepository" in source
-    assert 'settings.runtime_profile == "full" and settings.canonical_store == "postgres"' in source
+    storage_source = STORAGE.read_text(encoding="utf-8")
+    assert "model_control_repository(connection)" in source
+    assert 'settings.runtime_profile == "full" and settings.canonical_store == "postgres"' in (
+        storage_source
+    )
     assert "apply_postgres_migrations(migration_connection)" in source
-    assert "return PostgresModelControlRepository(connection)" in source
+    assert "return PostgresModelControlRepository(raw_connection)" in storage_source
 
 
 def test_postgres_model_control_writes_profiles_and_defaults_to_canonical_tables() -> None:

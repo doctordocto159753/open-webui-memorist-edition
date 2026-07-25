@@ -24,6 +24,11 @@ class MemoristIntegrationConfig:
     enabled: bool = True
     preflight_enabled: bool = True
     preflight_timeout_ms: int = 1200
+    capture_timeout_ms: int = 2500
+    control_timeout_ms: int = 15_000
+    provider_test_timeout_ms: int = 60_000
+    admin_timeout_ms: int = 15_000
+    import_timeout_ms: int = 300_000
     attachment_token_budget: int = 1800
     attachment_max_tokens: int = 1800
     retrieval_mode: str = "standard"
@@ -38,6 +43,21 @@ class MemoristIntegrationConfig:
     def timeout_seconds(self) -> float:
         return max(0.001, self.preflight_timeout_ms / 1000)
 
+    def timeout_seconds_for(self, path: str) -> float:
+        if path == "/memcore/preflight":
+            timeout_ms = self.preflight_timeout_ms
+        elif "/model-control/profiles/" in path and path.endswith("/test"):
+            timeout_ms = self.provider_test_timeout_ms
+        elif path.startswith("/memcore/model-control/"):
+            timeout_ms = self.control_timeout_ms
+        elif path.startswith("/memcore/imports"):
+            timeout_ms = self.import_timeout_ms
+        elif path in {"/memcore/health", "/memcore/openwebui/status"}:
+            timeout_ms = self.admin_timeout_ms
+        else:
+            timeout_ms = self.capture_timeout_ms
+        return max(0.001, timeout_ms / 1000)
+
 
 def load_config() -> MemoristIntegrationConfig:
     return MemoristIntegrationConfig(
@@ -45,6 +65,11 @@ def load_config() -> MemoristIntegrationConfig:
         enabled=_bool_env("MEMORIST_ENABLED", True),
         preflight_enabled=_bool_env("MEMORIST_PREFLIGHT_ENABLED", True),
         preflight_timeout_ms=_int_env("MEMORIST_PREFLIGHT_TIMEOUT_MS", 1200),
+        capture_timeout_ms=_int_env("MEMORIST_CAPTURE_TIMEOUT_MS", 2500),
+        control_timeout_ms=_int_env("MEMORIST_CONTROL_TIMEOUT_MS", 15_000),
+        provider_test_timeout_ms=_int_env("MEMORIST_PROVIDER_TEST_TIMEOUT_MS", 60_000),
+        admin_timeout_ms=_int_env("MEMORIST_ADMIN_TIMEOUT_MS", 15_000),
+        import_timeout_ms=_int_env("MEMORIST_IMPORT_TIMEOUT_MS", 300_000),
         attachment_token_budget=_int_env("MEMORIST_ATTACHMENT_TOKEN_BUDGET", 1800),
         attachment_max_tokens=_int_env("MEMORIST_ATTACHMENT_MAX_TOKENS", 1800),
         retrieval_mode=os.getenv("MEMORIST_RETRIEVAL_MODE", "standard"),

@@ -54,6 +54,16 @@ def normalize_openai_endpoint(endpoint_url: str) -> CanonicalProviderEndpoint:
         )
 
     path = _clean_path(parsed.path)
+    lowered_path = path.lower()
+    operation_matches = [suffix for suffix in _OPERATION_SUFFIXES if suffix in lowered_path]
+    if operation_matches and (
+        len(operation_matches) != 1
+        or lowered_path.count(operation_matches[0]) != 1
+        or not lowered_path.endswith(operation_matches[0])
+    ):
+        raise EndpointConfigurationError(
+            "endpoint_url contains a duplicated or non-terminal OpenAI operation path"
+        )
     operation_removed = False
     for suffix in _OPERATION_SUFFIXES:
         if path.lower().endswith(suffix):
@@ -61,15 +71,21 @@ def normalize_openai_endpoint(endpoint_url: str) -> CanonicalProviderEndpoint:
             operation_removed = True
             break
 
-    # A root or an unversioned operation URL uses the OpenAI-compatible /v1
-    # family.  A custom prefix ending in /vN is preserved.
+    # Only an origin (or an unversioned operation directly on the origin) gets
+    # the conventional /v1 default. Any other non-empty path is an explicit
+    # provider API base and must be preserved. Gateways commonly expose custom
+    # bases such as /openai or /tenant/api; silently inserting /v1 into those
+    # paths changes the provider contract.
     segments = [segment for segment in path.split("/") if segment]
     if segments and _is_version_segment(segments[-1]):
         version_prefix = f"/{segments[-1]}"
         base_path = "/" + "/".join(segments)
+    elif segments:
+        version_prefix = ""
+        base_path = "/" + "/".join(segments)
     else:
         version_prefix = "/v1"
-        base_path = ("/" + "/".join(segments) if segments else "") + version_prefix
+        base_path = version_prefix
 
     normalized = SplitResult(
         scheme=parsed.scheme.lower(),

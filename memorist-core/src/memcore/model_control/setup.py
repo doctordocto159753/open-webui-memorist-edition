@@ -21,6 +21,8 @@ class SetupRepository(Protocol):
 
     def usage_summary(self) -> dict[str, Any]: ...
 
+    def profile_certification(self, profile: Any) -> dict[str, Any]: ...
+
 
 SETUP_ROLES = (
     ModelRole.PREFLIGHT,
@@ -69,6 +71,23 @@ def build_setup_status(
             if resolution.model_profile_uuid
             else None
         )
+        configured_profile = (
+            repository.get_profile(str(configured["model_profile_uuid"]))
+            if configured is not None and configured.get("model_profile_uuid")
+            else None
+        )
+        status_profile = configured_profile or effective_profile
+        certification = (
+            repository.profile_certification(status_profile)
+            if status_profile is not None
+            else {
+                "secret_reference_configured": False,
+                "secret_available_in_core": True,
+                "authentication_status": "not_required",
+                "certification_status": "not_required",
+                "certification_current": True,
+            }
+        )
         available = bool(
             effective.get("is_enabled", True)
             and effective.get("provider_type") not in {None, "disabled", "unknown"}
@@ -92,7 +111,12 @@ def build_setup_status(
                 "source": (
                     f"inherited_from_{resolution.inheritance_source}"
                     if resolution.inheritance_source
-                    else "configured_default"
+                    else (
+                        "configured_default"
+                        if configured is not None
+                        and resolution.model_profile_uuid == configured.get("model_profile_uuid")
+                        else "configured_unusable"
+                    )
                     if configured is not None
                     else "built_in_fallback"
                 ),
@@ -109,14 +133,18 @@ def build_setup_status(
                 "model_name": effective.get("model_name"),
                 "model_profile_uuid": effective.get("model_profile_uuid"),
                 "endpoint_is_local": resolution.endpoint_is_local,
-                "secret_configured": resolution.secret_reference_configured,
-                "secret_available": resolution.secret_reference_available,
+                "secret_configured": certification["secret_reference_configured"],
+                "secret_available": certification["secret_available_in_core"],
+                "secret_reference_configured": certification["secret_reference_configured"],
+                "secret_available_in_core": certification["secret_available_in_core"],
+                "authentication_status": certification["authentication_status"],
+                "certification_status": certification["certification_status"],
+                "certification_current": certification["certification_current"],
                 "privacy_acknowledged": resolution.privacy_acknowledged,
                 "capability_compatible": resolution.capability_compatible,
                 "capability_reasons": resolution.capability_reasons,
                 "supports_structured_output": bool(
-                    effective_profile is not None
-                    and effective_profile.supports_structured_output
+                    effective_profile is not None and effective_profile.supports_structured_output
                 ),
                 "supports_embeddings": bool(
                     effective_profile is not None and effective_profile.supports_embeddings

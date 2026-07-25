@@ -105,9 +105,7 @@ def _processing_trace(
             (value,),
         ).fetchone()
         return int(
-            result["count"]
-            if isinstance(result, dict) or hasattr(result, "keys")
-            else result[0]
+            result["count"] if isinstance(result, dict) or hasattr(result, "keys") else result[0]
         )
 
     candidate_rows = connection.execute(
@@ -115,18 +113,14 @@ def _processing_trace(
         f"WHERE processing_run_uuid = {placeholder} GROUP BY status",
         (run_uuid,),
     ).fetchall()
-    candidate_statuses = {
-        str(item["status"]): int(item["count"]) for item in candidate_rows
-    }
+    candidate_statuses = {str(item["status"]): int(item["count"]) for item in candidate_rows}
     # Full/PostgreSQL historically calls the safe automatic transition
     # ``accepted`` while Lite/SQLite calls the equivalent lifecycle point
     # ``ready_for_consolidation``. Keep the raw ledger values for audit and
     # expose one canonical diagnostic contract for operators and the UI.
     canonical_candidate_statuses: dict[str, int] = {}
     for status, status_count in candidate_statuses.items():
-        canonical_status = (
-            "ready_for_consolidation" if status == "accepted" else status
-        )
+        canonical_status = "ready_for_consolidation" if status == "accepted" else status
         canonical_candidate_statuses[canonical_status] = (
             canonical_candidate_statuses.get(canonical_status, 0) + status_count
         )
@@ -140,9 +134,9 @@ def _processing_trace(
     memories = int(memory_count_row["count"])
     no_memory_reason: str | None = None
     if memories == 0:
-        if canonical_candidate_statuses.get(
-            "needs_review"
-        ) or canonical_candidate_statuses.get("ready_for_review"):
+        if canonical_candidate_statuses.get("needs_review") or canonical_candidate_statuses.get(
+            "ready_for_review"
+        ):
             no_memory_reason = "candidate_waiting_for_review"
         elif canonical_candidate_statuses.get("rejected"):
             no_memory_reason = "all_candidates_rejected"
@@ -167,9 +161,7 @@ def _processing_trace(
         "external_provider_called": any(bool(stage.get("called_provider")) for stage in stages),
         "fallback_used": any(bool(stage.get("fallback_used")) for stage in stages),
         "retryable_failures": [
-            stage
-            for stage in stages
-            if stage.get("status") in {"failed_open", "retry", "failed"}
+            stage for stage in stages if stage.get("status") in {"failed_open", "retry", "failed"}
         ],
         "no_memory_reason": no_memory_reason,
     }

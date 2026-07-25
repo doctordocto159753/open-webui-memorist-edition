@@ -80,12 +80,21 @@ export class MemoristDiagnostics extends HTMLElement {
     const diagnostics = this.state.diagnostics;
     const health = diagnostics.core_health || {};
     const integration = diagnostics.integration || {};
+    const runtime = diagnostics.runtime_status || {};
     const warnings = Array.isArray(health.profile_warnings) ? health.profile_warnings : [];
     const certification = health.full_mode_certification || "unknown";
     const rows: Array<[string, string]> = [
       ["Open WebUI integration", integration.route_order?.ordered_before_spa ? "connected (authenticated proxy reachable)" : "route order not verified"],
       ["Managed chat filter", integration.filter?.filter_id ? `${integration.filter.filter_id} (${integration.filter.action || "verified"})` : "not reported"],
       ["Memorist Core", String(health.status || "unknown")],
+      [
+        "Memory workflow runtime",
+        runtime.degraded
+          ? `degraded${runtime.last_error ? ` — ${runtime.last_error}` : ""}`
+          : runtime.memorist_core === "connected"
+            ? "healthy"
+            : "no runtime evidence",
+      ],
       ["Runtime mode", String(health.runtime_profile || "unknown")],
       ["Canonical store", String(health.canonical_store || "unknown")],
       ["Graph backend", `${health.graph_backend || "unknown"} (${health.graph_status || "unknown"})`],

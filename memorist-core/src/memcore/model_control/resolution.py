@@ -33,6 +33,8 @@ class RoleResolutionRepository(Protocol):
 
     def get_profile(self, model_profile_uuid: str) -> ModelProfile | None: ...
 
+    def profile_certification(self, profile: ModelProfile | str) -> dict[str, Any]: ...
+
 
 class EffectiveRoleResolution(BaseModel):
     requested_role: ModelRole
@@ -46,6 +48,9 @@ class EffectiveRoleResolution(BaseModel):
     inheritance_source: str | None = None
     secret_reference_configured: bool
     secret_reference_available: bool
+    authentication_status: str
+    certification_status: str
+    certification_current: bool
     privacy_acknowledgement_required: bool
     privacy_acknowledged: bool
     capability_compatible: bool
@@ -85,11 +90,12 @@ class RoleResolutionService:
 
         configured = self._configured(requested, workspace_uuid, project_uuid)
         if configured is not None:
-            profile, scope_source = configured
+            profile, scope_source, certification = configured
             unusable_reason = _profile_unusable_reason(
                 profile,
                 requested,
                 expected_profile_role=requested,
+                certification_status=str(certification["certification_status"]),
             )
             if unusable_reason is None:
                 return self._from_profile(
@@ -97,6 +103,7 @@ class RoleResolutionService:
                     requested,
                     profile,
                     scope_source=scope_source,
+                    certification=certification,
                 )
 
         inherited_role = ROLE_INHERITANCE.get(requested)
@@ -104,11 +111,12 @@ class RoleResolutionService:
         if inherited_role is not None:
             inherited = self._configured(inherited_role, workspace_uuid, project_uuid)
             if inherited is not None:
-                profile, scope_source = inherited
+                profile, scope_source, certification = inherited
                 unusable_reason = _profile_unusable_reason(
                     profile,
                     requested,
                     expected_profile_role=inherited_role,
+                    certification_status=str(certification["certification_status"]),
                 )
                 inherited_unusable_reason = unusable_reason
                 if unusable_reason is None:
@@ -118,6 +126,7 @@ class RoleResolutionService:
                         profile,
                         scope_source=scope_source,
                         inheritance_source=inherited_role.value,
+                        certification=certification,
                     )
 
         fallback_reason = "no_configured_default"
@@ -127,6 +136,7 @@ class RoleResolutionService:
                     configured[0],
                     requested,
                     expected_profile_role=requested,
+                    certification_status=str(configured[2]["certification_status"]),
                 )
                 or fallback_reason
             )
@@ -139,14 +149,18 @@ class RoleResolutionService:
         role: ModelRole,
         workspace_uuid: str | None,
         project_uuid: str | None,
-    ) -> tuple[ModelProfile, str] | None:
+    ) -> tuple[ModelProfile, str, dict[str, Any]] | None:
         resolved = self.repository.resolve_default(role, workspace_uuid, project_uuid)
         if resolved is None or resolved.get("model_profile_uuid") is None:
             return None
         profile = self.repository.get_profile(str(resolved["model_profile_uuid"]))
         if profile is None:
             return None
-        return profile, _scope_source(resolved, workspace_uuid, project_uuid)
+        return (
+            profile,
+            _scope_source(resolved, workspace_uuid, project_uuid),
+            self.repository.profile_certification(profile),
+        )
 
     def _from_profile(
         self,
@@ -155,13 +169,14 @@ class RoleResolutionService:
         profile: ModelProfile,
         *,
         scope_source: str,
+        certification: dict[str, Any],
         inheritance_source: str | None = None,
     ) -> EffectiveRoleResolution:
         compatible, reasons = _capability_compatibility(requested, profile)
         ack_required = requires_privacy_acknowledgement(profile)
         secret_configured = bool(profile.secret_env_var_name)
-        secret_available = (
-            not secret_configured or bool(os.environ.get(str(profile.secret_env_var_name)))
+        secret_available = not secret_configured or bool(
+            os.environ.get(str(profile.secret_env_var_name))
         )
         return EffectiveRoleResolution(
             requested_role=requested,
@@ -175,6 +190,9 @@ class RoleResolutionService:
             inheritance_source=inheritance_source,
             secret_reference_configured=secret_configured,
             secret_reference_available=secret_available,
+            authentication_status=str(certification["authentication_status"]),
+            certification_status=str(certification["certification_status"]),
+            certification_current=bool(certification["certification_current"]),
             privacy_acknowledgement_required=ack_required,
             privacy_acknowledged=not ack_required or profile.privacy_acknowledged_at is not None,
             capability_compatible=compatible,
@@ -201,6 +219,9 @@ class RoleResolutionService:
             scope_source="built_in_fallback",
             secret_reference_configured=False,
             secret_reference_available=True,
+            authentication_status="not_required",
+            certification_status="not_required",
+            certification_current=True,
             privacy_acknowledgement_required=False,
             privacy_acknowledged=True,
             capability_compatible=compatible,
@@ -223,7 +244,11 @@ def public_resolution(
         if resolution.model_profile_uuid
         else None
     )
-    payload["effective_profile"] = public_profile(profile) if profile is not None else None
+    payload["effective_profile"] = (
+        public_profile(profile, repository.profile_certification(profile))
+        if profile is not None
+        else None
+    )
     # Endpoint URLs may be shown in their redacted public form via effective_profile.
     payload.pop("endpoint_url", None)
     return payload
@@ -252,6 +277,7 @@ def _profile_unusable_reason(
     requested: ModelRole,
     *,
     expected_profile_role: ModelRole,
+    certification_status: str,
 ) -> str | None:
     if profile.role is not expected_profile_role:
         return "profile_role_mismatch"
@@ -261,6 +287,8 @@ def _profile_unusable_reason(
         return "privacy_acknowledgement_missing"
     if profile.secret_env_var_name and not os.environ.get(profile.secret_env_var_name):
         return "secret_reference_unavailable"
+    if certification_status != "current":
+        return f"provider_certification_{certification_status}"
     compatible, reasons = _capability_compatibility(requested, profile)
     if not compatible:
         return reasons[0] if reasons else "role_capability_incompatible"

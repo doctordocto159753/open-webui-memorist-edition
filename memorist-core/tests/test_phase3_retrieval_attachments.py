@@ -13,7 +13,7 @@ from memcore.config import Settings, get_settings
 from memcore.memory_control.policy import normalize_turn_policy
 from memcore.memory_control.repository import MemoryControlRepository, ResolvedTurnPolicy
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
-from memcore.model_control.providers.base import EmbeddingResponse
+from memcore.model_control.providers.base import EmbeddingResponse, ProviderHealth
 from memcore.model_control.repository import ModelControlRepository
 from memcore.model_control.schemas import ModelProfileCreate, ProviderType
 from memcore.models import ModelRole, RetrievalMode
@@ -301,6 +301,19 @@ def test_semantic_retrieval_uses_effective_embedding_processing_node(
             supports_embeddings=True,
             embedding_dimension=3,
         )
+    )
+    model_control.record_health_event(
+        profile.model_profile_uuid,
+        ProviderHealth(
+            status="ok",
+            provider_type=profile.provider_type,
+            model_name=profile.model_name,
+            latency_ms=1,
+            local_only_safe=True,
+            authentication_status="not_required",
+            role_compatibility_status="compatible",
+            overall_status="ok",
+        ),
     )
     model_control.set_default(ModelRole.EMBEDDING, profile.model_profile_uuid)
 

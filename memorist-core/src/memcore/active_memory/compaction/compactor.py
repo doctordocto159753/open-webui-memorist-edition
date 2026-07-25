@@ -65,8 +65,7 @@ class BlockCompactor:
                     "compaction_policy_version": COMPACTION_POLICY_VERSION,
                     "source_snapshot_hash": initial_source_snapshot_hash,
                     "sources": [
-                        source.model_dump(mode="json", exclude_none=True)
-                        for source in selected
+                        source.model_dump(mode="json", exclude_none=True) for source in selected
                     ],
                 },
             ),
@@ -123,8 +122,7 @@ class BlockCompactor:
             deterministic_output = deterministic_compaction(
                 {
                     "sources": [
-                        source.model_dump(mode="json", exclude_none=True)
-                        for source in selected
+                        source.model_dump(mode="json", exclude_none=True) for source in selected
                     ],
                 }
             )
@@ -165,9 +163,7 @@ class BlockCompactor:
             **result.model_dump(mode="json"),
             "published": True,
             "provider_output_applied": provider_output_applied,
-            "fallback": (
-                "deterministic_compaction" if not provider_output_applied else None
-            ),
+            "fallback": ("deterministic_compaction" if not provider_output_applied else None),
             "fallback_reason": fallback_reason,
             "deterministic_omissions": deterministic_omissions,
             "processing_node": stage.model_dump(mode="json", exclude={"output"}),

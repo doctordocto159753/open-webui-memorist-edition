@@ -786,6 +786,7 @@ def _assistant_response_completed_full(
             session_uuid=str(input_message["session_uuid"]),
             message_uuid=assistant_message_uuid,
             now=now,
+            settings=settings,
         )
         if request.attachment_uuid and attachment_row is not None and actor_user:
             MemoryControlRepository(

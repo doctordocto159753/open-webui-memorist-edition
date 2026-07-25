@@ -287,9 +287,7 @@ class PreflightService:
             workspace_uuid=(
                 str(scope["workspace_uuid"]) if scope and scope["workspace_uuid"] else None
             ),
-            project_uuid=(
-                str(scope["project_uuid"]) if scope and scope["project_uuid"] else None
-            ),
+            project_uuid=(str(scope["project_uuid"]) if scope and scope["project_uuid"] else None),
         )
         profile = (
             repository.get_profile(resolution.model_profile_uuid)
@@ -341,9 +339,7 @@ class PreflightService:
                 current_resolution = RoleResolutionService(repository).resolve(
                     ModelRole.PREFLIGHT,
                     workspace_uuid=(
-                        str(scope["workspace_uuid"])
-                        if scope and scope["workspace_uuid"]
-                        else None
+                        str(scope["workspace_uuid"]) if scope and scope["workspace_uuid"] else None
                     ),
                     project_uuid=(
                         str(scope["project_uuid"]) if scope and scope["project_uuid"] else None

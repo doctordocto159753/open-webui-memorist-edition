@@ -127,9 +127,7 @@ def validate_and_render_proposal(
 def _require_grounded_text(text: str, sources: list[BlockSource]) -> None:
     allowed = {_normalized(source.normalized_text) for source in sources}
     claims = [
-        _normalized(line.removeprefix("-").strip())
-        for line in text.splitlines()
-        if line.strip()
+        _normalized(line.removeprefix("-").strip()) for line in text.splitlines() if line.strip()
     ]
     if not claims or any(claim not in allowed for claim in claims):
         raise ValueError("provider compaction introduced an unsupported claim")
@@ -150,9 +148,7 @@ def _validate_conflicts(
             raise ValueError("compaction conflict provenance is invalid")
         if value.get("status") != "unresolved":
             raise ValueError("compaction conflicts must remain unresolved")
-        result.append(
-            {"memory_version_uuids": version_ids, "status": "unresolved"}
-        )
+        result.append({"memory_version_uuids": version_ids, "status": "unresolved"})
     return result
 
 
@@ -164,14 +160,15 @@ def _require_conflict_preservation(
     for source in sources:
         by_key.setdefault(source.canonical_key, []).append(source)
     declared = [
-        set(str(item) for item in conflict["memory_version_uuids"])
-        for conflict in conflicts
+        set(str(item) for item in conflict["memory_version_uuids"]) for conflict in conflicts
     ]
     for grouped_sources in by_key.values():
         source_ids = {source.memory_version_uuid for source in grouped_sources}
         values = {_normalized(source.normalized_text) for source in grouped_sources}
-        if len(source_ids) > 1 and len(values) > 1 and not any(
-            source_ids.issubset(conflict_ids) for conflict_ids in declared
+        if (
+            len(source_ids) > 1
+            and len(values) > 1
+            and not any(source_ids.issubset(conflict_ids) for conflict_ids in declared)
         ):
             raise ValueError("compaction silently flattened an unresolved conflict")
 

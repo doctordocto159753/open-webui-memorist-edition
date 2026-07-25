@@ -32,8 +32,7 @@ PERSIAN_ELEVEN_STAGE_PLAN = """طرح فنی یازده‌مرحله‌ای پر
 ۱۱. حاکمیت شبکه، رأی‌گیری و حل اختلاف."""
 
 PERSIAN_FOLLOW_UP = (
-    "تکنیک استفاده‌شده در مرحله بعد از مرحله ۶: مکانیسم‌های تأمین مالی "
-    "لایه‌های عمیق را توضیح بده."
+    "تکنیک استفاده‌شده در مرحله بعد از مرحله ۶: مکانیسم‌های تأمین مالی لایه‌های عمیق را توضیح بده."
 )
 
 
@@ -76,9 +75,7 @@ def test_persian_eleven_stage_plan_is_recalled_across_sessions_with_provenance(
         raw_text=PERSIAN_ELEVEN_STAGE_PLAN,
     )
 
-    processing = MemoryWorkerPipeline(connection, settings).process_message(
-        source.message_uuid
-    )
+    processing = MemoryWorkerPipeline(connection, settings).process_message(source.message_uuid)
     artifact = connection.execute(
         """
         SELECT *

@@ -135,8 +135,7 @@ def test_reclaimed_worker_fences_late_worker_from_all_canonical_writes(
 
     reclaim = connect(db_path)
     reclaim.execute(
-        "UPDATE jobs SET lease_expires_at = '2000-01-01T00:00:00' "
-        "WHERE job_uuid = ?",
+        "UPDATE jobs SET lease_expires_at = '2000-01-01T00:00:00' WHERE job_uuid = ?",
         (job.job_uuid,),
     )
     reclaim.commit()
@@ -168,8 +167,7 @@ def test_reclaimed_worker_fences_late_worker_from_all_canonical_writes(
     verify = connect(db_path)
     assert _canonical_counts(verify) == counts_after_worker_b
     final_job = verify.execute(
-        "SELECT status, locked_by, lease_token, lease_generation FROM jobs "
-        "WHERE job_uuid = ?",
+        "SELECT status, locked_by, lease_token, lease_generation FROM jobs WHERE job_uuid = ?",
         (job.job_uuid,),
     ).fetchone()
     assert dict(final_job) == {

@@ -207,6 +207,12 @@ export type ModelControlRoleDefaultSetResponse = ModelControlRoleDefaultSet & {
   reindex_required: boolean;
 };
 
+export type ModelControlRoleDefaultRemoveResponse = {
+  role: MemoristModelRole;
+  removed: boolean;
+  reindex_required: boolean;
+};
+
 export type ModelControlDefaultsResponse = { items: ModelControlDefault[] };
 
 export type ModelControlHealthEvent = {
@@ -240,6 +246,11 @@ export type MemoryNodeSetupRole = {
   endpoint_is_local: boolean;
   secret_configured: boolean;
   secret_available: boolean;
+  secret_reference_configured?: boolean;
+  secret_available_in_core?: boolean;
+  authentication_status?: string;
+  certification_status?: string;
+  certification_current?: boolean;
   privacy_acknowledged: boolean;
   capability_compatible: boolean;
   capability_reasons: string[];
@@ -388,6 +399,23 @@ export type MemoristOpenWebUIDiagnostics = {
       ordered_before_spa?: boolean;
     };
   };
+  runtime_status?: {
+    memorist_core?: string;
+    degraded?: boolean;
+    last_error?: string | null;
+    integration_outcome?: {
+      stage?: string;
+      outcome?: string;
+      created_at?: string;
+    } | null;
+    stage_outcomes?: Array<{
+      stage: string;
+      outcome: string;
+      created_at?: string;
+      last_success_at?: string | null;
+      last_failure_at?: string | null;
+    }>;
+  };
   openwebui_version: string;
 };
 
@@ -421,6 +449,7 @@ export class MemoristClient {
   async patchModelControlProfile(modelProfileUuid: string, payload: ModelControlProfilePatch): Promise<ModelControlProfile> { return this.controlPatch(`/model-control/profiles/${encodeURIComponent(modelProfileUuid)}`, payload); }
   async testModelControlProfile(modelProfileUuid: string, payload: ModelControlProfileTestRequest = {}): Promise<ModelControlProfileTestResponse> { return this.controlPost(`/model-control/profiles/${encodeURIComponent(modelProfileUuid)}/test`, payload); }
   async setModelControlDefault(payload: ModelControlRoleDefaultSet): Promise<ModelControlRoleDefaultSetResponse> { return this.controlPost("/model-control/defaults", payload); }
+  async removeModelControlDefault(role: MemoristModelRole): Promise<ModelControlRoleDefaultRemoveResponse> { return this.controlDelete(`/model-control/defaults/${encodeURIComponent(role)}`); }
   async acknowledgeModelControlPrivacy(payload: PrivacyAcknowledgementRequest): Promise<PrivacyAcknowledgementResponse> { return this.controlPost("/model-control/privacy/acknowledge", payload); }
   async modelRoleCosts(): Promise<unknown> { return this.get("/costs/model-roles"); }
   async diagnostics(): Promise<unknown> { return this.controlGet("/openwebui/status"); }
@@ -605,6 +634,15 @@ export class MemoristClient {
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error(await this.errorDetail(response));
+    return response.json() as Promise<T>;
+  }
+
+  private async controlDelete<T = unknown>(path: string): Promise<T> {
+    const response = await fetch(`${this.controlBaseUrl}${path}`, {
+      method: "DELETE",
+      credentials: "same-origin",
     });
     if (!response.ok) throw new Error(await this.errorDetail(response));
     return response.json() as Promise<T>;

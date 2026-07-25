@@ -349,10 +349,7 @@ class StageInvoker:
                 "prompt_id": request.prompt_id,
                 "prompt_version": request.prompt_version,
             }
-            if any(
-                values.get(key) != expected
-                for key, expected in expected_metadata.items()
-            ):
+            if any(values.get(key) != expected for key, expected in expected_metadata.items()):
                 return None
             if int(values.get("schema_version") or 0) != 1:
                 return None
@@ -501,11 +498,7 @@ class StageInvoker:
             result.fallback_reason,
             result.detail_sanitized,
             dump_ijson(result.validation_errors),
-            (
-                dump_ijson(result.output)
-                if result.output is not None
-                else None
-            ),
+            (dump_ijson(result.output) if result.output is not None else None),
             result.input_tokens,
             result.output_tokens,
             result.embedding_count,
@@ -577,11 +570,7 @@ class StageInvoker:
             "created_at",
             "schema_version",
         ]
-        output_json = (
-            dump_ijson(result.output)
-            if result.output is not None
-            else None
-        )
+        output_json = dump_ijson(result.output) if result.output is not None else None
         values = [
             new_uuid(),
             request.prompt_id,
@@ -637,9 +626,7 @@ class StageInvoker:
                 embedding_count=result.embedding_count,
                 latency_ms=result.latency_ms,
                 status=result.status,
-                error_class=(
-                    result.validation_errors[0] if result.validation_errors else None
-                ),
+                error_class=(result.validation_errors[0] if result.validation_errors else None),
                 error_message_sanitized=result.detail_sanitized,
             )
         )

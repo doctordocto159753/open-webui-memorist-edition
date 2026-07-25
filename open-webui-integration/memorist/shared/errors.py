@@ -11,6 +11,17 @@ class MemoristCoreUnavailable(MemoristIntegrationError):
     pass
 
 
+class MemoristCoreTimeout(MemoristCoreUnavailable):
+    pass
+
+
+class MemoristCoreHTTPError(MemoristIntegrationError):
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(detail, developer_visible=True)
+        self.status_code = status_code
+        self.detail = detail
+
+
 class UnsafeMemoristUrl(MemoristIntegrationError):
     pass
 

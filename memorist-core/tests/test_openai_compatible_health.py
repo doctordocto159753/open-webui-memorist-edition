@@ -69,6 +69,79 @@ def test_openai_compatible_health_check_reports_json_mode_unsupported(
     )
 
 
+def test_json_object_probe_corrects_semantically_successful_wrong_marker(
+    openai_json_mode_server: tuple[str, type[Any]],
+) -> None:
+    endpoint, handler = openai_json_mode_server
+    handler.response_contents = [
+        json.dumps(
+            {
+                "status": "success",
+                "message": "Memorist connectivity test successful.",
+            }
+        ),
+        json.dumps({"memorist_provider_test": "ok"}),
+    ]
+
+    health = OpenAICompatibleLLMProvider(
+        endpoint,
+        "mock-chat",
+        supports_json_mode=True,
+        requires_structured_extraction=True,
+    ).health_check()
+
+    assert health.status == "ok"
+    assert health.probe_attempts == 2
+    assert health.schema_mode == "json_object"
+    assert len(handler.payloads) == 2
+    assert "Correct the previous response" in handler.payloads[1]["messages"][1]["content"]
+
+
+def test_json_object_probe_reports_marker_mismatch_after_bounded_retry(
+    openai_json_mode_server: tuple[str, type[Any]],
+) -> None:
+    endpoint, handler = openai_json_mode_server
+    wrong = json.dumps({"status": "success"})
+    handler.response_contents = [wrong, wrong]
+
+    health = OpenAICompatibleLLMProvider(
+        endpoint,
+        "mock-chat",
+        supports_json_mode=True,
+        requires_structured_extraction=True,
+    ).health_check()
+
+    assert health.status == "error"
+    assert health.overall_status == "incompatible"
+    assert health.structured_output_status == "valid_json_wrong_marker"
+    assert health.failure_stage == "semantic_marker"
+    assert health.probe_attempts == 2
+    assert len(handler.payloads) == 2
+
+
+def test_strict_structured_probe_sends_constant_schema(
+    openai_json_mode_server: tuple[str, type[Any]],
+) -> None:
+    endpoint, handler = openai_json_mode_server
+
+    health = OpenAICompatibleLLMProvider(
+        endpoint,
+        "mock-chat",
+        supports_structured_output=True,
+        requires_structured_extraction=True,
+    ).health_check()
+
+    response_format = handler.last_payload["response_format"]
+    schema_contract = response_format["json_schema"]
+    assert health.status == "ok"
+    assert health.schema_mode == "json_schema"
+    assert response_format["type"] == "json_schema"
+    assert schema_contract["strict"] is True
+    assert schema_contract["schema"]["required"] == ["memorist_provider_test"]
+    assert schema_contract["schema"]["properties"]["memorist_provider_test"]["const"] == "ok"
+    assert schema_contract["schema"]["additionalProperties"] is False
+
+
 def test_openai_compatible_health_check_redacts_auth_failure(
     openai_json_mode_server: tuple[str, type[Any]],
 ) -> None:
@@ -119,6 +192,8 @@ def openai_json_mode_server() -> Iterator[tuple[str, type[Any]]]:
         reject_response_format = False
         auth_failure_body: str | None = None
         last_payload: dict[str, Any] = {}
+        payloads: list[dict[str, Any]] = []
+        response_contents: list[str] = []
 
         def do_POST(self) -> None:  # noqa: N802
             if self.path != "/v1/chat/completions":
@@ -128,6 +203,7 @@ def openai_json_mode_server() -> Iterator[tuple[str, type[Any]]]:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
             type(self).last_payload = payload
+            type(self).payloads.append(payload)
             auth_failure_body = type(self).auth_failure_body
             if auth_failure_body is not None:
                 body = auth_failure_body.encode("utf-8")
@@ -145,7 +221,11 @@ def openai_json_mode_server() -> Iterator[tuple[str, type[Any]]]:
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            content = json.dumps({"memorist_provider_test": "ok"})
+            content = (
+                type(self).response_contents.pop(0)
+                if type(self).response_contents
+                else json.dumps({"memorist_provider_test": "ok"})
+            )
             body = json.dumps({"choices": [{"message": {"content": content}}]}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

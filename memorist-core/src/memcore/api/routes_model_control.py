@@ -8,10 +8,8 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import ValidationError
 
 from memcore.config import Settings, get_settings
-from memcore.model_control.postgres_repository import PostgresModelControlRepository
 from memcore.model_control.registry import test_profile_health
 from memcore.model_control.repository import (
-    ModelControlRepository,
     PrivacyAcknowledgementRequired,
     public_profile,
 )
@@ -27,6 +25,11 @@ from memcore.model_control.schemas import (
 )
 from memcore.model_control.security import sanitize_error_message
 from memcore.model_control.setup import build_setup_status
+from memcore.model_control.storage import (
+    ModelControlStorage,
+    model_control_repository,
+    uses_postgres_model_control,
+)
 from memcore.models import ModelRole
 from memcore.storage.postgres.migrations import apply_postgres_migrations
 from memcore.storage.sqlite import connect
@@ -53,11 +56,17 @@ def setup_status(workspace_uuid: str | None = None) -> dict[str, Any]:
 @router.get("/profiles", response_model=None)
 def list_profiles(role: str | None = Query(default=None)) -> dict[str, Any]:
     with _connection() as connection:
+        repository = _repository(connection)
         try:
-            profiles = _repository(connection).list_profiles(role)
+            profiles = repository.list_profiles(role)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
-        return {"items": [public_profile(profile) for profile in profiles]}
+        return {
+            "items": [
+                public_profile(profile, repository.profile_certification(profile))
+                for profile in profiles
+            ]
+        }
 
 
 @router.post("/profiles", response_model=None)
@@ -67,9 +76,10 @@ def create_profile(request: dict[str, Any]) -> dict[str, Any]:
     except ValidationError as error:
         raise HTTPException(status_code=422, detail=_safe_validation_detail(error)) from error
     with _connection() as connection:
+        repository = _repository(connection)
         try:
-            profile = _repository(connection).create_profile(validated)
-            return public_profile(profile)
+            profile = repository.create_profile(validated)
+            return public_profile(profile, repository.profile_certification(profile))
         except ValueError as error:
             raise HTTPException(
                 status_code=400,
@@ -80,10 +90,11 @@ def create_profile(request: dict[str, Any]) -> dict[str, Any]:
 @router.get("/profiles/{model_profile_uuid}", response_model=None)
 def get_profile(model_profile_uuid: str) -> dict[str, Any]:
     with _connection() as connection:
-        profile = _repository(connection).get_profile(model_profile_uuid)
+        repository = _repository(connection)
+        profile = repository.get_profile(model_profile_uuid)
         if profile is None:
             raise HTTPException(status_code=404, detail="model profile not found")
-        return public_profile(profile)
+        return public_profile(profile, repository.profile_certification(profile))
 
 
 @router.patch("/profiles/{model_profile_uuid}", response_model=None)
@@ -93,9 +104,10 @@ def patch_profile(model_profile_uuid: str, request: dict[str, Any]) -> dict[str,
     except ValidationError as error:
         raise HTTPException(status_code=422, detail=_safe_validation_detail(error)) from error
     with _connection() as connection:
+        repository = _repository(connection)
         try:
-            profile = _repository(connection).patch_profile(model_profile_uuid, validated)
-            return public_profile(profile)
+            profile = repository.patch_profile(model_profile_uuid, validated)
+            return public_profile(profile, repository.profile_certification(profile))
         except ValueError as error:
             raise HTTPException(
                 status_code=400,
@@ -119,10 +131,12 @@ def test_profile(model_profile_uuid: str, request: ProfileTestRequest) -> dict[s
         )
         health_payload = health.model_dump(mode="json")
         health_payload["detail"] = health.detail_sanitized
+        certification = repository.profile_certification(profile)
         return {
             "model_profile_uuid": model_profile_uuid,
             "health": health_payload,
             "timeout_ms": timeout_ms,
+            "certification": certification,
             "test_levels": {
                 "connectivity_and_authentication": {
                     "host": health.dns_or_host_reachable,
@@ -218,6 +232,20 @@ def set_default(request: ModelRoleDefaultSet) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+@router.delete("/defaults", response_model=None)
+def remove_default(
+    role: ModelRole,
+    workspace_uuid: str | None = None,
+    project_uuid: str | None = None,
+) -> dict[str, Any]:
+    with _connection() as connection:
+        return _repository(connection).remove_default(
+            role,
+            workspace_uuid=workspace_uuid,
+            project_uuid=project_uuid,
+        )
+
+
 @router.get("/usage", response_model=None)
 def get_usage() -> dict[str, Any]:
     with _connection() as connection:
@@ -265,16 +293,13 @@ def _safe_validation_detail(error: ValidationError) -> str:
 
 
 def _is_full_postgres(settings: Settings) -> bool:
-    return settings.runtime_profile == "full" and settings.canonical_store == "postgres"
+    return uses_postgres_model_control(settings)
 
 
 def _repository(
     connection: Any,
-) -> ModelControlRepository | PostgresModelControlRepository:
-    settings = get_settings()
-    if _is_full_postgres(settings):
-        return PostgresModelControlRepository(connection)
-    return ModelControlRepository(connection)
+) -> ModelControlStorage:
+    return model_control_repository(connection)
 
 
 @contextmanager

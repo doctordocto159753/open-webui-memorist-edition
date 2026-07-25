@@ -59,7 +59,9 @@ async def _forward(
         if content_type:
             headers["Content-Type"] = content_type
     try:
-        async with httpx.AsyncClient(timeout=client.config.timeout_seconds) as transport:
+        async with httpx.AsyncClient(
+            timeout=client.config.timeout_seconds_for(core_path)
+        ) as transport:
             response = await transport.request(
                 method,
                 client.base_url + core_path,
@@ -67,6 +69,11 @@ async def _forward(
                 headers=headers,
                 content=content,
             )
+    except httpx.TimeoutException as error:
+        raise HTTPException(
+            status_code=504,
+            detail="Memorist import request timed out; the operation may still be running",
+        ) from error
     except (httpx.HTTPError, OSError) as error:
         raise HTTPException(status_code=502, detail=sanitize_error(error)) from error
     if not response.is_success:
@@ -112,7 +119,9 @@ async def upload_import_file(
         data["processing_mode"] = processing_mode
     try:
         await file.seek(0)
-        async with httpx.AsyncClient(timeout=client.config.timeout_seconds) as transport:
+        async with httpx.AsyncClient(
+            timeout=client.config.timeout_seconds_for(core_path)
+        ) as transport:
             response = await transport.post(
                 client.base_url + core_path,
                 headers=headers,
@@ -125,6 +134,11 @@ async def upload_import_file(
                     )
                 },
             )
+    except httpx.TimeoutException as error:
+        raise HTTPException(
+            status_code=504,
+            detail="Memorist import upload timed out",
+        ) from error
     except (httpx.HTTPError, OSError) as error:
         raise HTTPException(status_code=502, detail=sanitize_error(error)) from error
     if not response.is_success:

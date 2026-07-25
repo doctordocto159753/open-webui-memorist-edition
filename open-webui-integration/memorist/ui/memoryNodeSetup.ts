@@ -241,7 +241,7 @@ export class MemoristMemoryNodeSetup extends HTMLElement {
         <p>${escapeHtml(roleState(item))}</p>
         <span class="badge">${escapeHtml(item.provider_name || "Unavailable")} · ${escapeHtml(item.model_name || "—")}</span>
         <p class="hint">Effective: ${escapeHtml(item.effective_role)} · ${escapeHtml(item.source)} · ${item.endpoint_is_local ? "local" : "remote"}</p>
-        <p class="hint">Secret: ${item.secret_configured ? item.secret_available ? "configured" : "reference missing" : "not required"} · Privacy: ${item.privacy_acknowledged ? "acknowledged" : "required"}</p>
+        <p class="hint">Secret: ${(item.secret_reference_configured ?? item.secret_configured) ? (item.secret_available_in_core ?? item.secret_available) ? "available in Core" : "reference missing in Core" : "not required"} · Auth: ${escapeHtml(item.authentication_status || "not required")} · Certification: ${escapeHtml(item.certification_status || "not required")} · Privacy: ${item.privacy_acknowledged ? "acknowledged" : "required"}</p>
         <p class="hint">Health: ${escapeHtml(item.last_health?.status || "never tested")} · Runtime: ${item.runtime_wired ? item.last_runtime_use ? `used ${item.last_runtime_use.count} time(s)` : "wired, never exercised" : "not wired"}</p>
         ${item.fallback_reason ? `<p class="hint">Fallback: ${escapeHtml(item.fallback_reason)}</p>` : ""}
       </article>`).join("") ?? "";

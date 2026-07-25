@@ -50,6 +50,7 @@ class Filter:
         _apply_trusted_host_metadata(body, __metadata__)
         remove_memory_attachments(body)
         if not config.enabled:
+            _metadata(body)["memorist_skipped_reason"] = "workflow_explicitly_disabled"
             return body
         parsed = parse_inlet_body(body, __user__)
         if parsed.user_message is None or parsed.content_text is None:
@@ -60,8 +61,9 @@ class Filter:
         if not parsed.user_id or not parsed.workspace_id:
             metadata["memorist_skipped_reason"] = "trusted_actor_identity_unavailable"
             return body
+        client = MemoristClient(config)
+        stage = "policy"
         try:
-            client = MemoristClient(config)
             actor_user_id = parsed.user_id
             request_control = body.get("memorist")
             if request_control is not None and not isinstance(request_control, dict):
@@ -97,6 +99,13 @@ class Filter:
                 ):
                     metadata.pop(key, None)
                 metadata["memorist_private"] = True
+                _record_outcome_best_effort(
+                    client,
+                    user_id=actor_user_id,
+                    workspace_uuid=str(parsed.workspace_id),
+                    stage="policy",
+                    outcome="private",
+                )
                 return body
             if policy.mode == "no_recall":
                 # A stale preview/delivery marker must never cross a Send-without-Memorist
@@ -108,6 +117,13 @@ class Filter:
                 metadata.pop("memorist_retrieval_run_uuid", None)
                 metadata.pop("memorist_attachment_pending_review", None)
                 metadata.pop("memorist_approved_attachment_uuid", None)
+                _record_outcome_best_effort(
+                    client,
+                    user_id=actor_user_id,
+                    workspace_uuid=str(parsed.workspace_id),
+                    stage="recall",
+                    outcome="no_recall",
+                )
             if (
                 policy.mode == "no_recall"
                 and metadata.get("memorist_regeneration_uuid")
@@ -117,6 +133,7 @@ class Filter:
                 if parsed.workspace_id is not None:
                     metadata["memorist_workspace_uuid"] = parsed.workspace_id
                 return body
+            stage = "session"
             resolved = client.resolve_session(
                 openwebui_conversation_id=parsed.conversation_id,
                 title=parsed.title,
@@ -140,6 +157,7 @@ class Filter:
                         "attachment review requires the original Open WebUI message ID"
                     )
                 review_capture_key = f"review-prepare:{actor_user_id}:{parsed.message_id}"
+            stage = "capture"
             captured = client.capture_message(
                 resolved.session_uuid,
                 "user",
@@ -163,6 +181,13 @@ class Filter:
             metadata["memorist_input_message_uuid"] = captured.message_uuid
             metadata["memorist_user_uuid"] = actor_user_id
             metadata["memorist_workspace_uuid"] = resolved.workspace_uuid or parsed.workspace_id
+            _record_outcome_best_effort(
+                client,
+                user_id=actor_user_id,
+                workspace_uuid=str(resolved.workspace_uuid or parsed.workspace_id),
+                stage="capture",
+                outcome="ok",
+            )
             if metadata.get("memorist_review_disposition") in {
                 "suppressed",
                 "cancelled_before_send",
@@ -205,6 +230,7 @@ class Filter:
                 metadata.pop("memorist_attachment_pending_review", None)
                 return body
             if config.preflight_enabled and policy.recall_enabled and policy.attachment_enabled:
+                stage = "recall"
                 self._attach_preflight(
                     body,
                     client,
@@ -219,8 +245,23 @@ class Filter:
                     resolved.workspace_uuid or parsed.workspace_id,
                     policy.attachment_review,
                 )
+                _record_outcome_best_effort(
+                    client,
+                    user_id=actor_user_id,
+                    workspace_uuid=str(resolved.workspace_uuid or parsed.workspace_id),
+                    stage="recall",
+                    outcome="ok",
+                )
         except Exception as error:
-            return _handle_failure(body, config.fail_open, error)
+            return _handle_failure(
+                body,
+                config.fail_open,
+                error,
+                client=client,
+                user_id=parsed.user_id,
+                workspace_uuid=parsed.workspace_id,
+                stage=stage,
+            )
         finally:
             parsed.user_message["content"] = parsed.original_content
         return body
@@ -251,7 +292,8 @@ class Filter:
             turn_policy = str(metadata.get("memorist_turn_policy") or "full")
             if turn_policy == "private":
                 return body
-            MemoristClient(config).assistant_completed(
+            client = MemoristClient(config)
+            client.assistant_completed(
                 str(input_message_uuid),
                 assistant_text,
                 metadata.get("memorist_delivered_attachment_uuid"),
@@ -262,9 +304,24 @@ class Filter:
                 workspace_uuid=str(actor_workspace),
                 regeneration_uuid=metadata.get("memorist_regeneration_uuid"),
             )
+            _record_outcome_best_effort(
+                client,
+                user_id=str(actor_user),
+                workspace_uuid=str(actor_workspace),
+                stage="chat_outlet",
+                outcome="ok",
+            )
             self._completed_response_keys.add(current_response_key)
         except Exception as error:
-            return _handle_failure(body, config.fail_open, error)
+            return _handle_failure(
+                body,
+                config.fail_open,
+                error,
+                client=MemoristClient(config),
+                user_id=str(actor_user),
+                workspace_uuid=str(actor_workspace),
+                stage="assistant_completion",
+            )
         return body
 
     def _attach_preflight(
@@ -329,14 +386,58 @@ class Filter:
         metadata["memorist_budget_reason"] = result.budget_reason
 
 
-def _handle_failure(body: dict[str, Any], fail_open: bool, error: BaseException) -> dict[str, Any]:
+def _handle_failure(
+    body: dict[str, Any],
+    fail_open: bool,
+    error: BaseException,
+    *,
+    client: MemoristClient | None = None,
+    user_id: str | None = None,
+    workspace_uuid: str | None = None,
+    stage: str = "chat_inlet",
+) -> dict[str, Any]:
     warn("Memorist integration skipped", error)
     metadata = _metadata(body)
     metadata["memorist_last_error"] = sanitize_error(error)
+    metadata["memorist_degraded"] = True
+    metadata["memorist_degraded_stage"] = stage
+    if client and user_id and workspace_uuid:
+        _record_outcome_best_effort(
+            client,
+            user_id=user_id,
+            workspace_uuid=workspace_uuid,
+            stage=stage,
+            outcome="failed_open" if fail_open else "degraded",
+            degraded_reason=f"{stage}_failed",
+            detail_sanitized=sanitize_error(error),
+        )
     if fail_open:
         return body
     metadata["memorist_failed_closed"] = True
     raise MemoristIntegrationError("Memorist preflight failed", developer_visible=True) from error
+
+
+def _record_outcome_best_effort(
+    client: MemoristClient,
+    *,
+    user_id: str,
+    workspace_uuid: str,
+    stage: str,
+    outcome: str,
+    degraded_reason: str | None = None,
+    detail_sanitized: str | None = None,
+) -> None:
+    try:
+        client.record_integration_outcome(
+            user_id=user_id,
+            workspace_uuid=workspace_uuid,
+            stage=stage,
+            outcome=outcome,
+            degraded_reason=degraded_reason,
+            detail_sanitized=detail_sanitized,
+        )
+    except Exception as error:
+        warn("Memorist outcome audit unavailable", error)
 
 
 def _metadata(body: dict[str, Any]) -> dict[str, Any]:
@@ -378,6 +479,10 @@ def _config_from_valves(valves: Any) -> MemoristIntegrationConfig:
         preflight_enabled=base.preflight_enabled
         and bool(getattr(valves, "preflight_enabled", base.preflight_enabled)),
         preflight_timeout_ms=int(getattr(valves, "timeout_ms", base.preflight_timeout_ms)),
+        capture_timeout_ms=base.capture_timeout_ms,
+        control_timeout_ms=base.control_timeout_ms,
+        provider_test_timeout_ms=base.provider_test_timeout_ms,
+        admin_timeout_ms=base.admin_timeout_ms,
         attachment_token_budget=int(getattr(valves, "token_budget", base.attachment_token_budget)),
         attachment_max_tokens=int(getattr(valves, "token_budget", base.attachment_max_tokens)),
         retrieval_mode=str(getattr(valves, "retrieval_mode", base.retrieval_mode)),

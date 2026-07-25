@@ -27,6 +27,18 @@ const healthyDiagnostics: MemoristOpenWebUIDiagnostics = {
     filter: { filter_id: "memorist_memory_filter", action: "unchanged" },
     route_order: { spa_mount_present: true, memorist_route_count: 30, ordered_before_spa: true },
   },
+  runtime_status: {
+    memorist_core: "connected",
+    degraded: false,
+    stage_outcomes: [
+      {
+        stage: "capture",
+        outcome: "ok",
+        last_success_at: "2026-01-01T00:00:00Z",
+        last_failure_at: null,
+      },
+    ],
+  },
   openwebui_version: "0.9.6",
 };
 
@@ -61,9 +73,35 @@ describe("memorist-diagnostics", () => {
     expect(text).toContain("not_run");
     expect(text).toContain("not a runtime failure");
     expect(text).toContain("memorist_memory_filter");
+    expect(text).toContain("Memory workflow runtime");
+    expect(text).toContain("healthy");
     expect(text).toContain("0.9.6");
     expect(text).toContain("ready (2 role defaults configured)");
     expect(text).not.toContain("postgres_dsn");
+  });
+
+  it("surfaces a sanitized fail-open degraded state", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const degraded: MemoristOpenWebUIDiagnostics = {
+      ...healthyDiagnostics,
+      runtime_status: {
+        memorist_core: "connected",
+        degraded: true,
+        last_error: "capture request returned HTTP 500",
+      },
+    };
+    const element = mountMemoristDiagnostics(container, {
+      async openwebuiDiagnostics() {
+        return degraded;
+      },
+      async memoryNodeSetupStatus() {
+        return setupStatus;
+      },
+    });
+    await flush();
+    expect(element.textContent).toContain("degraded");
+    expect(element.textContent).toContain("capture request returned HTTP 500");
   });
 
   it("shows an unauthorized state for non-admin errors", async () => {

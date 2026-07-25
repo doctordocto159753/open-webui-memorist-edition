@@ -7,10 +7,12 @@ from uuid import uuid4
 
 import pytest
 
+from memcore.api.routes_openwebui import _pg_enqueue_capture_jobs
 from memcore.config import Settings
 from memcore.imports.runtime import import_connection, initialize_runtime_storage
 from memcore.memory_worker.postgres.pipeline import PostgresMemoryWorkerPipeline
 from memcore.model_control.postgres_repository import PostgresModelControlRepository
+from memcore.model_control.providers.base import ProviderHealth
 from memcore.model_control.schemas import ModelProfileCreate, ProviderType
 from memcore.model_control.stage_contracts import (
     deterministic_privacy,
@@ -120,6 +122,97 @@ def _create_deterministic_profile(
     )
     connection.commit()
     return profile.model_profile_uuid
+
+
+def test_full_postgres_capture_schedules_remote_jsonb_profile(
+    tmp_path: Path,
+) -> None:
+    """Regression for F1: never decode PostgreSQL JSONB with the SQLite mapper."""
+
+    settings = _settings(tmp_path)
+    initialize_runtime_storage(settings)
+    with import_connection(settings) as connection:
+        connection.execute("DELETE FROM model_role_defaults WHERE role = 'memory_extraction'")
+        message_uuid = _create_message(
+            connection,
+            "Remember that Full mode keeps model control in PostgreSQL.",
+        )
+        session_uuid = str(
+            connection.execute(
+                "SELECT session_uuid FROM messages WHERE message_uuid = ?",
+                (message_uuid,),
+            ).fetchone()["session_uuid"]
+        )
+        repository = PostgresModelControlRepository(connection)
+        profile = repository.create_profile(
+            ModelProfileCreate(
+                profile_name="F1 remote capture regression",
+                provider_type=ProviderType.OPENAI_COMPATIBLE_LLM,
+                provider_name="controlled-test-provider",
+                model_name="controlled-memory-model",
+                role=ModelRole.MEMORY_EXTRACTION,
+                endpoint_url="http://127.0.0.1:9/custom/v1",
+                endpoint_is_local=True,
+                supports_structured_output=True,
+                supports_json_mode=True,
+                privacy_acknowledged=True,
+            )
+        )
+        repository.record_health_event(
+            profile.model_profile_uuid,
+            ProviderHealth(
+                status="ok",
+                provider_type=profile.provider_type,
+                model_name=profile.model_name,
+                latency_ms=1,
+                local_only_safe=True,
+                authentication_status="not_required",
+                role_compatibility_status="compatible",
+                overall_status="ok",
+                schema_mode="json_schema",
+            ),
+        )
+        repository.set_default(ModelRole.MEMORY_EXTRACTION, profile.model_profile_uuid)
+
+        _pg_enqueue_capture_jobs(
+            connection.raw,
+            session_uuid=session_uuid,
+            message_uuid=message_uuid,
+            now=utc_now(),
+            settings=settings,
+        )
+        queued = connection.execute(
+            """
+            SELECT payload_jsonb
+            FROM jobs
+            WHERE job_type = 'memory_extraction'
+              AND idempotency_key = ?
+            """,
+            (f"openwebui:memory_extraction:{message_uuid}",),
+        ).fetchone()["payload_jsonb"]
+        usage = connection.execute(
+            """
+            SELECT model_profile_uuid, provider_type, model_name
+            FROM model_usage_events
+            WHERE message_uuid = ? AND event_type = 'queued'
+            """,
+            (message_uuid,),
+        ).fetchone()
+        connection.execute(
+            """
+            DELETE FROM model_role_defaults
+            WHERE role = 'memory_extraction' AND model_profile_uuid = ?
+            """,
+            (profile.model_profile_uuid,),
+        )
+        connection.commit()
+
+    assert queued["model_profile_uuid"] == profile.model_profile_uuid
+    assert queued["provider_type"] == ProviderType.OPENAI_COMPATIBLE_LLM.value
+    assert queued["model_name"] == "controlled-memory-model"
+    assert usage["model_profile_uuid"] == profile.model_profile_uuid
+    assert usage["provider_type"] == ProviderType.OPENAI_COMPATIBLE_LLM.value
+    assert usage["model_name"] == "controlled-memory-model"
 
 
 def test_full_postgres_stage_replay_returns_typed_stored_output_after_restart(
@@ -415,8 +508,7 @@ def test_full_postgres_embedding_projection_recovers_after_stage_persisted_crash
         )
         assert (
             connection.execute(
-                "SELECT COUNT(*) FROM memory_version_embeddings "
-                "WHERE memory_version_uuid = ?",
+                "SELECT COUNT(*) FROM memory_version_embeddings WHERE memory_version_uuid = ?",
                 (version_uuid,),
             ).fetchone()[0]
             == 0
