@@ -16,7 +16,11 @@ def test_model_control_routes_use_postgres_repository_in_full_mode() -> None:
         storage_source
     )
     assert "apply_postgres_migrations(migration_connection)" in source
-    assert "return PostgresModelControlRepository(raw_connection)" in storage_source
+    # Full mode owns JSONB decoding through the PostgreSQL repository. The factory
+    # passes the caller-supplied connection through unchanged (a PostgresCompat
+    # connection preserves column names while leaving JSONB values native); it must
+    # never unwrap to a raw connection that would drop the column-name mapping.
+    assert "return PostgresModelControlRepository(connection)" in storage_source
 
 
 def test_postgres_model_control_writes_profiles_and_defaults_to_canonical_tables() -> None:
@@ -32,7 +36,12 @@ def test_model_control_default_resolution_matches_memory_worker_profile_query() 
     repository_source = PG_REPO.read_text(encoding="utf-8")
     pipeline_source = PIPELINE.read_text(encoding="utf-8")
     expected_join = "JOIN model_profiles p ON p.model_profile_uuid = d.model_profile_uuid"
+    # The canonical default-resolution join lives once, in the PostgreSQL repository.
     assert expected_join in repository_source
-    assert expected_join in pipeline_source
     assert "WHERE d.role = %s" in repository_source
-    assert "WHERE d.role = 'memory_extraction'" in pipeline_source
+    # The memory-worker pipeline must not duplicate that SQL; it resolves the default
+    # through the same PostgreSQL repository + RoleResolutionService so global/workspace/
+    # project resolution cannot diverge between the model-control API and runtime.
+    assert "PostgresModelControlRepository(self.connection)" in pipeline_source
+    assert "RoleResolutionService(repository).resolve(" in pipeline_source
+    assert "ModelRole.MEMORY_EXTRACTION" in pipeline_source
