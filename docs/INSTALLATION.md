@@ -50,7 +50,8 @@ need Git, Python, `uv`, or a repository checkout.
 1. Start Docker Desktop and wait until it reports **Running**.
 2. Double-click **`Memorist.cmd`**.
 3. Choose Lite or Full explicitly.
-4. The wizard checks Docker, ports (`3000`, `8777`), and disk; generates a local
+4. The wizard checks Docker, active listeners, Windows excluded TCP ranges, and
+   disk; deterministically selects host ports starting at `3000` and `8777`; generates a local
    `.env` with strong secrets; optionally stores role-key values; validates the
    effective Compose configuration; starts services; waits for health; verifies
    the requested runtime; and opens <http://localhost:3000>.
@@ -61,6 +62,7 @@ From PowerShell:
 .\Install-Memorist.ps1
 .\Install-Memorist.ps1 -Mode full -NonInteractive -NoBrowser
 .\Install-Memorist.ps1 -Mode lite -DryRun -NonInteractive
+.\Install-Memorist.ps1 -Mode lite -EnableOllama
 ```
 
 A dry run writes no `.env` and starts no containers. It returns non-zero when
@@ -70,6 +72,18 @@ invalid; it must not print a successful dry-run after failed validation.
 Re-running the installer preserves existing generated secrets and the installed
 mode. It refuses an implicit Lite/Full switch. A Lite-to-Full move requires the
 certified migration/export path rather than silently abandoning SQLite data.
+The selected host ports and a stable `MEMORIST_INSTALLATION_ID` are persisted
+in `.env`. Container port `8777` never changes: Open WebUI always calls
+`http://memorist-core:8777`; `MEMORIST_CORE_HOST_PORT` controls only Windows
+host access.
+
+If a new extraction directory targets the existing `memorist` Compose project,
+the installer recovers the allow-listed installation identity and credentials
+from its containers. Before the Full application starts it performs a TCP
+password-authenticated `SELECT 1` against PostgreSQL. A mismatched `.env`, or an
+orphaned PostgreSQL volume whose credentials cannot be recovered, fails closed
+with recovery guidance. It never runs `ALTER ROLE` and never deletes a volume.
+Restore the previous `.env` or start the previous containers and rerun.
 
 ## Memory processing and API keys
 
@@ -92,7 +106,9 @@ Role variables:
 MEMORIST_MEMORY_EXTRACTION_API_KEY
 MEMORIST_HIGH_CONFIDENCE_EXTRACTION_API_KEY
 MEMORIST_EMBEDDING_API_KEY
+MEMORIST_PREFLIGHT_API_KEY
 MEMORIST_PRIVACY_SENSITIVITY_API_KEY
+MEMORIST_BLOCK_COMPACTION_API_KEY
 MEMORIST_IMPORT_RECONSTRUCTION_API_KEY
 ```
 
@@ -104,6 +120,20 @@ Settings → Memorist → Processing Nodes
 ```
 
 The installer does not bypass those admin and privacy controls.
+
+Remote profiles require a persisted successful role certification before the
+backend accepts a default assignment. The rule survives browser refresh.
+Changing the endpoint, model, capabilities, enabled state, or secret reference
+makes the prior certification stale; retest the exact profile. Processing
+Nodes reports secret reference configured, secret available inside Core,
+authentication last validated, and certification current/stale as separate
+facts. A default can be removed safely from the same page.
+
+Provider health tests use `MEMORIST_PROVIDER_TEST_TIMEOUT_MS` (60 seconds by
+default), independently from the 1.2-second interactive preflight timeout.
+Control, capture, diagnostics, and import operations also have separate
+timeouts. Strict-structured providers receive a constant JSON schema; JSON
+object providers get one bounded corrective retry for an exact marker mismatch.
 
 ## First run
 
@@ -119,9 +149,9 @@ Health endpoints:
 
 ```text
 http://localhost:3000/health
-http://localhost:8777/memcore/health
-http://localhost:8777/memcore/config/effective
-http://localhost:8777/memcore/diagnostics/daily
+http://localhost:<MEMORIST_CORE_HOST_PORT>/memcore/health
+http://localhost:<MEMORIST_CORE_HOST_PORT>/memcore/config/effective
+http://localhost:<MEMORIST_CORE_HOST_PORT>/memcore/diagnostics/daily
 ```
 
 ## Lite versus Full
@@ -182,6 +212,13 @@ Reset requires typing `DELETE`. Uninstall preserves volumes unless
 PostgreSQL and FalkorDB are internal Compose services and do not publish host
 ports in the release package.
 
+Ollama discovery is off by default, so a machine without Ollama is not probed
+continuously. Enable it deliberately with `-EnableOllama` or set
+`ENABLE_OLLAMA_API=true` in `.env`; OpenAI-compatible Processing Nodes remain a
+separate provider family and are never probed through Ollama routes.
+The package also defaults Open WebUI's RAG adapter to `openai`; an empty value
+would make Open WebUI download a local sentence-transformer during first boot.
+
 ## Backup and upgrade
 
 Before an alpha-version upgrade, create a Heritage export or the documented
@@ -191,12 +228,20 @@ Upgrade procedure:
 
 1. stop Memorist;
 2. extract the new package;
-3. copy the existing `.env` into it;
+3. copy the existing `.env` into it (preferred; the installer can recover from
+   still-present containers when possible, but does not guess an orphaned
+   database password);
 4. rerun the installer without changing the persisted mode;
 5. verify health and effective runtime.
 
 Stable project and volume names retain data across extraction-path changes.
 Schema migration rollback is not automatic.
+
+Chat remains fail-open when Memorist is unavailable, but the failure is not
+reported as successful memory. The authenticated status contract stores
+sanitized per-stage outcomes and last success/failure times. Settings →
+Memorist → Diagnostics shows a bounded degraded indication until the failed
+stage succeeds again.
 
 ## Known limitations
 

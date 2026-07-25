@@ -13,28 +13,36 @@ services:
       dockerfile: openwebui-image/Dockerfile
     environment:
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:?installer must generate WEBUI_SECRET_KEY}
+      MEMORIST_INSTALLATION_ID: ${MEMORIST_INSTALLATION_ID:?installer must preserve installation identity}
+      OPEN_WEBUI_PORT: ${OPEN_WEBUI_PORT:-3000}
+      MEMORIST_CORE_HOST_PORT: ${MEMORIST_CORE_HOST_PORT:-${MEMORIST_PORT:-8777}}
       MEMORIST_CORE_URL: http://memorist-core:8777
       MEMORIST_ENABLED: "true"
       MEMORIST_PREFLIGHT_ENABLED: ${MEMORIST_PREFLIGHT_ENABLED:-true}
       MEMORIST_PREFLIGHT_TIMEOUT_MS: ${MEMORIST_PREFLIGHT_TIMEOUT_MS:-1200}
+      MEMORIST_CAPTURE_TIMEOUT_MS: ${MEMORIST_CAPTURE_TIMEOUT_MS:-2500}
+      MEMORIST_CONTROL_TIMEOUT_MS: ${MEMORIST_CONTROL_TIMEOUT_MS:-15000}
+      MEMORIST_PROVIDER_TEST_TIMEOUT_MS: ${MEMORIST_PROVIDER_TEST_TIMEOUT_MS:-60000}
+      MEMORIST_ADMIN_TIMEOUT_MS: ${MEMORIST_ADMIN_TIMEOUT_MS:-15000}
+      MEMORIST_IMPORT_TIMEOUT_MS: ${MEMORIST_IMPORT_TIMEOUT_MS:-300000}
       MEMORIST_ATTACHMENT_TOKEN_BUDGET: ${MEMORIST_ATTACHMENT_TOKEN_BUDGET:-1800}
       MEMORIST_ATTACHMENT_MAX_TOKENS: ${MEMORIST_ATTACHMENT_MAX_TOKENS:-1800}
       MEMORIST_FAIL_OPEN: ${MEMORIST_FAIL_OPEN:-true}
       MEMORIST_ACTOR_ASSERTION_SECRET: ${MEMORIST_ACTOR_ASSERTION_SECRET:?installer must generate actor assertion secret}
       MEMORIST_ACTOR_SERVICE_TOKEN: ${MEMORIST_ACTOR_SERVICE_TOKEN:?installer must generate actor service token}
       MEMORIST_OPENWEBUI_WORKSPACE_UUID: ${MEMORIST_OPENWEBUI_WORKSPACE_UUID:?workspace UUID required}
-      # Avoid a network-time model download during first boot. Open WebUI can
-      # use its normal Ollama integration for its own optional RAG embeddings;
-      # Memorist processing-node configuration remains independent.
-      RAG_EMBEDDING_ENGINE: ${OPENWEBUI_RAG_EMBEDDING_ENGINE:-ollama}
+      # An empty engine means local sentence-transformers in Open WebUI and
+      # triggers a model download during first boot. Default to the remote
+      # adapter so startup stays network-independent; users can opt into a
+      # configured local/Ollama embedding engine explicitly.
+      RAG_EMBEDDING_ENGINE: ${OPENWEBUI_RAG_EMBEDDING_ENGINE:-openai}
       # Optional preconfigured OpenAI-compatible chat connection (also used by
       # the release E2E suite with a local deterministic stub on the host).
       OPENAI_API_BASE_URL: ${OPENAI_API_BASE_URL:-https://api.openai.com/v1}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      # Keep Open WebUI's normal Ollama integration by default, while allowing
-      # installations that intentionally use only an OpenAI-compatible
-      # provider to disable unreachable Ollama discovery explicitly.
-      ENABLE_OLLAMA_API: ${ENABLE_OLLAMA_API:-true}
+      # Ollama discovery is opt-in; machines without Ollama never probe it.
+      ENABLE_OLLAMA_API: ${ENABLE_OLLAMA_API:-false}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: ["python", "-m", "memorist.backend.openwebui_entrypoint"]

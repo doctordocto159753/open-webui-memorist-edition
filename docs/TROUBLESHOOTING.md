@@ -9,7 +9,9 @@ Common failures, in the order people usually hit them.
 | "Docker CLI not found" | Install Docker Desktop, then reopen the terminal and re-run the installer. |
 | "Docker is installed but the daemon is not reachable" | Start Docker Desktop and wait until it reports **Running**, then re-run. |
 | Docker Desktop won't start on Windows | Usually WSL2: run `wsl --update` in an elevated prompt, ensure virtualization is enabled in BIOS/UEFI, then restart Docker Desktop. |
-| "Port 3000/8777 is in use" | Edit `OPEN_WEBUI_PORT` / `MEMORIST_PORT` in `.env`, or stop the other app, then `Restart-Memorist.ps1`. |
+| Docker reports forbidden socket access although no listener owns 8777 | Windows may reserve an excluded Hyper-V/WSL/Docker range. Rerun the installer; it checks numeric IPv4/IPv6 excluded ranges and persists a safe `MEMORIST_CORE_HOST_PORT`. |
+| Selected host port became occupied before startup | Edit `OPEN_WEBUI_PORT` / `MEMORIST_CORE_HOST_PORT` in `.env`, rerun the installer, and let final Compose validation/startup retry. Container port 8777 and `http://memorist-core:8777` do not change. |
+| PostgreSQL is healthy but Core reports password authentication failed | Restore the previous `.env` and rerun. The installer tests the password over TCP before starting Core. It never alters the role or deletes the volume. If only an orphaned volume remains, recover the authoritative `.env`/backup. |
 | Compose fails to start services | `Show-Memorist-Logs.ps1` (or `scripts/logs.sh`) and look at the first failing service; low disk is a common cause (images need several GB). |
 | First launch is very slow | Images are still pulling/building. Watch the logs; subsequent starts are fast. |
 
@@ -32,10 +34,14 @@ Common failures, in the order people usually hit them.
 | "Privacy acknowledgement required" | Open the processing node, review the remote data disclosure, and acknowledge it before assigning the profile as a role default. |
 | Connection refused/timeout on Test | The base URL must be reachable **from the memorist-core container**, not just from your browser. For a service on the host, use `host.docker.internal` instead of `localhost`. |
 | No API key at all | That's fine — local deterministic mode runs the whole memory pipeline without any remote provider. |
-| Profile is saved but a fallback is effective | Open Processing Nodes or `GET /memcore/model-control/effective`; inspect `scope_source`, `inheritance_source`, and `fallback_reason`. |
+| Profile is saved but a fallback is effective | Open Processing Nodes or `GET /memcore/model-control/effective`; inspect `scope_source`, `inheritance_source`, `fallback_reason`, and certification status. Endpoint/model/capability/secret-reference edits require a new test. |
 | 401/403 on Test | The endpoint is reachable; verify the secret env-var name/value and provider permissions. |
 | 429 on Test | The endpoint is reachable but rate limited. Wait/retry or check quota; this is not an authentication or connection failure. |
 | Wrong embedding dimension | Set the profile's real vector dimension, retest, and rebuild stale embeddings. |
+| Valid JSON but marker mismatch | The endpoint/auth/model worked, but the role contract did not. Memorist performs one corrective retry; if it still fails, use a model that follows the exact marker/schema. |
+| Test lasts longer than preflight | Expected: provider tests have their own timeout. A proxy timeout is reported as 504, not a generic Core 500. |
+| Repeated Ollama connection errors with no Ollama installed | Keep `ENABLE_OLLAMA_API=false` (the package default). Enable it only deliberately; OpenAI-compatible nodes are configured separately. |
+| First boot downloads a local sentence-transformer | Keep `OPENWEBUI_RAG_EMBEDDING_ENGINE=openai` (the package default). Set a local engine only after explicitly provisioning it. |
 
 ## Memory behavior questions
 

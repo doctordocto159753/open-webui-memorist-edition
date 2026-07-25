@@ -1,7 +1,7 @@
 # Memorist — Open WebUI Memorist Edition
 
 Package version: `0.2.0-beta.3`<br>
-Storage schema version: `21`
+Storage schema version: `22`
 
 **Memorist is an independent community project built on Open WebUI. It is not affiliated with or endorsed by the Open WebUI team.
 ******
@@ -77,8 +77,9 @@ a possible future direction, not this release.)
 
 1. Download and unzip the release package (`memorist-openwebui-<version>.zip`).
 2. Double-click **`Memorist.cmd`**.
-3. Follow the short wizard — it checks Docker, generates a private `.env`,
-   optionally captures a provider API key locally, starts the services, and
+3. Follow the short wizard — it checks Docker, skips active and
+   Windows-excluded host ports, generates a private `.env`, optionally captures
+   a provider API key locally, validates the rendered Compose topology, starts the services, and
    opens <http://localhost:3000>.
 
 Lifecycle scripts ship in the package: `Start-`, `Stop-`, `Restart-`,
@@ -136,8 +137,9 @@ Read the full walk-through: [docs/MEMORY_MACHINE.md](docs/MEMORY_MACHINE.md).
 
 Memorist uses explicit **Model Control Plane** roles instead of one global
 model: `main_chat_observed` (metadata only — Open WebUI keeps owning the chat
-model), `preflight`, `memory_extraction`, `embedding`, `privacy_sensitivity`,
-`block_compaction`, and `import_reconstruction`.
+model), `preflight`, `memory_extraction`, `high_confidence_extraction`,
+`embedding`, `privacy_sensitivity`, `block_compaction`, and
+`import_reconstruction`.
 
 First-run setup lives at **Settings → Memorist → Memory Setup** (admin-only).
 Choose local deterministic (no key), or point a role at any OpenAI-compatible
@@ -145,13 +147,22 @@ endpoint. Secrets follow one rule everywhere: **the browser and database store
 only an environment-variable name; the value lives in your local `.env` /
 container environment**, written once by the installer and never echoed,
 logged, or returned by any API. Remote endpoints require an explicit privacy
-acknowledgement before they become role defaults.
+acknowledgement before they become role defaults. The backend also requires a
+persisted current provider certification; changing the endpoint, model,
+capabilities, enabled state, or secret reference makes it stale until retested.
+The UI reports secret reference, Core availability, authentication, and
+certification separately.
 
 Role resolution is explicit and inspectable: project → workspace → global →
 documented role inheritance → built-in local fallback. The UI shows both the
 configured role and the profile actually effective at runtime. See the
 [processing-node runtime guide](docs/reference/model-control-plane.md) for the
 stage graph, health contract, diagnostics, and failure handling.
+
+The host-published Core port is configurable and persisted, but Compose
+services always use `http://memorist-core:8777`. Ollama discovery is opt-in and
+off by default. Fail-open keeps chat available while recording a sanitized
+per-stage degraded status in Memorist Diagnostics.
 
 ## Privacy and security model
 

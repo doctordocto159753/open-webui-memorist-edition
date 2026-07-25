@@ -27,6 +27,7 @@ it and tells you exactly what to do if it is missing or not started.
 3. Follow the short wizard:
    - asks explicitly for Lite (SQLite) or Full (PostgreSQL + FalkorDB);
    - checks Docker, ports, and disk;
+   - skips active and Windows-excluded host ports and stores the selected ports;
    - creates local data folders;
    - generates a private `.env` with strong session secrets;
    - asks how memory extraction should run (see below);
@@ -39,6 +40,7 @@ Prefer the command line? From this folder:
 .\Install-Memorist.ps1                            # interactive Lite/Full choice
 .\Install-Memorist.ps1 -Mode full -NonInteractive -NoBrowser
 .\Install-Memorist.ps1 -Mode lite -DryRun -NonInteractive
+.\Install-Memorist.ps1 -Mode lite -EnableOllama            # opt-in only
 ```
 
 ## 3. Memory processing options
@@ -56,6 +58,9 @@ database. In the app you reference the key by its **variable name**, for example
 `MEMORIST_MEMORY_EXTRACTION_API_KEY`, under **Settings → Memorist → Processing
 Nodes**. Endpoint, model, capabilities, privacy acknowledgement, testing, and
 role-default assignment happen there; the installer does not bypass them.
+The backend requires a persisted current certification, so refresh does not
+lose test authority. The UI distinguishes a configured secret reference from
+availability inside Core and last validated authentication.
 
 ## 4. Everyday commands
 
@@ -91,11 +96,21 @@ to abandon SQLite data silently.
 See the packaged `docs/upgrade.md` for upgrade notes and use Heritage export for
 a portable backup before alpha-version migrations.
 
+For Full upgrades the installer reuses the stable installation identity and
+credentials, then authenticates to PostgreSQL over TCP before Core starts. It
+never changes the database role and never removes volumes. If an old `.env`
+cannot be recovered, stop and restore it instead of generating a replacement.
+
 ## 7. Troubleshooting
 
 - **"Docker CLI not found" / "daemon not reachable":** install/start Docker
   Desktop and wait for **Running**, then re-run.
-- **Port already in use:** edit `OPEN_WEBUI_PORT` / `MEMORIST_PORT` in `.env`.
+- **Port unavailable/reserved:** rerun the installer or edit
+  `OPEN_WEBUI_PORT` / `MEMORIST_CORE_HOST_PORT` in `.env`. The internal Core
+  URL always remains `http://memorist-core:8777`.
+- **Chat works but memory is degraded:** open Settings → Memorist →
+  Diagnostics. Fail-open keeps chat available but records sanitized per-stage
+  failure/recovery state.
 - **UI slow to load first time:** images are still pulling/building; watch
   `Show-Memorist-Logs.ps1`.
 

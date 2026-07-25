@@ -4,6 +4,7 @@ PowerShell + Pester are available (see the PR5-F workflow); Linux CI without
 PowerShell relies on installer/scripts/validate_installer.py instead.
 #>
 $modulePath = Join-Path (Join-Path $PSScriptRoot '..') 'scripts\MemoristCommon.psm1'
+$packageRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 Import-Module $modulePath -Force
 
 Describe 'Secret generation and masking' {
@@ -43,12 +44,67 @@ Describe 'Env editing' {
     }
 }
 
-Describe 'PR5-C role map' {
+Describe 'Processing-role secret map' {
     It 'exposes the expected role env-var names' {
         $roles = Get-MemoristApiKeyRoles
         if ($roles['memory_extraction'] -ne 'MEMORIST_MEMORY_EXTRACTION_API_KEY') { throw 'extraction role mismatch' }
         if ($roles['embedding'] -ne 'MEMORIST_EMBEDDING_API_KEY') { throw 'embedding role mismatch' }
-        if ($roles.Keys.Count -ne 5) { throw 'role count mismatch' }
+        if ($roles['preflight'] -ne 'MEMORIST_PREFLIGHT_API_KEY') { throw 'preflight role mismatch' }
+        if ($roles['block_compaction'] -ne 'MEMORIST_BLOCK_COMPACTION_API_KEY') { throw 'compaction role mismatch' }
+        if ($roles.Keys.Count -ne 7) { throw 'role count mismatch' }
+    }
+}
+
+Describe 'Ollama is opt-in' {
+    It 'keeps unattended installs off and supports an explicit switch' {
+        $ollamaPackageRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
+        $text = Get-Content (Join-Path $ollamaPackageRoot 'Install-Memorist.ps1') -Raw
+        foreach ($needle in @('[switch]$EnableOllama', "'ENABLE_OLLAMA_API'", "Ollama integration disabled")) {
+            if ($text -notmatch [regex]::Escape($needle)) { throw "missing Ollama contract: $needle" }
+        }
+        $template = Get-Content (Join-Path $ollamaPackageRoot '.env.example') -Raw
+        if ($template -notmatch 'ENABLE_OLLAMA_API=false') { throw 'Ollama must default off' }
+        if ($template -notmatch 'OPENWEBUI_RAG_EMBEDDING_ENGINE=openai') {
+            throw 'RAG embeddings must not trigger a local model download by default'
+        }
+    }
+}
+
+Describe 'Windows host-port allocation' {
+    It 'parses language-independent excluded TCP ranges' {
+        $ranges = @(Get-MemoristExcludedTcpPortRanges -NetshOutput @(
+            'Start Port    End Port',
+            '----------    --------',
+            '      3000        3010',
+            '     8777       8777     *'
+        ))
+        if ($ranges.Count -ne 2) { throw 'excluded ranges were not parsed' }
+        if (-not (Test-MemoristPortExcluded -Port 3005 -ExcludedRanges $ranges)) {
+            throw 'port inside excluded range was accepted'
+        }
+    }
+
+    It 'selects the first non-active and non-excluded port deterministically' {
+        $ranges = @([pscustomobject]@{ Start = 3000; End = 3001 })
+        $selected = Get-MemoristAvailablePort -PreferredPort 3000 -ExcludedRanges $ranges -PortProbe {
+            param($candidate)
+            return $candidate -ne 3002
+        }
+        if ($selected -ne 3003) { throw "expected 3003, got $selected" }
+    }
+
+    It 'keeps 8777 when free and skips it when occupied or excluded' {
+        $free = Get-MemoristAvailablePort -PreferredPort 8777 -PortProbe { param($candidate) $true }
+        if ($free -ne 8777) { throw "expected free port 8777, got $free" }
+        $occupied = Get-MemoristAvailablePort -PreferredPort 8777 -PortProbe {
+            param($candidate)
+            return $candidate -ne 8777
+        }
+        if ($occupied -ne 8778) { throw "expected occupied fallback 8778, got $occupied" }
+        $excluded = Get-MemoristAvailablePort -PreferredPort 8777 -ExcludedRanges @(
+            [pscustomobject]@{ Start = 8777; End = 8778 }
+        ) -PortProbe { param($candidate) $true }
+        if ($excluded -ne 8779) { throw "expected excluded fallback 8779, got $excluded" }
     }
 }
 
@@ -132,6 +188,14 @@ Describe 'Lifecycle failure semantics' {
         foreach ($needle in @('graph_status', 'pg_isready', 'redis-cli')) {
             if ($text -notmatch [regex]::Escape($needle)) { throw "Full Start does not verify $needle" }
         }
+    }
+
+    It 'preflights preserved PostgreSQL credentials without altering roles' {
+        $text = Get-Content (Join-Path $packageRoot 'Install-Memorist.ps1') -Raw
+        foreach ($needle in @('PGPASSWORD="$POSTGRES_PASSWORD"', 'psql -h 127.0.0.1', 'SELECT 1', 'does not match the preserved database volume')) {
+            if ($text -notmatch [regex]::Escape($needle)) { throw "missing credential preflight: $needle" }
+        }
+        if ($text -match 'ALTER\s+ROLE') { throw 'installer must not mutate the PostgreSQL role' }
     }
 
     It 'does not suppress Lite doctor failures' {

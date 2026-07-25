@@ -170,12 +170,18 @@ persisted per authenticated user and chat, server-side:
 Every processing role has a **local deterministic fallback** — a fresh install
 can run the whole machine with no API key and no remote calls. Remote
 OpenAI-compatible providers are optional per role (`memory_extraction`,
-`high_confidence_extraction`, `embedding`, `privacy_sensitivity`,
-`import_reconstruction`) and must be configured consciously: an explicit
+`high_confidence_extraction`, `embedding`, `preflight`, `privacy_sensitivity`,
+`block_compaction`, `import_reconstruction`) and must be configured consciously: an explicit
 privacy acknowledgement is required before a remote endpoint becomes a role
 default, because role-specific conversation or memory text may leave the
 machine. Secrets are referenced by environment-variable name only — see
 [SECURITY.md](../SECURITY.md) and [INSTALLATION.md](INSTALLATION.md).
+
+A remote default must also have a persisted successful certification for the
+exact execution fingerprint. Endpoint/model/capability/enabled/secret-reference
+edits make it stale; the resolver records the reason and follows documented
+inheritance or a bounded built-in fallback. The seven processing roles receive
+independent environment-variable pass-throughs.
 
 The main chat model always belongs to Open WebUI; Memorist only observes its
 metadata to size attachment budgets.

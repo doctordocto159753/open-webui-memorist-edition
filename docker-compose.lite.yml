@@ -19,7 +19,7 @@ services:
       MEMORIST_ACTOR_ASSERTION_SECRET: ${MEMORIST_ACTOR_ASSERTION_SECRET:?required}
       MEMORIST_ACTOR_SERVICE_TOKEN: ${MEMORIST_ACTOR_SERVICE_TOKEN:?required}
     ports:
-      - "127.0.0.1:${MEMORIST_PORT:-8777}:8777"
+      - "127.0.0.1:${MEMORIST_CORE_HOST_PORT:-${MEMORIST_PORT:-8777}}:8777"
     volumes:
       - memorist-core-data:/data
 

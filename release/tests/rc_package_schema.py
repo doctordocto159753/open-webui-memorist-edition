@@ -78,6 +78,23 @@ def validate_rc_package() -> dict[str, Any]:
 
     with zipfile.ZipFile(ZIP_PATH) as package:
         names = package.namelist()
+        entry_timestamps = {
+            item.date_time for item in package.infolist() if not item.is_dir()
+        }
+        if len(entry_timestamps) != 1:
+            issues.append(
+                {
+                    "issue_code": "non_deterministic_entry_timestamps",
+                    "timestamp_count": len(entry_timestamps),
+                }
+            )
+        elif next(iter(entry_timestamps)) == (1980, 1, 1, 0, 0, 0):
+            issues.append(
+                {
+                    "issue_code": "docker_context_cache_unsafe_timestamp",
+                    "detail": "fixed ZIP epoch can preserve stale same-size Docker context files",
+                }
+            )
         # The archive must carry every Docker build context the packaged
         # compose files build from source; a missing runtime tree ships a
         # package that cannot `docker compose build` on the user's machine.

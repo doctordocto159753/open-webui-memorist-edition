@@ -71,7 +71,7 @@ WebUI.
 
 A configured profile is skipped when it is disabled, assigned to the wrong
 role, missing a required secret reference, missing remote privacy
-acknowledgement, or incompatible with the requested capability. The resolution
+acknowledgement, missing/current-stale certification, or incompatible with the requested capability. The resolution
 response states `requested_role`, `effective_role`, `scope_source`,
 `inheritance_source`, `fallback_reason`, capability/secret/acknowledgement
 status, and `resolution_version`. This is exposed by:
@@ -93,7 +93,10 @@ For OpenAI-compatible profiles, enter any one of:
 - a copied operation URL ending in `/chat/completions`, `/embeddings`, or
   `/models`.
 
-Memorist canonicalizes these to one `/v1` base and appends each operation once.
+Memorist adds `/v1` only to an origin-only URL. Explicit reverse-proxy prefixes
+such as `/tenant/openai` are preserved, while terminal operation paths are
+removed and appended exactly once. Duplicated or non-terminal operation paths
+are rejected as ambiguous.
 URLs without `http`/`https`, URLs with credentials, query strings, or fragments
 are rejected. Do not put an API key in the URL.
 
@@ -114,7 +117,7 @@ Settings → Memorist → Memory Setup / Processing Nodes
 
 The setup wizard creates all seven processing roles, saves a stable
 `setup_idempotency_key`, prevents duplicate active submissions, tests the
-actual role capability, and assigns a default only after the test reports both
+actual role capability, persists a fingerprinted certification, and assigns a default only after the test reports both
 `overall_status=ok` and `role_compatibility_status=compatible`. It then reads
 effective state back and verifies that the intended profile is really active.
 Replaying a save or a stage invocation with the same logical idempotency key
@@ -124,11 +127,16 @@ events, or candidate transitions.
 ## Truthful provider test contract
 
 The test timeout is configurable with
-`MEMORIST_PROVIDER_TEST_TIMEOUT_MS` (default 15000 ms). Chat roles call
+`MEMORIST_PROVIDER_TEST_TIMEOUT_MS` (default 60000 ms). It is independent of
+interactive preflight, capture, ordinary control-plane, diagnostics, and import
+timeouts. Chat roles call
 `POST /v1/chat/completions`; embedding calls `POST /v1/embeddings`.
 `GET /v1/models` is optional metadata and never the success gate. If JSON or
-structured output is declared, the probe requests JSON mode and verifies a
-role marker after parsing ordinary or fenced JSON.
+structured output is declared, the probe uses a strict schema with the required
+constant marker and no additional properties. JSON-object-only providers
+receive an exact-output instruction and at most one corrective retry. A valid
+JSON response with the wrong marker is reported separately from malformed JSON
+or transport failure.
 
 The result reports independent levels:
 
@@ -212,6 +220,7 @@ PATCH /memcore/model-control/profiles/{model_profile_uuid}
 POST /memcore/model-control/profiles/{model_profile_uuid}/test
 GET  /memcore/model-control/defaults
 POST /memcore/model-control/defaults
+DELETE /memcore/model-control/defaults?role={role}
 GET  /memcore/model-control/usage
 GET  /memcore/model-control/health
 GET  /memcore/model-control/privacy
@@ -231,9 +240,10 @@ GET  /memcore/costs/model-roles
 3. **Connection works in a browser but Test is unreachable:** the URL must be
    reachable from `memorist-core`; for a host service under Docker Desktop,
    use `host.docker.internal` rather than `localhost`.
-4. **Wrong path or duplicated `/v1`:** save the provider root, `/v1` base, or
-   full operation URL; the normalizer removes operation suffixes and applies
-   `/v1` exactly once.
+4. **Wrong path or duplicated `/v1`:** save the provider root, `/v1` base,
+   custom reverse-proxy base, or full operation URL. The normalizer preserves
+   custom prefixes, removes one terminal operation suffix, and rejects an
+   already duplicated operation path.
 5. **401/403:** check the env-var name, its value in the running Core
    environment, and provider permissions. This is not a network failure.
 6. **404 or model unavailable:** use the exact model ID and confirm whether the
@@ -248,7 +258,9 @@ GET  /memcore/costs/model-roles
     trace and read `no_memory_reason`; greetings, weak signals, privacy paths,
     rejected claims, and review-required candidates correctly produce none.
 11. **Provider failed but chat still answered:** expected fail-open behavior;
-    inspect the trace for `fallback_used` or a retryable failure.
+    inspect the trace for `fallback_used` or a retryable failure, and inspect
+    Settings → Memorist → Diagnostics for the sanitized per-stage degraded
+    outcome. The degraded flag clears only after that stage succeeds.
 
 See also [architecture](../ARCHITECTURE.md),
 [the memory machine](../MEMORY_MACHINE.md), and

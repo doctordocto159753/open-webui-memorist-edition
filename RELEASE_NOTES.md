@@ -107,7 +107,7 @@ Honest status:
 - Alpha software: no security audit; schema migrations between alpha versions
   may require export/import; see README "Known limitations".
 
-Storage schema version: 21. Pinned Open WebUI base:
+Storage schema version: 22. Pinned Open WebUI base:
 `ghcr.io/open-webui/open-webui:v0.9.6`.
 
 Generated packages under `release/source/` and `release/rc/` are reproducible
