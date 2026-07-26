@@ -12,9 +12,10 @@ from memcore.memory_worker.prompts.versions import (
     JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
     JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
 )
+from memcore.model_control.runtime_contracts import runtime_contract_for_role
 from memcore.models import ModelRole
 
-ROLE_CONTRACT_MANIFEST_VERSION = "role-contract-manifest-v1"
+ROLE_CONTRACT_MANIFEST_VERSION = "role-contract-manifest-v2"
 
 _ROLE_PROMPTS: dict[ModelRole, tuple[str, str] | None] = {
     ModelRole.MAIN_CHAT_OBSERVED: None,
@@ -25,15 +26,14 @@ _ROLE_PROMPTS: dict[ModelRole, tuple[str, str] | None] = {
     ModelRole.PREFLIGHT: ("memorist.preflight_planning", "2.0"),
     ModelRole.EMBEDDING: None,
     ModelRole.IMPORT_RECONSTRUCTION: ("memorist.import_reconstruction", "2.0"),
-    ModelRole.HIGH_CONFIDENCE_EXTRACTION: ("memorist.unit_analysis", "2.0"),
-    ModelRole.BLOCK_COMPACTION: ("memorist.block_compaction", "2.0"),
-    ModelRole.PRIVACY_SENSITIVITY: ("memorist.privacy_sensitivity", "2.0"),
+    ModelRole.HIGH_CONFIDENCE_EXTRACTION: None,
+    ModelRole.BLOCK_COMPACTION: None,
+    ModelRole.PRIVACY_SENSITIVITY: None,
 }
 
 
 def role_contract_manifest(role: ModelRole | str) -> dict[str, Any]:
     resolved = role if isinstance(role, ModelRole) else ModelRole(role)
-    prompt_ref = _ROLE_PROMPTS[resolved]
     if resolved is ModelRole.MAIN_CHAT_OBSERVED:
         return {
             "manifest_version": ROLE_CONTRACT_MANIFEST_VERSION,
@@ -50,6 +50,22 @@ def role_contract_manifest(role: ModelRole | str) -> dict[str, Any]:
             "required_capabilities": ["embeddings"],
             "fallback_policy": "fail_open",
         }
+
+    runtime_contract = runtime_contract_for_role(resolved)
+    if runtime_contract is not None:
+        return {
+            "manifest_version": ROLE_CONTRACT_MANIFEST_VERSION,
+            "role": resolved.value,
+            "certifiable": True,
+            "execution": "stage_invoker",
+            "runtime_contract": runtime_contract.manifest(),
+            "contract_hash": runtime_contract.contract_hash,
+            "required_capabilities": ["structured_output_or_json_mode"],
+            "fallback_policy": "fail_open",
+            "certification_probe_version": "runtime-role-probe-v2",
+        }
+
+    prompt_ref = _ROLE_PROMPTS[resolved]
     assert prompt_ref is not None
     prompt_id, prompt_version = prompt_ref
     prompt = get_prompt(prompt_id, prompt_version)
