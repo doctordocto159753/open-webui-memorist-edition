@@ -23,17 +23,46 @@ from memcore.models import (
     SensitivityClass,
     SourceAuthority,
 )
+from memcore.textsemantics import (
+    NORMALIZATION_CONTRACT_VERSION,
+    Polarity,
+    coerce_polarity,
+    polarity_from_flag,
+)
 
 CANDIDATE_SERVICE_VERSION = "pr4d-candidate-service-v1"
+
+
+def read_modality_polarity(modality: dict[str, Any]) -> Polarity:
+    """Read polarity from a stored or freshly produced modality payload.
+
+    Lite and Full share this reader so neither runtime can interpret the same
+    analysis differently. Rows written before polarity existed carry only the
+    older ``negated`` boolean; that boolean is an analyzer decision about the
+    evidence, so it reads as ``negated`` or ``affirmed`` rather than being
+    discarded. A payload with neither key stays ``unknown``.
+    """
+
+    if "polarity" in modality:
+        return coerce_polarity(modality.get("polarity"))
+    if "negated" in modality:
+        return polarity_from_flag(bool(modality.get("negated")))
+    return Polarity.UNKNOWN
 
 
 @dataclass(frozen=True)
 class LinguisticCandidateComplements:
     analysis_uuid: str | None = None
-    negated: bool = False
+    polarity: Polarity = Polarity.UNKNOWN
     valid_from: str | None = None
     temporal_precision: str | None = None
     abstained: bool = False
+
+    @property
+    def negated(self) -> bool:
+        """Boolean view of polarity for readers that still speak in flags."""
+
+        return self.polarity is Polarity.NEGATED
 
 
 @dataclass(frozen=True)
@@ -65,6 +94,7 @@ class CandidateDraft:
     source_authority: SourceAuthority
     explicitness: Explicitness
     confidence: float
+    polarity: Polarity
     importance: float
     valid_from: str | None
     temporal_precision: str | None
@@ -128,11 +158,12 @@ def build_candidate_draft(value: CandidateServiceInput) -> CandidateDraft | None
     confidence = _confidence(
         provenance.source_authority,
         provenance.explicitness,
-        negated=value.complements.negated,
         status=status,
     )
     metadata: dict[str, Any] = {
         "semantic_authority": "jakobson",
+        "polarity": value.complements.polarity.value,
+        "normalization_contract_version": NORMALIZATION_CONTRACT_VERSION,
         "source_authority": provenance.source_authority.value,
         "explicitness": provenance.explicitness.value,
         "route_mapping_version": ROUTE_CANDIDATE_MAPPING_VERSION,
@@ -173,6 +204,7 @@ def build_candidate_draft(value: CandidateServiceInput) -> CandidateDraft | None
         source_authority=provenance.source_authority,
         explicitness=provenance.explicitness,
         confidence=confidence,
+        polarity=value.complements.polarity,
         importance=mapping.importance,
         valid_from=value.complements.valid_from,
         temporal_precision=value.complements.temporal_precision,
@@ -194,9 +226,17 @@ def _confidence(
     source_authority: SourceAuthority,
     explicitness: Explicitness,
     *,
-    negated: bool,
     status: CandidateStatus,
 ) -> float:
+    """Confidence that the claim was extracted correctly.
+
+    Polarity is deliberately not an input: a negated claim is asserted just as
+    certainly as its positive equivalent, so the two must score the same when
+    the extraction evidence is the same. Polarity travels on the candidate's
+    own field. Every other coefficient is unchanged; broader recalibration of
+    these weights remains deferred.
+    """
+
     score = 0.45
     if source_authority is SourceAuthority.USER_EXPLICIT:
         score += 0.25
@@ -211,8 +251,6 @@ def _confidence(
     if explicitness is Explicitness.EXPLICIT:
         score += 0.15
     score += 0.13
-    if negated:
-        score -= 0.05
     if status is CandidateStatus.NEEDS_REVIEW:
         score = min(score, 0.65)
     elif status is CandidateStatus.REJECTED:

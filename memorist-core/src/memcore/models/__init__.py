@@ -81,6 +81,7 @@ from memcore.models.retrieval import (
     ScoredMemoryItem,
     TemporalFilter,
 )
+from memcore.textsemantics import Polarity
 
 __all__ = [
     "AttachmentMode",
@@ -132,6 +133,7 @@ __all__ = [
     "MemoryStatus",
     "MemoryVersion",
     "OutboxStatus",
+    "Polarity",
     "ProcessingRunStatus",
     "SensitivityClass",
     "SourceAuthority",

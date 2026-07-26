@@ -12,6 +12,7 @@ from memcore.memory_worker.semantic.candidate_service import (
     CandidateServiceInput,
     LinguisticCandidateComplements,
     build_candidate_draft,
+    read_modality_polarity,
 )
 from memcore.memory_worker.semantic.project_artifact import structured_project_artifact
 from memcore.models import (
@@ -37,11 +38,11 @@ _INSERT_CANDIDATE_SQL = """
       subject_key, predicate, object_jsonb, normalized_text, source_authority,
       explicitness, confidence, importance, sensitivity, status,
       rejection_reason, extraction_metadata_jsonb, created_at, schema_version,
-      prompt_execution_uuid
+      prompt_execution_uuid, polarity
     )
     VALUES (
       %s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,
-      %s,%s,%s,%s,%s,%s,%s::jsonb,%s,1,%s
+      %s,%s,%s,%s,%s,%s,%s::jsonb,%s,1,%s,%s
     )
 """
 _INSERT_EVIDENCE_SQL = """
@@ -156,6 +157,7 @@ def record_candidates(
                 json.dumps(draft.metadata, sort_keys=True),
                 utc_now(),
                 draft.prompt_execution_uuid,
+                draft.polarity.value,
             ),
         )
         self.connection.execute(
@@ -292,7 +294,7 @@ def _linguistic_complements(
     abstention = _mapping(_json_value(analysis.get("abstention_jsonb")))
     return LinguisticCandidateComplements(
         analysis_uuid=_optional_string(analysis.get("analysis_uuid")),
-        negated=bool(modality.get("negated")),
+        polarity=read_modality_polarity(modality),
         valid_from=_optional_string(_mapping(first_temporal).get("normalized")),
         temporal_precision=_optional_string(_mapping(first_temporal).get("precision")),
         abstained=bool(abstention.get("abstained")),

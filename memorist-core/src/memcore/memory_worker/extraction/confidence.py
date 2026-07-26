@@ -6,8 +6,18 @@ def derive_confidence(
     explicitness: Explicitness,
     evidence_complete: bool,
     temporal_clear: bool = True,
-    negated: bool = False,
 ) -> float:
+    """Confidence that the claim was extracted correctly.
+
+    Polarity is deliberately not an input. "We never deploy on Friday" is
+    asserted exactly as certainly as "we deploy on Friday", so a negated claim
+    must not score lower for being negated; negation is carried by the
+    candidate's polarity field instead.
+
+    Every other coefficient here is unchanged from the pre-PRD-02 formula.
+    Broader recalibration of these weights remains deferred.
+    """
+
     score = 0.45
     if source_authority is SourceAuthority.USER_EXPLICIT:
         score += 0.25
@@ -21,6 +31,4 @@ def derive_confidence(
         score += 0.1
     if temporal_clear:
         score += 0.03
-    if negated:
-        score -= 0.05
     return max(0.0, min(1.0, round(score, 3)))

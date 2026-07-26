@@ -7,6 +7,9 @@ from memcore.memory_worker.semantic.factors import (
     POETIC_CONTEXT,
 )
 from memcore.models import JakobsonFunction
+from memcore.textsemantics import NormalizedText, normalize_with_mapping, tokenize
+
+GREETING_TOKENS = frozenset({"سلام", "درود", "hello", "hi", "hey", "thanks"})
 
 
 def classify_deterministic_function(
@@ -19,10 +22,11 @@ def classify_deterministic_function(
     backend from silently creating a second semantic authority.
     """
 
-    if _is_phatic(text):
+    normalized = normalize_with_mapping(text)
+    if _is_phatic(normalized):
         return JakobsonFunction.PHATIC, (), "The sentence opens or maintains contact."
-    has_instruction = bool(HIGH_PRIORITY_INSTRUCTION.search(text))
-    has_metalanguage = bool(METALINGUAL_CONTEXT.search(text))
+    has_instruction = HIGH_PRIORITY_INSTRUCTION.matches(normalized)
+    has_metalanguage = METALINGUAL_CONTEXT.matches(normalized)
     if has_instruction:
         secondary = (JakobsonFunction.METALINGUAL,) if has_metalanguage else ()
         return (
@@ -36,13 +40,13 @@ def classify_deterministic_function(
             (),
             "The sentence defines, translates, or comments on wording.",
         )
-    if EMOTIVE_CONTEXT.search(text):
+    if EMOTIVE_CONTEXT.matches(normalized):
         return (
             JakobsonFunction.EMOTIVE,
             (),
             "The sentence expresses sender stance or desire.",
         )
-    if POETIC_CONTEXT.search(text):
+    if POETIC_CONTEXT.matches(normalized):
         return (
             JakobsonFunction.POETIC,
             (),
@@ -55,6 +59,8 @@ def classify_deterministic_function(
     )
 
 
-def _is_phatic(text: str) -> bool:
-    stripped = text.strip().strip(" .!؟?").lower()
-    return stripped in {"سلام", "درود", "hello", "hi", "hey", "thanks"}
+def _is_phatic(normalized: NormalizedText) -> bool:
+    """A greeting is a lone greeting token, whatever punctuation surrounds it."""
+
+    tokens = tokenize(normalized)
+    return len(tokens) == 1 and tokens[0].key in GREETING_TOKENS
