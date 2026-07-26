@@ -27,3 +27,17 @@ def test_certification_probe_prompt_is_exact_stage_invoker_prompt(role: ModelRol
         input_payload=contract.certification_input,
     )
     assert contract.render_probe_prompt() == _stage_prompt(request)
+
+
+def test_runtime_contract_rejects_type_coercion_and_extra_fields() -> None:
+    contract = runtime_contract_for_role(ModelRole.HIGH_CONFIDENCE_EXTRACTION)
+    assert contract is not None
+    invalid = {
+        "decision": "approved",
+        "confidence": "0.9",
+        "reason_codes": ["evidence_alignment"],
+        "evidence_spans": [],
+        "unexpected": True,
+    }
+    with pytest.raises(ValueError):
+        contract.validate(invalid)
