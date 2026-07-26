@@ -5,7 +5,10 @@ import urllib.request
 from time import perf_counter
 from typing import Any
 
-from memcore.model_control.providers.base import StructuredCompletionResponse, heuristic_token_count
+from memcore.model_control.providers.base import (
+    StructuredCompletionResponse,
+    heuristic_token_count,
+)
 from memcore.model_control.providers.openai_compatible import (
     OpenAICompatibleLLMProvider,
     _elapsed_ms,
