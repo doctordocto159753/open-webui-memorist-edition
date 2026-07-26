@@ -4,7 +4,9 @@ import hashlib
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from memcore.model_control.stage_contracts import (
     validate_compaction_result,
@@ -16,117 +18,57 @@ from memcore.models import ModelRole
 OutputValidator = Callable[[dict[str, Any]], None]
 
 
-def _evidence_span_schema() -> dict[str, Any]:
-    return {
-        "type": "object",
-        "properties": {
-            "start": {"type": "integer", "minimum": 0},
-            "end": {"type": "integer", "minimum": 0},
-            "text": {"type": "string"},
-        },
-        "required": ["start", "end", "text"],
-        "additionalProperties": False,
-    }
+class _StrictRuntimeOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
-HIGH_CONFIDENCE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "decision": {
-            "type": "string",
-            "enum": ["approved", "rejected", "needs_review", "abstain"],
-        },
-        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-        "reason_codes": {"type": "array", "items": {"type": "string"}},
-        "evidence_spans": {"type": "array", "items": _evidence_span_schema()},
-    },
-    "required": ["decision", "confidence", "reason_codes", "evidence_spans"],
-    "additionalProperties": False,
-}
+class EvidenceSpan(_StrictRuntimeOutput):
+    start: Annotated[int, Field(ge=0)]
+    end: Annotated[int, Field(ge=0)]
+    text: str
 
-PRIVACY_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "classification": {
-            "type": "string",
-            "enum": ["normal", "sensitive", "secret", "abstain", "requires_review"],
-        },
-        "reason_codes": {"type": "array", "items": {"type": "string"}},
-        "evidence_spans": {"type": "array", "items": _evidence_span_schema()},
-    },
-    "required": ["classification", "reason_codes", "evidence_spans"],
-    "additionalProperties": False,
-}
+    @model_validator(mode="after")
+    def _ordered_offsets(self) -> EvidenceSpan:
+        if self.end < self.start:
+            raise ValueError("evidence span end must not precede start")
+        return self
 
-COMPACTION_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "summary": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-        "items": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string", "minLength": 1},
-                    "source_memory_uuids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "source_memory_version_uuids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                },
-                "required": [
-                    "text",
-                    "source_memory_uuids",
-                    "source_memory_version_uuids",
-                ],
-                "additionalProperties": False,
-            },
-        },
-        "excluded_memory_version_uuids": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "memory_version_uuid": {"type": "string"},
-                    "reason_code": {
-                        "type": "string",
-                        "enum": ["superseded", "duplicate", "char_limit", "lower_priority"],
-                    },
-                },
-                "required": ["memory_version_uuid", "reason_code"],
-                "additionalProperties": False,
-            },
-        },
-        "conflicts": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "memory_version_uuids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "minItems": 2,
-                    },
-                    "status": {"type": "string", "const": "unresolved"},
-                },
-                "required": ["memory_version_uuids", "status"],
-                "additionalProperties": False,
-            },
-        },
-        "status": {"type": "string", "const": "ok"},
-    },
-    "required": [
-        "summary",
-        "items",
-        "excluded_memory_version_uuids",
-        "conflicts",
-        "status",
-    ],
-    "additionalProperties": False,
-}
+
+class HighConfidenceRuntimeOutput(_StrictRuntimeOutput):
+    decision: Literal["approved", "rejected", "needs_review", "abstain"]
+    confidence: Annotated[float, Field(ge=0, le=1)]
+    reason_codes: list[str]
+    evidence_spans: list[EvidenceSpan]
+
+
+class PrivacyRuntimeOutput(_StrictRuntimeOutput):
+    classification: Literal["normal", "sensitive", "secret", "abstain", "requires_review"]
+    reason_codes: list[str]
+    evidence_spans: list[EvidenceSpan]
+
+
+class CompactionItem(_StrictRuntimeOutput):
+    text: Annotated[str, Field(min_length=1)]
+    source_memory_uuids: list[str]
+    source_memory_version_uuids: list[str]
+
+
+class CompactionExclusion(_StrictRuntimeOutput):
+    memory_version_uuid: str
+    reason_code: Literal["superseded", "duplicate", "char_limit", "lower_priority"]
+
+
+class CompactionConflict(_StrictRuntimeOutput):
+    memory_version_uuids: Annotated[list[str], Field(min_length=2)]
+    status: Literal["unresolved"]
+
+
+class CompactionRuntimeOutput(_StrictRuntimeOutput):
+    summary: str | None
+    items: list[CompactionItem]
+    excluded_memory_version_uuids: list[CompactionExclusion]
+    conflicts: list[CompactionConflict]
+    status: Literal["ok"]
 
 
 @dataclass(frozen=True)
@@ -137,9 +79,15 @@ class RuntimeStructuredContract:
     runtime_prompt_version: str
     stage: str
     schema_name: str
-    json_schema: dict[str, Any]
-    validator: OutputValidator
+    model: type[BaseModel]
+    semantic_validator: OutputValidator
     certification_input: dict[str, Any]
+
+    @property
+    def json_schema(self) -> dict[str, Any]:
+        schema = self.model.model_json_schema()
+        _make_strict(schema)
+        return schema
 
     @property
     def contract_hash(self) -> str:
@@ -163,7 +111,8 @@ class RuntimeStructuredContract:
     def validate(self, output: Mapping[str, Any] | object) -> None:
         if not isinstance(output, Mapping):
             raise ValueError("structured runtime output must be an object")
-        self.validator(dict(output))
+        validated = self.model.model_validate(dict(output)).model_dump(mode="json")
+        self.semantic_validator(validated)
 
     def manifest(self) -> dict[str, Any]:
         return {
@@ -194,8 +143,8 @@ _RUNTIME_CONTRACTS: dict[ModelRole, RuntimeStructuredContract] = {
         runtime_prompt_version="1.0",
         stage="high_confidence_extraction",
         schema_name="memorist_high_confidence_extraction_v1",
-        json_schema=HIGH_CONFIDENCE_SCHEMA,
-        validator=validate_high_confidence_result,
+        model=HighConfidenceRuntimeOutput,
+        semantic_validator=validate_high_confidence_result,
         certification_input={
             "candidate_text": "Backups stay enabled.",
             "evidence_text": "Backups stay enabled.",
@@ -210,8 +159,8 @@ _RUNTIME_CONTRACTS: dict[ModelRole, RuntimeStructuredContract] = {
         runtime_prompt_version="2.0",
         stage="privacy_sensitivity",
         schema_name="memorist_privacy_sensitivity_v1",
-        json_schema=PRIVACY_SCHEMA,
-        validator=validate_privacy_result,
+        model=PrivacyRuntimeOutput,
+        semantic_validator=validate_privacy_result,
         certification_input={
             "candidate_text": "Backups stay enabled.",
             "evidence_text": "Backups stay enabled.",
@@ -225,8 +174,8 @@ _RUNTIME_CONTRACTS: dict[ModelRole, RuntimeStructuredContract] = {
         runtime_prompt_version="2.0",
         stage="block_compaction",
         schema_name="memorist_block_compaction_v1",
-        json_schema=COMPACTION_SCHEMA,
-        validator=validate_compaction_result,
+        model=CompactionRuntimeOutput,
+        semantic_validator=validate_compaction_result,
         certification_input={
             "block_type": "ProjectContextBlock",
             "char_limit": 2048,
@@ -293,3 +242,17 @@ def json_mode_contract_suffix(contract: RuntimeStructuredContract) -> str:
         f"{contract.contract_id}\nRUNTIME_CONTRACT_VERSION={contract.contract_version}\n"
         f"JSON_SCHEMA={json.dumps(contract.json_schema, ensure_ascii=False, sort_keys=True)}"
     )
+
+
+def _make_strict(node: Any) -> None:
+    if isinstance(node, dict):
+        if node.get("type") == "object" or "properties" in node:
+            properties = node.get("properties")
+            if isinstance(properties, dict):
+                node["additionalProperties"] = False
+                node["required"] = list(properties.keys())
+        for value in node.values():
+            _make_strict(value)
+    elif isinstance(node, list):
+        for item in node:
+            _make_strict(item)
