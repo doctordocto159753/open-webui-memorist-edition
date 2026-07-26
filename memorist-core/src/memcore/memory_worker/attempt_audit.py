@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid5
 
 from memcore.memory_worker.providers.openai_compatible import (
@@ -14,6 +14,7 @@ from memcore.models import utc_now
 from memcore.validators.ijson import canonical_hash_ijson, dump_ijson
 
 ATTEMPT_AUDIT_SCHEMA_VERSION = 1
+AttemptReservationState = Literal["reserved", "unknown_completion", "completed"]
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,8 @@ class ProviderAttemptAuditRepository:
     Reservation is committed before network I/O. If the worker disappears after
     the remote call, the durable row remains ``unknown_completion`` instead of
     falsely claiming success or losing all evidence of a potentially paid call.
+    A pre-existing finalized row is reported separately as ``completed`` so a
+    replay is never mislabelled as an unknown crash-window completion.
     """
 
     def __init__(
@@ -67,7 +70,7 @@ class ProviderAttemptAuditRepository:
         self.frozen = frozen
         self.postgres = postgres
 
-    def reserve(self, attempt_index: int, attempt_kind: str) -> bool:
+    def reserve(self, attempt_index: int, attempt_kind: str) -> AttemptReservationState:
         if attempt_kind not in {"initial", "repair"}:
             raise ValueError(f"unsupported provider attempt kind: {attempt_kind}")
         attempt_uuid = stable_provider_attempt_uuid(self.frozen.stage_execution_uuid, attempt_index)
@@ -128,7 +131,19 @@ class ProviderAttemptAuditRepository:
         )
         inserted = int(cursor.rowcount or 0) == 1
         self.connection.commit()
-        return inserted
+        if inserted:
+            return "reserved"
+
+        placeholder = "%s" if self.postgres else "?"
+        existing = self.connection.execute(
+            "SELECT completed_at, transport_status FROM processing_provider_attempts "
+            f"WHERE idempotency_identity = {placeholder}",
+            (identity,),
+        ).fetchone()
+        if existing is None:
+            return "unknown_completion"
+        completed_at = _row_value(existing, "completed_at", 0)
+        return "completed" if completed_at is not None else "unknown_completion"
 
     def finalize(
         self,
@@ -265,3 +280,12 @@ class ProviderAttemptAuditRepository:
             ),
         )
         self.connection.commit()
+
+
+def _row_value(row: Any, key: str, index: int) -> Any:
+    if isinstance(row, dict):
+        return row.get(key)
+    try:
+        return row[key]
+    except (IndexError, KeyError, TypeError):
+        return row[index]
