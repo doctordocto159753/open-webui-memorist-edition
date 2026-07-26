@@ -22,6 +22,7 @@ from memcore.memory_worker.prompts.registry import (
     validate_prompt_execution,
 )
 from memcore.memory_worker.prompts.versions import (
+    JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
     JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
     JAKOBSON_SENTENCE_ANALYSIS_VERSION,
 )
@@ -227,9 +228,13 @@ class JakobsonAnalysisService:
             )
             run.warnings_ijson = dump_ijson(warnings)
             run.raw_output_ijson = dump_ijson(output)
+            output_version = str(
+                output.get("prompt_version") or JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION
+            )
+            run.prompt_version = output_version
             execution = PromptExecutionRepository(self.connection).record_execution(
                 prompt_id=JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-                prompt_version=JAKOBSON_SENTENCE_ANALYSIS_VERSION,
+                prompt_version=output_version,
                 model_role=self.model_role,
                 provider_type=self.provider.provider_type,
                 model_name=str(self.provider.model_name or self.provider.provider_type),
@@ -343,7 +348,11 @@ class JakobsonAnalysisService:
                 with fenced_write(self.connection, lease_fence):
                     execution = PromptExecutionRepository(self.connection).record_execution(
                         prompt_id=JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-                        prompt_version=JAKOBSON_SENTENCE_ANALYSIS_VERSION,
+                        prompt_version=(
+                            prepared_inference.prompt_version
+                            if prepared_inference is not None
+                            else JAKOBSON_SENTENCE_ANALYSIS_VERSION
+                        ),
                         model_role=self.model_role,
                         provider_type=self.provider.provider_type,
                         model_name=str(self.provider.model_name or self.provider.provider_type),

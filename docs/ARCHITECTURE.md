@@ -262,3 +262,19 @@ portability (Heritage), MemoryOS-style memory layers, MIRIX-style memory
 taxonomy, and Jakobson's communication model as the annotation lens that routes
 extraction. The full essay-form treatment is in
 [reference/memory-engine-architecture.md](reference/memory-engine-architecture.md).
+# Provider contract execution authority
+
+Remote processing nodes execute against one frozen authority tuple: source and
+content hash, processing run, requested/effective role, scope and inheritance,
+profile fingerprint, prompt version, and contract hash. The worker commits an
+append-only `processing_provider_attempts` reservation before each paid HTTP
+call. A missing completion update is reported as `unknown_completion`; a retry
+must not repeat that call. Lease, source, role, profile, or contract invalidation
+is checked before the first call, after every response, and immediately before
+the single bounded repair.
+
+Stage outcomes use only `ok`, `abstained`, `failed_open`, and `failed`. Historical
+spellings are normalized at read boundaries. Provider output is parsed,
+validated, narrowly canonicalized (`success` → `ok` only), repaired at most
+once, then replaced by a contract-valid deterministic fallback. Raw provider
+content and credentials are never stored in attempt audit rows.

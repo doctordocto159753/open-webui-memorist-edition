@@ -17,6 +17,7 @@ from memcore.memory_control import memory_control_connection
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
 from memcore.memory_worker.postgres.pipeline import PostgresMemoryWorkerPipeline
 from memcore.memory_worker.prepared import PreparedJakobsonInference
+from memcore.memory_worker.prompts.contracts import canonical_sentence_items
 
 RUNTIME = "full" if os.getenv("MEMORIST_SEMANTIC_BASELINE_RUNTIME") == "full" else "lite"
 WORKSPACE_UUID = "00000000-0000-0000-0000-00000000d004"
@@ -122,7 +123,7 @@ def _run_pipeline(settings: Settings, message_uuid: str, *, force_phatic: bool) 
 
 def _force_prepared_phatic(prepared: PreparedJakobsonInference) -> PreparedJakobsonInference:
     output = copy.deepcopy(prepared.output)
-    sentence = output["sentences"][0]
+    sentence = canonical_sentence_items(output)[0]
     sentence["dominant_function"] = "phatic"
     sentence["secondary_functions"] = []
     sentence["function_reason"] = "Characterization fixture forces phatic output."

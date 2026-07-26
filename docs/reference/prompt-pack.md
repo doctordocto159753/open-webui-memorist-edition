@@ -40,3 +40,10 @@ Every prompt has `prompt_id`, `prompt_version`, stage, allowed model roles, inpu
 Every LLM-backed prompt execution records a row in `prompt_execution_runs`. Deterministic prompt-compatible executions can also be recorded with `provider_type=deterministic`. The ledger stores prompt/version/stage, model role/profile/provider, scope UUIDs, input/output hashes, raw output, validated output, warnings, sanitized errors, latency, and token counts. Artifacts can link back through `prompt_execution_uuid`.
 
 Invalid output is never persisted as accepted memory. It is rejected, routed to retry/manual review, or fail-open in the preflight path.
+# Runtime validation and repair
+
+The active Jakobson v3 Pydantic model drives strict JSON Schema, runtime
+validation, the canonical example, and the contract hash. `items` is its sole
+sentence collection. Only the documented `success` status alias may be
+canonicalized to `ok`, and only when that one replacement makes the entire
+payload valid. There is at most one repair request.

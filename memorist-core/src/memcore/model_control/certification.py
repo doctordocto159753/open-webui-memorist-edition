@@ -12,6 +12,19 @@ from memcore.validators.ijson import load_ijson
 _SELF_CERTIFYING_PROVIDERS = {"deterministic", "local_embedding"}
 
 
+def role_contract_hash(role_value: str) -> str | None:
+    """Return the complete active role-manifest hash.
+
+    The compatibility name is retained for stored callers; the value now covers
+    the actual prompt/version/schema/capability/fallback probe manifest rather
+    than incorrectly aliasing import reconstruction to Jakobson.
+    """
+
+    from memcore.model_control.role_contracts import role_contract_manifest_hash
+
+    return role_contract_manifest_hash(role_value)
+
+
 def profile_certification_fingerprint(profile: ModelProfile) -> str:
     """Hash fields that affect provider execution and role compatibility."""
 
@@ -31,6 +44,7 @@ def profile_certification_fingerprint(profile: ModelProfile) -> str:
         "secret_strategy": profile.secret_strategy,
         "secret_env_var_name": profile.secret_env_var_name,
         "is_enabled": profile.is_enabled,
+        "role_contract_hash": role_contract_hash(profile.role.value),
     }
     encoded = json.dumps(
         payload,
@@ -76,6 +90,8 @@ def certification_status(
         str(event.get("status") or "") == "ok"
         and result.get("overall_status") == "ok"
         and result.get("role_compatibility_status") == "compatible"
+        and result.get("role_probe_status") in {"compatible", "not_applicable"}
+        and result.get("role_manifest_hash") == role_contract_hash(profile.role.value)
     )
     if event_fingerprint != base["profile_fingerprint"]:
         state = "stale"

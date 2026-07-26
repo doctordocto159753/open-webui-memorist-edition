@@ -112,3 +112,11 @@ Storage schema version: 22. Pinned Open WebUI base:
 
 Generated packages under `release/source/` and `release/rc/` are reproducible
 build outputs; rebuild them before publishing.
+# PR #51 runtime closure
+
+- Added schema 24 provider-attempt audit with SQLite/PostgreSQL parity.
+- Fenced initial and repair calls against lease, source, profile, role, and
+  contract changes; unknown completions are never blindly repeated.
+- Added role-manifest-based certification and a live Jakobson v3 certification
+  probe for memory extraction.
+- Standardized processing-stage statuses and exposed secret-free attempt traces.

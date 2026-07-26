@@ -27,6 +27,9 @@ class ProviderHealth(BaseModel):
     failure_stage: str | None = None
     schema_mode: str = "none"
     probe_attempts: int = Field(default=1, ge=0, le=2)
+    role_manifest_hash: str | None = None
+    role_probe_status: str = "not_run"
+    role_probe_contract_hash: str | None = None
 
     @property
     def detail(self) -> str | None:

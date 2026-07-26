@@ -265,3 +265,11 @@ GET  /memcore/costs/model-roles
 See also [architecture](../ARCHITECTURE.md),
 [the memory machine](../MEMORY_MACHINE.md), and
 [security](../../SECURITY.md).
+# Role-contract manifests and certification
+
+`memcore.model_control.role_contracts` is the authority for the prompt,
+version/schema, required capability, fallback policy, and certification probe of
+each processing role. Certification fingerprints include the complete manifest
+hash. In particular, `memory_extraction` uses Jakobson v3 while
+`import_reconstruction` uses its own v2 prompt; they are not interchangeable.
+The observed Open WebUI main-chat role is explicitly non-certifiable.

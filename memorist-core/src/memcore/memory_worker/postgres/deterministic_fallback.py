@@ -4,8 +4,9 @@ from collections import Counter
 from typing import Any
 
 from memcore.memory_worker.prompts.versions import (
+    JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
     JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-    JAKOBSON_SENTENCE_ANALYSIS_VERSION,
+    JAKOBSON_SENTENCE_ANALYSIS_V3_VERSION,
 )
 from memcore.memory_worker.semantic import (
     SemanticFactorMatch,
@@ -15,13 +16,18 @@ from memcore.memory_worker.semantic import (
 from memcore.models import JakobsonFunction
 
 
-def deterministic_jakobson_output(_self: object, units: list[dict[str, Any]]) -> dict[str, Any]:
-    """Build Full/PostgreSQL deterministic Jakobson output via the shared factor resolver.
+def deterministic_jakobson_output(
+    _self: object,
+    units: list[dict[str, Any]],
+    *,
+    version: str = JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
+) -> dict[str, Any]:
+    """Build the deterministic Jakobson output via the shared factor resolver.
 
-    This keeps the Full fallback payload shape compatible with the existing
-    PostgreSQL pipeline while removing its separate receiver/context defaults.
-    Later PR4-D tasks can replace this compatibility adapter with a direct
-    canonical decision object in the pipeline.
+    Emits the contract shape for ``version``: 3.0 uses the canonical ``items``
+    collection; 2.0 uses the legacy ``sentences`` collection (retained so
+    historical fixtures/replays keep working). This is the truthful deterministic
+    fallback used when a remote provider output cannot satisfy the contract.
     """
 
     sentences: list[dict[str, Any]] = []
@@ -83,18 +89,19 @@ def deterministic_jakobson_output(_self: object, units: list[dict[str, Any]]) ->
         function for function, _ in function_counts.most_common() if function != dominant_overall
     ]
 
-    return {
+    is_v3 = version == JAKOBSON_SENTENCE_ANALYSIS_V3_VERSION
+    collection_field = "items" if is_v3 else "sentences"
+    output: dict[str, Any] = {
         "schema_version": "1.0",
         "prompt_id": JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-        "prompt_version": JAKOBSON_SENTENCE_ANALYSIS_VERSION,
+        "prompt_version": version,
         "status": "ok",
         "warnings": ["deterministic_fallback"],
-        "items": [],
         "analysis_level": "sentence",
         "model": "jakobson_six_factor",
         "input_language": "mixed",
         "sentence_count": len(sentences),
-        "sentences": sentences,
+        collection_field: sentences,
         "overall_summary": {
             "dominant_overall_function": dominant_overall,
             "secondary_overall_functions": secondary_overall,
@@ -113,6 +120,12 @@ def deterministic_jakobson_output(_self: object, units: list[dict[str, Any]]) ->
             "main_contact_channel": "chat",
         },
     }
+    if not is_v3:
+        # Version 2.0 carries the redundant common-envelope ``items`` array in
+        # addition to ``sentences``; version 3.0 uses ``items`` as the only
+        # collection.
+        output["items"] = []
+    return output
 
 
 def _factor_payload(

@@ -15,6 +15,7 @@ from memcore.graph.service import GraphProjectionService
 from memcore.memory_worker.graph import GraphProjectionRunner
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
 from memcore.memory_worker.postgres import PostgresMemoryWorkerPipeline
+from memcore.model_control.stage_status import normalize_stage_status
 from memcore.models import new_uuid, utc_now
 from memcore.repositories import MessageRepository
 from memcore.repositories.memory_worker import (
@@ -23,6 +24,7 @@ from memcore.repositories.memory_worker import (
     MemoryStoreRepository,
     TextUnitRepository,
 )
+from memcore.storage.postgres.compat import PostgresCompatConnection
 from memcore.storage.sqlite import connect
 
 router = APIRouter(prefix="/memcore", tags=["memory-worker"])
@@ -113,6 +115,17 @@ def _processing_trace(
         f"WHERE processing_run_uuid = {placeholder} GROUP BY status",
         (run_uuid,),
     ).fetchall()
+    attempts = [
+        _jsonable_dict(item)
+        for item in connection.execute(
+            f"SELECT * FROM processing_provider_attempts "
+            f"WHERE processing_run_uuid = {placeholder} "
+            "ORDER BY stage_execution_uuid, attempt_index",
+            (run_uuid,),
+        ).fetchall()
+    ]
+    for stage in stages:
+        stage["status"] = normalize_stage_status(str(stage.get("status") or "failed")).value
     candidate_statuses = {str(item["status"]): int(item["count"]) for item in candidate_rows}
     # Full/PostgreSQL historically calls the safe automatic transition
     # ``accepted`` while Lite/SQLite calls the equivalent lifecycle point
@@ -158,6 +171,7 @@ def _processing_trace(
         "candidate_status_contract": "processing-candidate-lifecycle-v1",
         "memories_created_or_updated": memories,
         "stages": stages,
+        "provider_attempts": attempts,
         "external_provider_called": any(bool(stage.get("called_provider")) for stage in stages),
         "fallback_used": any(bool(stage.get("fallback_used")) for stage in stages),
         "retryable_failures": [
@@ -342,8 +356,10 @@ def get_memory_evidence(memory_uuid: str) -> list[dict[str, Any]]:
 def process_message(message_uuid: str) -> dict[str, object]:
     settings = get_settings()
     if _is_full_postgres(settings):
-        with _pg_connection(settings) as connection, connection.transaction():
-            return PostgresMemoryWorkerPipeline(connection, settings).process_message(message_uuid)
+        with _pg_connection(settings) as connection:
+            return PostgresMemoryWorkerPipeline(
+                PostgresCompatConnection(connection), settings
+            ).process_message(message_uuid)
     with _connection() as connection:
         return MemoryWorkerPipeline(connection, settings).process_message(message_uuid)
 

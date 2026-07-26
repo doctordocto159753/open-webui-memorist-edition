@@ -89,3 +89,18 @@ Common failures, in the order people usually hit them.
 
 Still stuck? Open an issue with the installer/doctor output and the first
 error from the logs — with any API keys redacted.
+# Inspecting provider contract failures
+
+Open `/memcore/memory-processing/runs/{processing_run_uuid}/stages`. The trace
+contains final canonical stages and `provider_attempts`. Check
+`transport_status`, `parse_status`, `schema_valid`, `canonicalized`,
+`attempt_kind`, and `validation_errors_*`. An `unknown_completion` reservation
+means the worker cannot prove whether a paid call completed and deliberately did
+not call the provider again. `failed_open` means deterministic output kept the
+pipeline available; it does not mean the provider succeeded.
+
+Certification is role-contract-specific. A profile that returns HTTP 200 and
+passes the generic connectivity marker can still be rejected if it fails the
+active role prompt/schema probe. Retest after changing model, endpoint,
+capabilities, prompt contract, or role manifest; any such change makes the prior
+certification stale.

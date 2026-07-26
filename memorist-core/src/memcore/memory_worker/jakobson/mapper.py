@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import Any, TypedDict
 
 from memcore.memory_worker.jakobson.repair import compare_sentence_text
+from memcore.memory_worker.prompts.contracts import canonical_sentence_items
 from memcore.models import (
     JakobsonConfidence,
     JakobsonFunction,
@@ -36,7 +37,7 @@ def map_output_to_annotations(
     units: list[TextUnit],
     output: Mapping[str, Any],
 ) -> tuple[list[JakobsonSentenceAnnotation], list[str]]:
-    sentences = output.get("sentences")
+    sentences = canonical_sentence_items(output)
     if not isinstance(sentences, list):
         raise ValueError("Jakobson output sentences must be a list")
     if len(sentences) != len(units):

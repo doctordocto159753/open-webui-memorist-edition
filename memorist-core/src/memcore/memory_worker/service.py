@@ -176,6 +176,8 @@ class MemoryJobWorkerService:
                 )
                 lease_fence(before_provider=True)
                 connection.commit()
+                pipeline.provider_job_uuid = str(job["job_uuid"])
+                pipeline.provider_lease_fence = lease_fence
                 prepared = pipeline.prepare_message(message_uuid)
                 if (
                     prepared.input_content_hash != expected_snapshot["input_content_hash"]
@@ -228,6 +230,8 @@ class MemoryJobWorkerService:
                 )
                 lease_fence(before_provider=True)
                 connection.commit()
+                pipeline.provider_job_uuid = str(job["job_uuid"])
+                pipeline.provider_lease_fence = lease_fence
                 prepared = pipeline.prepare_message(message_uuid)
                 if (
                     prepared.input_content_hash != expected_snapshot["input_content_hash"]

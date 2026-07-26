@@ -20,6 +20,7 @@ from memcore.memory_worker.fencing import LeaseFenceRejected
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
 from memcore.model_control.providers.base import ProviderHealth, StructuredCompletionResponse
 from memcore.model_control.repository import ModelControlRepository
+from memcore.model_control.role_contracts import role_contract_manifest_hash
 from memcore.model_control.schemas import ModelProfileCreate, ProviderType
 from memcore.models import MemoryBlockType, Message, ModelRole
 from memcore.preflight import PreflightRequest, PreflightService
@@ -668,6 +669,8 @@ def _configure_compaction_profile(connection: sqlite3.Connection) -> str:
             authentication_status="not_required",
             role_compatibility_status="compatible",
             overall_status="ok",
+            role_manifest_hash=role_contract_manifest_hash(profile.role),
+            role_probe_status="compatible",
         ),
     )
     repository.set_default(ModelRole.BLOCK_COMPACTION, profile.model_profile_uuid)

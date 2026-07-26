@@ -5,6 +5,7 @@ from typing import Any, cast
 
 from memcore.memory_worker.jakobson.service import DeterministicJakobsonProvider
 from memcore.memory_worker.postgres.pipeline import PostgresMemoryWorkerPipeline
+from memcore.memory_worker.prompts.contracts import canonical_sentence_items
 from memcore.memory_worker.routing.signal_router import SignalRouter
 from memcore.memory_worker.semantic import (
     ContextKind,
@@ -103,7 +104,7 @@ def test_deterministic_jakobson_provider_uses_shared_factor_resolver() -> None:
     )
 
     output = DeterministicJakobsonProvider().analyze([unit], text)
-    sentence = output["sentences"][0]
+    sentence = canonical_sentence_items(output)[0]
 
     assert sentence["six_factors"]["receiver_addressee"] == {
         "value": "Product Team",
@@ -129,7 +130,7 @@ def test_full_postgres_deterministic_fallback_expected_to_use_shared_factor_reso
     pipeline = object.__new__(PostgresMemoryWorkerPipeline)
 
     output = PostgresMemoryWorkerPipeline._deterministic_jakobson_output(pipeline, [unit])
-    sentence = output["sentences"][0]
+    sentence = canonical_sentence_items(output)[0]
 
     assert sentence["six_factors"]["receiver_addressee"] == {
         "value": "Product Team",
@@ -172,13 +173,16 @@ def test_lite_and_full_share_deterministic_function_classification() -> None:
         pipeline = object.__new__(PostgresMemoryWorkerPipeline)
         full = PostgresMemoryWorkerPipeline._deterministic_jakobson_output(pipeline, [full_unit])
 
-        assert lite["sentences"][0]["dominant_function"] == expected.value
-        assert full["sentences"][0]["dominant_function"] == expected.value
+        assert canonical_sentence_items(lite)[0]["dominant_function"] == expected.value
+        assert canonical_sentence_items(full)[0]["dominant_function"] == expected.value
         assert (
-            full["sentences"][0]["secondary_functions"]
-            == lite["sentences"][0]["secondary_functions"]
+            canonical_sentence_items(full)[0]["secondary_functions"]
+            == canonical_sentence_items(lite)[0]["secondary_functions"]
         )
-        assert full["sentences"][0]["function_reason"] == lite["sentences"][0]["function_reason"]
+        assert (
+            canonical_sentence_items(full)[0]["function_reason"]
+            == canonical_sentence_items(lite)[0]["function_reason"]
+        )
 
 
 def test_signal_router_uses_shared_receiver_resolution_for_hints() -> None:

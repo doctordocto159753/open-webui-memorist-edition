@@ -92,7 +92,220 @@ def test_profile_health(
     profiles return disabled, and unknown provider types return an error.
     """
     provider = provider_for_profile(profile)
-    return provider.health_check(timeout_seconds=timeout_seconds)
+    health = provider.health_check(timeout_seconds=timeout_seconds)
+    if profile is None:
+        return health
+    role_value = _get(profile, "role")
+    role = role_value if isinstance(role_value, ModelRole) else ModelRole(str(role_value))
+    from memcore.model_control.role_contracts import role_contract_manifest_hash
+
+    manifest_hash = role_contract_manifest_hash(role)
+    if health.overall_status != "ok" or role in {
+        ModelRole.MAIN_CHAT_OBSERVED,
+        ModelRole.EMBEDDING,
+    }:
+        return health.model_copy(
+            update={
+                "role_manifest_hash": manifest_hash,
+                "role_probe_status": (
+                    "not_applicable"
+                    if role is ModelRole.MAIN_CHAT_OBSERVED
+                    else ("compatible" if health.overall_status == "ok" else health.overall_status)
+                ),
+            }
+        )
+    if role is ModelRole.MEMORY_EXTRACTION:
+        return _run_memory_extraction_role_probe(profile, health, manifest_hash, timeout_seconds)
+    if str(_get(profile, "provider_type") or "") == "deterministic":
+        return health.model_copy(
+            update={
+                "role_manifest_hash": manifest_hash,
+                "role_probe_status": "compatible",
+            }
+        )
+    return _run_structured_role_probe(profile, role, health, manifest_hash, timeout_seconds)
+
+
+def _run_memory_extraction_role_probe(
+    profile: ModelProfile | dict[str, object],
+    health: ProviderHealth,
+    manifest_hash: str,
+    timeout_seconds: float,
+) -> ProviderHealth:
+    from memcore.memory_worker.jakobson_runtime import execute_jakobson_contract
+    from memcore.memory_worker.prompts.contracts import (
+        canonical_jakobson_v3_example,
+        get_contract,
+    )
+    from memcore.memory_worker.prompts.versions import (
+        JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
+        JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
+    )
+
+    sentence = "Keep backups enabled."
+    payload = {
+        "sentences": [
+            {
+                "id": 1,
+                "unit_uuid": "certification-unit-1",
+                "message_uuid": "certification-message-1",
+                "text": sentence,
+                "span_start": 0,
+                "span_end": len(sentence),
+            }
+        ]
+    }
+    fallback = canonical_jakobson_v3_example()
+    fallback["items"][0]["text"] = sentence
+    contract = get_contract(
+        JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
+        JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
+    )
+    try:
+        outcome = execute_jakobson_contract(
+            profile=(
+                profile.model_dump(mode="json")
+                if isinstance(profile, ModelProfile)
+                else dict(profile)
+            ),
+            input_payload=payload,
+            deterministic_builder=lambda: fallback,
+            timeout_ms=max(1, int(timeout_seconds * 1000)),
+            allow_fallback=False,
+        )
+        if outcome.output.get("status") != "ok" or not outcome.output.get("items"):
+            raise ValueError("role probe must return a non-empty ok result")
+    except Exception:
+        return health.model_copy(
+            update={
+                "status": "error",
+                "overall_status": "incompatible",
+                "role_compatibility_status": "incompatible",
+                "structured_output_status": "role_contract_invalid",
+                "failure_stage": "role_contract_probe",
+                "detail_sanitized": (
+                    "Provider passed connectivity but failed the active memory-extraction "
+                    "prompt contract."
+                ),
+                "recommended_action": (
+                    "Use a model that satisfies the active strict role contract, then retest."
+                ),
+                "role_manifest_hash": manifest_hash,
+                "role_probe_status": "incompatible",
+                "role_probe_contract_hash": (
+                    contract.contract_hash if contract is not None else None
+                ),
+            }
+        )
+    return health.model_copy(
+        update={
+            "role_manifest_hash": manifest_hash,
+            "role_probe_status": "compatible",
+            "role_probe_contract_hash": (contract.contract_hash if contract is not None else None),
+        }
+    )
+
+
+def _run_structured_role_probe(
+    profile: ModelProfile | dict[str, object],
+    role: ModelRole,
+    health: ProviderHealth,
+    manifest_hash: str,
+    timeout_seconds: float,
+) -> ProviderHealth:
+    from memcore.memory_worker.prompts.registry import (
+        render_prompt,
+        validate_prompt_execution,
+    )
+    from memcore.model_control.role_contracts import role_contract_manifest
+
+    manifest = role_contract_manifest(role)
+    prompt = manifest.get("prompt")
+    if not isinstance(prompt, dict):
+        return health.model_copy(
+            update={
+                "role_manifest_hash": manifest_hash,
+                "role_probe_status": "incompatible",
+            }
+        )
+    prompt_id = str(prompt["metadata"]["prompt_id"])
+    prompt_version = str(prompt["metadata"]["prompt_version"])
+    payload = _role_probe_input(role)
+    provider = provider_for_profile(profile)
+    try:
+        response = provider.complete_structured(
+            render_prompt(prompt_id, prompt_version, payload),
+            timeout_seconds=timeout_seconds,
+        )
+        validate_prompt_execution(prompt_id, prompt_version, payload, response.output_ijson)
+        if response.output_ijson.get("status") != "ok" or not response.output_ijson.get("items"):
+            raise ValueError("role probe must return a non-empty ok result")
+    except Exception:
+        return health.model_copy(
+            update={
+                "status": "error",
+                "overall_status": "incompatible",
+                "role_compatibility_status": "incompatible",
+                "structured_output_status": "role_contract_invalid",
+                "failure_stage": "role_contract_probe",
+                "detail_sanitized": (
+                    "Provider passed connectivity but failed the active role contract."
+                ),
+                "recommended_action": (
+                    "Use a model that satisfies the active role contract, then retest."
+                ),
+                "role_manifest_hash": manifest_hash,
+                "role_probe_status": "incompatible",
+                "role_probe_contract_hash": manifest.get("contract_hash"),
+            }
+        )
+    return health.model_copy(
+        update={
+            "role_manifest_hash": manifest_hash,
+            "role_probe_status": "compatible",
+            "role_probe_contract_hash": manifest.get("contract_hash"),
+        }
+    )
+
+
+def _role_probe_input(role: ModelRole) -> dict[str, Any]:
+    fixtures: dict[ModelRole, dict[str, Any]] = {
+        ModelRole.PREFLIGHT: {
+            "current_user_message": "Remember that backups stay enabled.",
+            "main_chat_model": "certification-model",
+            "attachment_budget": {"max_tokens": 64},
+            "active_blocks": [],
+            "retrieval_candidates": [],
+            "conflicts": [],
+            "security_warnings": [],
+        },
+        ModelRole.IMPORT_RECONSTRUCTION: {
+            "import_run_uuid": "certification-import",
+            "provider": "certification",
+            "conversation": {"title": "Contract probe"},
+            "messages": [],
+            "known_schema_fields": [],
+            "unknown_fields": [],
+        },
+        ModelRole.HIGH_CONFIDENCE_EXTRACTION: {
+            "unit_uuid": "certification-unit",
+            "text": "Backups stay enabled.",
+        },
+        ModelRole.BLOCK_COMPACTION: {
+            "block_type": "ProjectContextBlock",
+            "source_memories": [
+                {"memory_uuid": "certification-memory", "text": "Backups stay enabled."}
+            ],
+            "token_budget": 64,
+            "previous_block": None,
+        },
+        ModelRole.PRIVACY_SENSITIVITY: {
+            "candidate": {"candidate_uuid": "certification-candidate"},
+            "evidence": [{"quote": "Backups stay enabled."}],
+            "storage_context": {"scope": "project"},
+        },
+    }
+    return fixtures[role]
 
 
 def _get(profile: ModelProfile | dict[str, object], key: str) -> object | None:

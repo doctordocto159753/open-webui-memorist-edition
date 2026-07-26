@@ -15,6 +15,7 @@ from memcore.memory_control.repository import MemoryControlRepository, ResolvedT
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
 from memcore.model_control.providers.base import EmbeddingResponse, ProviderHealth
 from memcore.model_control.repository import ModelControlRepository
+from memcore.model_control.role_contracts import role_contract_manifest_hash
 from memcore.model_control.schemas import ModelProfileCreate, ProviderType
 from memcore.models import ModelRole, RetrievalMode
 from memcore.preflight import PreflightRequest, PreflightService
@@ -313,6 +314,8 @@ def test_semantic_retrieval_uses_effective_embedding_processing_node(
             authentication_status="not_required",
             role_compatibility_status="compatible",
             overall_status="ok",
+            role_manifest_hash=role_contract_manifest_hash(profile.role),
+            role_probe_status="compatible",
         ),
     )
     model_control.set_default(ModelRole.EMBEDDING, profile.model_profile_uuid)

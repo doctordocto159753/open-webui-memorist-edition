@@ -148,3 +148,11 @@ per eligible imported user or assistant message, records prompt/model usage prov
 does not sample for cost reasons. See `docs/reference/import.md` for the bounded processing and retry
 contract. In Full Mode the import control plane and its processing-node
 authority are PostgreSQL-backed; SQLite remains the Lite canonical store.
+# Contract-bound remote attempts
+
+Full mode uses PostgreSQL for the processing run, provider-attempt reservations,
+final stage audit, prompt execution, and memory records. Remote HTTP is outside
+the canonical write transaction. A stable attempt row is committed first and
+then finalized with hashes, transport/parse/schema state, tokens, latency, and
+sanitized validation paths. Lease, source, role/profile, or contract invalidation
+propagates and prevents the one optional repair.
