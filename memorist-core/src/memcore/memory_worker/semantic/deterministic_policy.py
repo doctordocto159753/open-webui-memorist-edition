@@ -60,7 +60,14 @@ def classify_deterministic_function(
 
 
 def _is_phatic(normalized: NormalizedText) -> bool:
-    """A greeting is a lone greeting token, whatever punctuation surrounds it."""
+    """A greeting is a lone greeting token, whatever punctuation surrounds it.
 
+    Text carrying a fenced code block is never phatic. Lexical rules skip code,
+    so without this guard "hi" followed by a pasted snippet would classify as a
+    bare greeting and be routed to `ignore` -- discarding the snippet.
+    """
+
+    if normalized.code_spans:
+        return False
     tokens = tokenize(normalized)
     return len(tokens) == 1 and tokens[0].key in GREETING_TOKENS

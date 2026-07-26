@@ -5,32 +5,49 @@ from memcore.textsemantics import Lexicon, NormalizedText, normalize_with_mappin
 # longer classify as SECRET while "rotate the access_token" still does: an
 # underscore is a token boundary, so "access_token" is the two tokens "access"
 # and "token". For the same reason "api key" also covers "api_key".
+#
+# Plurals and inflections are listed explicitly. The previous substring matcher
+# caught them for free, and dropping them would silently downgrade
+# "do not commit secrets to git" to NORMAL -- a fail-open change, since SECRET
+# is what forces a candidate to REJECTED.
 SECRET_LEXICON = Lexicon(
     name="secret_terms",
     phrases=(
         "api key",
+        "api keys",
         "apikey",
+        "apikeys",
         "password",
+        "passwords",
         "passphrase",
+        "passphrases",
         "token",
+        "tokens",
         "secret",
+        "secrets",
         "credential",
         "credentials",
         "رمز",
+        "رمزها",
         "توکن",
+        "توکن‌ها",
+        "کلیدها",
     ),
 )
 SENSITIVE_LEXICON = Lexicon(
     name="sensitive_terms",
     phrases=(
         "religion",
+        "religions",
         "religious",
         "political",
         "politics",
         "medical",
         "health",
         "diagnosis",
+        "diagnoses",
         "مذهب",
+        "مذاهب",
         "سیاسی",
         "پزشکی",
         "سلامت",
@@ -38,9 +55,10 @@ SENSITIVE_LEXICON = Lexicon(
 )
 
 # "sk-" is a key prefix, not a word. Matching it as a substring flagged
-# "task-force"; matching it as a token followed by a key body does not.
+# "task-force"; anchoring it to a whole token does not.
 SECRET_KEY_PREFIXES = frozenset({"sk"})
 MIN_KEY_BODY_LENGTH = 8
+KEY_BODY_CHARACTERS = "-_"
 
 
 def classify_sensitivity(text: str) -> SensitivityClass:
@@ -61,13 +79,26 @@ def classify_sensitivity(text: str) -> SensitivityClass:
 
 
 def _has_key_prefix(normalized: NormalizedText) -> bool:
-    tokens = tokenize(normalized, include_code=True)
-    for position, token in enumerate(tokens[:-1]):
+    """Detect an ``sk-`` credential without matching hyphenated words.
+
+    The body is measured over the whole run after the prefix rather than the
+    next token alone, because real keys are multi-segment:
+    ``sk-proj-AbCd...`` and ``sk-ant-api03-...`` both have a short first
+    segment. Requiring one long token missed every modern key format.
+    """
+
+    text = normalized.text
+    for token in tokenize(normalized, include_code=True):
         if token.key not in SECRET_KEY_PREFIXES:
             continue
-        following = tokens[position + 1]
-        # One separator character between them, and a body long enough to be a
-        # key rather than a hyphenated word.
-        if following.raw_start == token.raw_end + 1 and len(following.key) >= MIN_KEY_BODY_LENGTH:
+        if token.end >= len(text) or text[token.end] not in KEY_BODY_CHARACTERS:
+            continue
+        cursor = token.end + 1
+        while cursor < len(text) and (
+            text[cursor].isalnum() or text[cursor] in KEY_BODY_CHARACTERS
+        ):
+            cursor += 1
+        body = text[token.end + 1 : cursor]
+        if len(body.replace("-", "").replace("_", "")) >= MIN_KEY_BODY_LENGTH:
             return True
     return False

@@ -34,6 +34,8 @@ from memcore.textsemantics import (
 )
 
 ZWNJ = "‌"
+# A prose word, an empty fenced block, then another prose word.
+FENCE_GAP = chr(10) + "```" + chr(10) + "```" + chr(10)
 
 
 # --------------------------------------------------------------------------
@@ -335,7 +337,6 @@ def test_needles_normalize_the_same_way_as_haystacks() -> None:
         ("We do not deploy on Friday.", Polarity.NEGATED),
         ("We don't deploy on Friday.", Polarity.NEGATED),
         ("We dont deploy on Friday.", Polarity.NEGATED),
-        ("There is no deadline.", Polarity.NEGATED),
         ("ما همیشه از Jira استفاده می‌کنیم.", Polarity.AFFIRMED),
         ("ما هرگز از Jira استفاده نمی‌کنیم.", Polarity.NEGATED),
         ("این کار را نباید انجام دهیم.", Polarity.NEGATED),
@@ -348,6 +349,44 @@ def test_needles_normalize_the_same_way_as_haystacks() -> None:
 )
 def test_polarity_extraction(text: str, expected: Polarity) -> None:
     assert extract_polarity(text).polarity is expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Use Jira for all tickets, no exceptions.",
+        "Deploy the release without delay.",
+        "Nothing beats a Friday release.",
+        "The API returns a no-cache header.",
+    ],
+)
+def test_determiner_negation_does_not_negate_the_claim(text: str) -> None:
+    """Deliberately out of scope for this contract version.
+
+    "no exceptions" and "without delay" negate a noun phrase, not the claim.
+    Deciding that needs clause scope, and a false `negated` would corrupt a
+    persisted claim, so these read as affirmed rather than guessed at.
+    """
+
+    assert extract_polarity(text).polarity is Polarity.AFFIRMED
+
+
+@pytest.mark.parametrize(
+    ("haystack", "phrase", "expected"),
+    [
+        # Sentence punctuation ends a phrase.
+        ("the product. Team leads must ship.", "product team", False),
+        ("call the api. Key rotation is monthly.", "api key", False),
+        ("product" + FENCE_GAP + "team", "product team", False),
+        # Whitespace and identifier connectors do not.
+        ("the product team ships", "product team", True),
+        ("the product  team ships", "product team", True),
+        ("the api_key expired", "api key", True),
+        ("the api-key expired", "api key", True),
+    ],
+)
+def test_phrase_requires_contiguity(haystack: str, phrase: str, expected: bool) -> None:
+    assert contains_phrase(haystack, phrase) is expected
 
 
 def test_polarity_does_not_fire_on_substrings() -> None:

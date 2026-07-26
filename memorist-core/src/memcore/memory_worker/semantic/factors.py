@@ -48,7 +48,10 @@ class ResolvedSemanticFactors:
 # These lexicons are matched on token boundaries, never as substrings, so
 # "تیم" no longer fires inside "گرفتیم" and "token" no longer fires inside
 # "tokenizer". Inflected forms the previous substring patterns happened to
-# catch are listed explicitly rather than recovered by stemming.
+# catch are listed explicitly rather than recovered by stemming -- in both
+# languages. Persian plurals that are written joined ("اسکوادها",
+# "برنامه‌نویسان") are separate tokens and need their own entries; the ones
+# written with a ZWNJ ("تیم‌ها") already tokenize back to the singular.
 AI_RECEIVER = Lexicon(
     name="ai_receiver",
     phrases=(
@@ -75,9 +78,13 @@ TEAM_RECEIVER = Lexicon(
         "squad",
         "squads",
         "تیم",
+        "تیم‌ها",
         "توسعه‌دهنده",
+        "توسعه‌دهندگان",
         "برنامه‌نویس",
+        "برنامه‌نویسان",
         "اسکواد",
+        "اسکوادها",
     ),
 )
 HIGH_PRIORITY_INSTRUCTION = Lexicon(

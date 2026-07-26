@@ -155,6 +155,19 @@ def test_full_pipeline_stores_the_same_polarity_lite_would(tmp_path: Path) -> No
                 (message_uuid,),
             ).fetchall()
         ]
+        version_polarities = [
+            str(dict(row)["polarity"])
+            for row in connection.execute(
+                """
+                SELECT mv.polarity
+                FROM memory_versions mv
+                JOIN memory_candidates mc ON mc.candidate_uuid = mv.source_candidate_uuid
+                JOIN text_units tu ON tu.text_unit_uuid = mc.text_unit_uuid
+                WHERE tu.message_uuid = %s
+                """,
+                (message_uuid,),
+            ).fetchall()
+        ]
 
     assert modality is not None
     assert json.loads(str(dict(modality)["m"]))["polarity"] == expected.value, (
@@ -163,6 +176,12 @@ def test_full_pipeline_stores_the_same_polarity_lite_would(tmp_path: Path) -> No
     assert polarities, "the fixture must produce at least one candidate"
     assert set(polarities) == {expected.value}, (
         f"Full stored {polarities}, but Lite would store {expected.value!r}"
+    )
+    # memory_versions is the durable record. Lite sets it in the consolidator;
+    # Full omitted it from its INSERT, so the column default silently won.
+    assert version_polarities, "the fixture must produce at least one memory version"
+    assert set(version_polarities) == {expected.value}, (
+        f"Full memory_versions stored {version_polarities}, expected {expected.value!r}"
     )
 
 

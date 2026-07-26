@@ -205,3 +205,64 @@ def test_secrets_inside_fenced_code_are_still_detected() -> None:
 def test_sensitivity_ignores_case_and_persian_digits_in_code() -> None:
     raw = "```\nPassword = '۱۲۳۴'\n```"
     assert classify_sensitivity(raw) is SensitivityClass.SECRET
+
+
+# --------------------------------------------------------------------------
+# Regressions caught by the independent review pass
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Modern multi-segment key formats. The first segment after "sk-" is
+        # short, so a rule requiring one long following token missed them all.
+        "sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz1234567890",
+        "sk-ant-api03-AbCdEfGhIjKlMnOp",
+        "sk-svcacct-abcdefghijklmnop",
+        # Legacy single-segment format.
+        "sk-1234567890abcdef",
+    ],
+)
+def test_api_key_formats_are_secret(text: str) -> None:
+    assert classify_sensitivity(text) is SensitivityClass.SECRET
+
+
+def test_api_key_inside_fenced_code_is_secret() -> None:
+    fence = chr(10).join(("```", "sk-proj-AbCdEfGhIjKlMnOpQrStUv", "```"))
+    assert classify_sensitivity(fence) is SensitivityClass.SECRET
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Please rotate the tokens weekly.",
+        "Do not commit secrets to git.",
+        "Store passwords in the vault.",
+        "The api_keys are in .env",
+        "refresh_tokens expire in 30 days",
+    ],
+)
+def test_plural_secret_terms_are_still_secret(text: str) -> None:
+    """Substring matching caught plurals for free; token matching must list them."""
+
+    assert classify_sensitivity(text) is SensitivityClass.SECRET
+
+
+def test_plural_sensitive_terms_are_still_sensitive() -> None:
+    assert classify_sensitivity("religions of the world") is SensitivityClass.SENSITIVE
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "برنامه‌نویسان باید تست بنویسند.",
+        "اسکوادها باید تست بنویسند.",
+        "تیم‌ها باید تست بنویسند.",
+        "توسعه‌دهندگان باید تست بنویسند.",
+    ],
+)
+def test_persian_plural_team_references_still_resolve(text: str) -> None:
+    """Persian plurals need explicit entries when written joined."""
+
+    assert resolve_receiver(text).kind == ReceiverKind.TEAM.value

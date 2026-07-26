@@ -26,17 +26,18 @@ class Polarity(StrEnum):
     UNKNOWN = "unknown"
 
 
+# Deliberately high precision rather than high recall. Polarity is persisted on
+# every candidate and drives consolidation, so a false "negated" corrupts a
+# stored claim, while a missed negation only leaves it "affirmed" as before.
+#
+# Determiner and quantifier negation ("no exceptions", "without delay",
+# "nothing beats X", "no-cache") is therefore NOT matched: deciding whether it
+# negates the main claim needs clause scope, which this contract version does
+# not model. Verbal negation, which does negate the claim, is matched.
 NEGATION_PHRASES: tuple[str, ...] = (
     # English
     "not",
-    "no",
     "never",
-    "none",
-    "nothing",
-    "nobody",
-    "neither",
-    "nor",
-    "without",
     "cannot",
     "do not",
     "does not",
@@ -80,8 +81,6 @@ NEGATION_PHRASES: tuple[str, ...] = (
     "ندارم",
     "نداریم",
     "ندارید",
-    "بدون",
-    "خیر",
     "نخواهم",
     "نخواهد",
     "نکرده",

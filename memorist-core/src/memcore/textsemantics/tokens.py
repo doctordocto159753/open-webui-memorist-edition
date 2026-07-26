@@ -22,6 +22,12 @@ from memcore.textsemantics.normalize import (
     normalize_with_mapping,
 )
 
+# Connectors that hold a word or identifier together rather than ending a
+# phrase: "api_key" and "api-key" read as the phrase "api key", and "don't"
+# stays the two-token phrase "don t". Sentence punctuation is absent on
+# purpose -- a full stop ends a phrase.
+PHRASE_SEPARATORS = frozenset("_-'’")
+
 
 @dataclass(frozen=True)
 class Token:
@@ -210,7 +216,7 @@ def _match_tokens(
         window = tokens[offset : offset + width]
         if tuple(token.key for token in window) != needle:
             continue
-        if not _adjacent(window):
+        if not _adjacent(resolved, window):
             continue
         first, last = window[0], window[-1]
         return LexicalMatch(
@@ -224,17 +230,24 @@ def _match_tokens(
     return None
 
 
-def _adjacent(window: tuple[Token, ...]) -> bool:
-    """Reject a phrase window split by a filtered-out fenced code block.
+def _adjacent(resolved: NormalizedText, window: tuple[Token, ...]) -> bool:
+    """Whether the window is one contiguous phrase in the source.
 
-    The tokens are neighbours in the filtered list but not in the source, so
-    treating them as a phrase would match across a code fence.
+    Consecutive tokens must be separated only by whitespace or an identifier
+    connector, so "api key", "api_key", and "api-key" are all the same phrase.
+    Comparing token indices alone is not enough: it treats "the product. Team
+    leads" as containing "product team" and lets a phrase span an empty code
+    fence. Sentence punctuation ends a phrase.
     """
 
-    return all(
-        window[position + 1].index == window[position].index + 1
-        for position in range(len(window) - 1)
-    )
+    for position in range(len(window) - 1):
+        current, following = window[position], window[position + 1]
+        if following.index != current.index + 1:
+            return False
+        gap = resolved.text[current.end : following.start]
+        if any(char not in PHRASE_SEPARATORS and not char.isspace() for char in gap):
+            return False
+    return True
 
 
 def _resolve(value: NormalizedText | str) -> NormalizedText:

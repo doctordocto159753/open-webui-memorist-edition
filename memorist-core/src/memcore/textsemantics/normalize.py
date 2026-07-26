@@ -206,19 +206,35 @@ def _clusters(
     index = start
     while index < end:
         stop = index + 1
-        while stop < end and unicodedata.combining(raw[stop]) != 0:
+        # ASCII can neither carry nor be a combining mark, so the common case
+        # skips the per-character Unicode lookups entirely.
+        while stop < end and not _is_ascii(raw[stop]) and unicodedata.combining(raw[stop]) != 0:
             stop += 1
         cluster = raw[index:stop]
-        if contract.unicode_form == "NFC":
+        # A lone ASCII character is already NFC; nothing can compose with it.
+        if contract.unicode_form == "NFC" and not (stop == index + 1 and _is_ascii(cluster)):
             cluster = unicodedata.normalize("NFC", cluster)
         clusters.append((cluster, index, stop))
         index = stop
     return clusters
 
 
+def _is_ascii(value: str) -> bool:
+    return value.isascii()
+
+
 def _replace(char: str, contract: NormalizationContract) -> str:
     """Normalized replacement for one raw character; ``""`` deletes it."""
 
+    if _is_ascii(char):
+        # Fast path for the bulk of technical text: no Arabic mark, no ZWNJ, no
+        # digit or letter remapping can apply, so only whitespace, control
+        # characters, and case matter.
+        if char.isspace():
+            return " "
+        if char < " " or char == "\x7f":
+            return ""
+        return char.lower() if contract.lowercase_letters else char
     if contract.remove_arabic_diacritics and char in ARABIC_DIACRITICS:
         return ""
     if char == TATWEEL:
