@@ -1,8 +1,8 @@
 from typing import Any, Protocol
 
+from memcore.memory_worker.analysis.modality import modality_payload
 from memcore.memory_worker.analysis.schemas import AnalysisRequest, AnalysisResponse
 from memcore.memory_worker.analysis.temporal import resolve_temporal_expressions
-from memcore.textsemantics import extract_polarity, is_hypothetical, normalize_with_mapping
 
 JAKOBSON_KEYS = (
     "referential",
@@ -29,10 +29,8 @@ class DeterministicStructuredAnalysisProvider:
         response_schema: dict[str, Any],
     ) -> AnalysisResponse:
         text = request.text.strip()
-        normalized = normalize_with_mapping(text)
         lowered = text.lower()
         speech_acts = _speech_acts(lowered)
-        polarity = extract_polarity(normalized)
         source_span = {
             "start": request.text.find(text),
             "end": request.text.find(text) + len(text),
@@ -56,12 +54,7 @@ class DeterministicStructuredAnalysisProvider:
             else [],
             entity_mentions=[],
             temporal_expressions=resolve_temporal_expressions(text, request.source_timestamp),
-            modality={
-                "polarity": polarity.polarity.value,
-                "negated": polarity.negated,
-                "polarity_evidence": polarity.evidence,
-                "hypothetical": is_hypothetical(normalized),
-            },
+            modality=modality_payload(text),
             memory_signals=_memory_signals(lowered),
             abstention={"abstained": False, "reason": None},
         )

@@ -228,7 +228,7 @@ def test_lite_and_full_persist_the_same_polarity(text: str, expected: Polarity) 
             {
                 "analysis_uuid": ANALYSIS_UUID,
                 "text_unit_uuid": UNIT_UUID,
-                "modality_jsonb": json.dumps(analysis_payload),
+                "modality_ijson": json.dumps(analysis_payload),
             }
         ],
     )
@@ -291,7 +291,7 @@ def test_negated_and_affirmed_candidates_share_confidence_in_both_runtimes() -> 
                 {
                     "analysis_uuid": ANALYSIS_UUID,
                     "text_unit_uuid": UNIT_UUID,
-                    "modality_jsonb": json.dumps(payload),
+                    "modality_ijson": json.dumps(payload),
                 }
             ],
         )

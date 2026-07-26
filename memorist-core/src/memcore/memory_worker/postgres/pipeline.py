@@ -11,6 +11,7 @@ from typing import Any, cast
 from fastapi import HTTPException
 
 from memcore.config import Settings
+from memcore.memory_worker.analysis.modality import modality_payload
 from memcore.memory_worker.attempt_audit import (
     FrozenProviderExecution,
     ProviderAttemptAuditRepository,
@@ -1153,7 +1154,10 @@ class PostgresMemoryWorkerPipeline:
                     ),
                     json.dumps([]),
                     json.dumps([]),
-                    json.dumps({}),
+                    # Full previously stored an empty modality, so it could never
+                    # agree with Lite on polarity. Both runtimes now derive it
+                    # from the same shared extractor.
+                    json.dumps(modality_payload(str(unit.get("text") or ""))),
                     json.dumps({"memory_signal": "medium"}),
                     json.dumps({"abstained": False}),
                     raw,

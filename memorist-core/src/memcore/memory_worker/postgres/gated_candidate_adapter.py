@@ -288,7 +288,15 @@ def _linguistic_complements(
 ) -> LinguisticCandidateComplements:
     if analysis is None:
         return LinguisticCandidateComplements(abstained=True)
-    modality = _mapping(_json_value(analysis.get("modality_jsonb")))
+    # The linguistic_analyses columns are named *_ijson in both stores. Reading
+    # "modality_jsonb" always returned None, so Full silently saw an empty
+    # modality and could never agree with Lite on polarity.
+    #
+    # The temporal and abstention reads below have the same defect. They are
+    # deliberately left alone: fixing them would start populating Full's
+    # valid_from, temporal_precision, and abstained for the first time, which is
+    # a data change outside this package's scope. Reported separately.
+    modality = _mapping(_json_value(analysis.get("modality_ijson")))
     temporal = _json_value(analysis.get("temporal_expressions_jsonb"))
     first_temporal = temporal[0] if isinstance(temporal, list) and temporal else {}
     abstention = _mapping(_json_value(analysis.get("abstention_jsonb")))
