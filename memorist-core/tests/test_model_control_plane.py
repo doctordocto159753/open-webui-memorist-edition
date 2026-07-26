@@ -25,6 +25,8 @@ from memcore.model_control.providers.openai_compatible import (
 )
 from memcore.model_control.repository import ModelControlRepository
 from memcore.model_control.role_contracts import role_contract_manifest
+from memcore.model_control.runtime_contracts import runtime_contract_for_role
+from memcore.models import ModelRole
 from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
 from memcore.validators.ijson import load_ijson
@@ -1719,7 +1721,56 @@ def _assert_no_auth_failure_secret_material(text: str) -> None:
         assert secret not in text
 
 
+_RUNTIME_ROLE_OUTPUTS: dict[ModelRole, dict[str, Any]] = {
+    ModelRole.HIGH_CONFIDENCE_EXTRACTION: {
+        "decision": "approved",
+        "confidence": 0.9,
+        "reason_codes": ["evidence_alignment"],
+        "evidence_spans": [{"start": 0, "end": 21, "text": "Backups stay enabled."}],
+    },
+    ModelRole.PRIVACY_SENSITIVITY: {
+        "classification": "normal",
+        "reason_codes": ["no_sensitive_indicator"],
+        "evidence_spans": [],
+    },
+    ModelRole.BLOCK_COMPACTION: {
+        "summary": None,
+        "items": [
+            {
+                "text": "Backups stay enabled.",
+                "source_memory_uuids": ["certification-memory"],
+                "source_memory_version_uuids": ["certification-memory-version"],
+            }
+        ],
+        "excluded_memory_version_uuids": [],
+        "conflicts": [],
+        "status": "ok",
+    },
+}
+
+
+def _runtime_role_probe_output(prompt_text: str) -> dict[str, Any] | None:
+    """Return a valid runtime-contract output when the probe carries a role marker.
+
+    The three direct StageInvoker roles are certified with the exact runtime
+    stage prompt (``ROLE=<role>`` framing), not a prompt-registry id. The output
+    is validated against the authoritative runtime contract here so the mock
+    provably satisfies the same strict schema and semantic validator runtime uses.
+    """
+
+    for role, output in _RUNTIME_ROLE_OUTPUTS.items():
+        if f"ROLE={role.value}" in prompt_text:
+            contract = runtime_contract_for_role(role)
+            assert contract is not None
+            contract.validate(output)
+            return output
+    return None
+
+
 def _role_contract_probe_output(prompt_text: str) -> dict[str, Any] | None:
+    runtime_output = _runtime_role_probe_output(prompt_text)
+    if runtime_output is not None:
+        return runtime_output
     base: dict[str, Any] = {
         "schema_version": "1.0",
         "prompt_version": "2.0",

@@ -11,6 +11,7 @@ from typing import Any
 
 from memcore.config import Settings
 from memcore.imports.runtime import import_connection
+from memcore.memory_worker.execution import DeterministicContractError
 from memcore.memory_worker.fencing import LeaseFenceRejected
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
 from memcore.memory_worker.postgres.pipeline import PostgresMemoryWorkerPipeline
@@ -435,7 +436,9 @@ def _record_failure(
 ) -> None:
     finished = utc_now()
     sanitized = sanitize_error_message(f"{type(error).__name__}: {error}") or type(error).__name__
-    terminal = int(job.get("attempts") or 0) >= int(job.get("max_attempts") or 1)
+    terminal = _is_terminal_memory_job_error(error) or int(job.get("attempts") or 0) >= int(
+        job.get("max_attempts") or 1
+    )
     updated = connection.execute(
         """
         UPDATE jobs
@@ -585,7 +588,7 @@ def _record_failure_sqlite(
     finished = utc_now()
     sanitized = sanitize_error_message(f"{type(error).__name__}: {error}") or type(error).__name__
     attempts = int(job.get("attempts") or 0)
-    terminal = attempts >= int(job.get("max_attempts") or 3)
+    terminal = _is_terminal_memory_job_error(error) or attempts >= int(job.get("max_attempts") or 3)
     updated = connection.execute(
         """
         UPDATE jobs
@@ -611,6 +614,17 @@ def _record_failure_sqlite(
         connection.rollback()
         return
     connection.commit()
+
+
+def _is_terminal_memory_job_error(error: Exception) -> bool:
+    # Only a trusted-fallback contract violation is a genuine internal defect that
+    # retrying cannot repair, so it alone bypasses the normal retry budget. A
+    # NoDeterministicFallbackError is raised for whatever ended a fail-closed
+    # attempt, including transient provider failures (timeout, HTTP 5xx, quota,
+    # transport) and ambiguous crash-window reservations; those must stay
+    # retryable and be bounded by max_attempts rather than killed on first
+    # occurrence.
+    return isinstance(error, DeterministicContractError)
 
 
 def _add_seconds(value: str, seconds: int) -> str:

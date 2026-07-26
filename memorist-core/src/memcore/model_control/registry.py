@@ -9,9 +9,11 @@ from memcore.model_control.providers import (
     OllamaEmbeddingProvider,
     OllamaLLMProvider,
     OpenAICompatibleEmbeddingProvider,
-    OpenAICompatibleLLMProvider,
     ProviderHealth,
     UnavailableProvider,
+)
+from memcore.model_control.providers.runtime_openai import (
+    RuntimeContractOpenAICompatibleLLMProvider,
 )
 from memcore.models import ModelProfile, ModelRole
 
@@ -45,7 +47,7 @@ def provider_for_profile(profile: ModelProfile | dict[str, object] | None) -> Mo
             )
         if not endpoint_url:
             return DisabledProvider(model_name)
-        return OpenAICompatibleLLMProvider(
+        return RuntimeContractOpenAICompatibleLLMProvider(
             str(endpoint_url),
             model_name,
             str(secret_env_var_name) if secret_env_var_name else None,
@@ -85,12 +87,8 @@ def test_profile_health(
     profile: ModelProfile | dict[str, object] | None,
     timeout_seconds: float = 1.0,
 ) -> ProviderHealth:
-    """Run the profile-appropriate health test.
+    """Run connectivity plus the actual role contract required by runtime."""
 
-    LLM-oriented roles use chat completions, embedding roles and explicit embedding
-    providers use embeddings, deterministic profiles return local success, disabled
-    profiles return disabled, and unknown provider types return an error.
-    """
     provider = provider_for_profile(profile)
     health = provider.health_check(timeout_seconds=timeout_seconds)
     if profile is None:
@@ -218,6 +216,31 @@ def _run_structured_role_probe(
         validate_prompt_execution,
     )
     from memcore.model_control.role_contracts import role_contract_manifest
+    from memcore.model_control.runtime_contracts import runtime_contract_for_role
+
+    provider = provider_for_profile(profile)
+    runtime_contract = runtime_contract_for_role(role)
+    if runtime_contract is not None:
+        try:
+            response = provider.complete_structured(
+                runtime_contract.render_probe_prompt(),
+                timeout_seconds=timeout_seconds,
+            )
+            runtime_contract.validate(response.output_ijson)
+        except Exception:
+            return _failed_role_probe(
+                health,
+                manifest_hash,
+                runtime_contract.contract_hash,
+                "Provider passed connectivity but failed the exact runtime stage contract.",
+            )
+        return health.model_copy(
+            update={
+                "role_manifest_hash": manifest_hash,
+                "role_probe_status": "compatible",
+                "role_probe_contract_hash": runtime_contract.contract_hash,
+            }
+        )
 
     manifest = role_contract_manifest(role)
     prompt = manifest.get("prompt")
@@ -231,7 +254,6 @@ def _run_structured_role_probe(
     prompt_id = str(prompt["metadata"]["prompt_id"])
     prompt_version = str(prompt["metadata"]["prompt_version"])
     payload = _role_probe_input(role)
-    provider = provider_for_profile(profile)
     try:
         response = provider.complete_structured(
             render_prompt(prompt_id, prompt_version, payload),
@@ -241,29 +263,41 @@ def _run_structured_role_probe(
         if response.output_ijson.get("status") != "ok" or not response.output_ijson.get("items"):
             raise ValueError("role probe must return a non-empty ok result")
     except Exception:
-        return health.model_copy(
-            update={
-                "status": "error",
-                "overall_status": "incompatible",
-                "role_compatibility_status": "incompatible",
-                "structured_output_status": "role_contract_invalid",
-                "failure_stage": "role_contract_probe",
-                "detail_sanitized": (
-                    "Provider passed connectivity but failed the active role contract."
-                ),
-                "recommended_action": (
-                    "Use a model that satisfies the active role contract, then retest."
-                ),
-                "role_manifest_hash": manifest_hash,
-                "role_probe_status": "incompatible",
-                "role_probe_contract_hash": manifest.get("contract_hash"),
-            }
+        return _failed_role_probe(
+            health,
+            manifest_hash,
+            cast(str | None, manifest.get("contract_hash")),
+            "Provider passed connectivity but failed the active role contract.",
         )
     return health.model_copy(
         update={
             "role_manifest_hash": manifest_hash,
             "role_probe_status": "compatible",
             "role_probe_contract_hash": manifest.get("contract_hash"),
+        }
+    )
+
+
+def _failed_role_probe(
+    health: ProviderHealth,
+    manifest_hash: str,
+    contract_hash: str | None,
+    detail: str,
+) -> ProviderHealth:
+    return health.model_copy(
+        update={
+            "status": "error",
+            "overall_status": "incompatible",
+            "role_compatibility_status": "incompatible",
+            "structured_output_status": "role_contract_invalid",
+            "failure_stage": "role_contract_probe",
+            "detail_sanitized": detail,
+            "recommended_action": (
+                "Use a model that satisfies the active role contract, then retest."
+            ),
+            "role_manifest_hash": manifest_hash,
+            "role_probe_status": "incompatible",
+            "role_probe_contract_hash": contract_hash,
         }
     )
 
@@ -286,23 +320,6 @@ def _role_probe_input(role: ModelRole) -> dict[str, Any]:
             "messages": [],
             "known_schema_fields": [],
             "unknown_fields": [],
-        },
-        ModelRole.HIGH_CONFIDENCE_EXTRACTION: {
-            "unit_uuid": "certification-unit",
-            "text": "Backups stay enabled.",
-        },
-        ModelRole.BLOCK_COMPACTION: {
-            "block_type": "ProjectContextBlock",
-            "source_memories": [
-                {"memory_uuid": "certification-memory", "text": "Backups stay enabled."}
-            ],
-            "token_budget": 64,
-            "previous_block": None,
-        },
-        ModelRole.PRIVACY_SENSITIVITY: {
-            "candidate": {"candidate_uuid": "certification-candidate"},
-            "evidence": [{"quote": "Backups stay enabled."}],
-            "storage_context": {"scope": "project"},
         },
     }
     return fixtures[role]

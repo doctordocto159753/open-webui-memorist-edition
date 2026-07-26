@@ -133,24 +133,30 @@ def run_contract_execution(
     # ---- Attempt 1 -------------------------------------------------------
     if revalidate is not None:
         revalidate()
-    if attempt_audit is not None and not attempt_audit.reserve(1, "initial"):
+    reservation = attempt_audit.reserve(1, "initial") if attempt_audit is not None else "reserved"
+    if reservation != "reserved":
         if revalidate is not None:
             revalidate()
+        reason = (
+            "provider_attempt_unknown_completion"
+            if reservation == "unknown_completion"
+            else "provider_attempt_already_completed"
+        )
         return _fallback(
             deterministic_output,
             validate=validate,
             allow_fallback=allow_fallback,
-            reason="provider_attempt_unknown_completion",
+            reason=reason,
             called_provider=True,
             capability_mode=capability_mode,
             repair_attempted=False,
             repair_succeeded=False,
-            parse_status="unknown_completion",
+            parse_status=reservation,
             provider_response_id=None,
             input_tokens=0,
             output_tokens=0,
             latency_ms=0,
-            attempt_count=attempt_audit.count(),
+            attempt_count=attempt_audit.count() if attempt_audit is not None else 0,
             validation_error_paths=[],
         )
     try:
@@ -259,24 +265,32 @@ def run_contract_execution(
     }
     if revalidate is not None:
         revalidate()
-    if attempt_audit is not None and not attempt_audit.reserve(2, "repair"):
+    repair_reservation = (
+        attempt_audit.reserve(2, "repair") if attempt_audit is not None else "reserved"
+    )
+    if repair_reservation != "reserved":
         if revalidate is not None:
             revalidate()
+        reason = (
+            "provider_attempt_unknown_completion"
+            if repair_reservation == "unknown_completion"
+            else "provider_attempt_already_completed"
+        )
         return _fallback(
             deterministic_output,
             validate=validate,
             allow_fallback=allow_fallback,
-            reason="provider_attempt_unknown_completion",
+            reason=reason,
             called_provider=True,
             capability_mode=capability_mode,
             repair_attempted=True,
             repair_succeeded=False,
-            parse_status=parse_status,
+            parse_status=repair_reservation,
             provider_response_id=provider_response_id,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             latency_ms=latency_ms,
-            attempt_count=attempt_audit.count(),
+            attempt_count=attempt_audit.count() if attempt_audit is not None else 0,
             validation_error_paths=_paths(last_issues),
         )
     try:
