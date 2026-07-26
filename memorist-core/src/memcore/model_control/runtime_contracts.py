@@ -134,6 +134,7 @@ class RuntimeStructuredContract:
     role: ModelRole
     contract_id: str
     contract_version: str
+    runtime_prompt_version: str
     stage: str
     schema_name: str
     json_schema: dict[str, Any]
@@ -146,6 +147,7 @@ class RuntimeStructuredContract:
             "role": self.role.value,
             "contract_id": self.contract_id,
             "contract_version": self.contract_version,
+            "runtime_prompt_version": self.runtime_prompt_version,
             "stage": self.stage,
             "schema_name": self.schema_name,
             "json_schema": self.json_schema,
@@ -168,6 +170,7 @@ class RuntimeStructuredContract:
             "role": self.role.value,
             "contract_id": self.contract_id,
             "contract_version": self.contract_version,
+            "runtime_prompt_version": self.runtime_prompt_version,
             "stage": self.stage,
             "schema_name": self.schema_name,
             "contract_hash": self.contract_hash,
@@ -178,7 +181,7 @@ class RuntimeStructuredContract:
         return render_runtime_stage_prompt(
             role=self.role,
             stage=self.stage,
-            prompt_version=self.contract_version,
+            prompt_version=self.runtime_prompt_version,
             input_payload=self.certification_input,
         )
 
@@ -188,6 +191,7 @@ _RUNTIME_CONTRACTS: dict[ModelRole, RuntimeStructuredContract] = {
         role=ModelRole.HIGH_CONFIDENCE_EXTRACTION,
         contract_id="memorist.runtime.high_confidence_extraction",
         contract_version="1.0",
+        runtime_prompt_version="1.0",
         stage="high_confidence_extraction",
         schema_name="memorist_high_confidence_extraction_v1",
         json_schema=HIGH_CONFIDENCE_SCHEMA,
@@ -203,6 +207,7 @@ _RUNTIME_CONTRACTS: dict[ModelRole, RuntimeStructuredContract] = {
         role=ModelRole.PRIVACY_SENSITIVITY,
         contract_id="memorist.runtime.privacy_sensitivity",
         contract_version="1.0",
+        runtime_prompt_version="2.0",
         stage="privacy_sensitivity",
         schema_name="memorist_privacy_sensitivity_v1",
         json_schema=PRIVACY_SCHEMA,
@@ -217,6 +222,7 @@ _RUNTIME_CONTRACTS: dict[ModelRole, RuntimeStructuredContract] = {
         role=ModelRole.BLOCK_COMPACTION,
         contract_id="memorist.runtime.block_compaction",
         contract_version="1.0",
+        runtime_prompt_version="2.0",
         stage="block_compaction",
         schema_name="memorist_block_compaction_v1",
         json_schema=COMPACTION_SCHEMA,
@@ -249,10 +255,19 @@ def runtime_contract_for_role(role: ModelRole | str) -> RuntimeStructuredContrac
 
 
 def runtime_contract_from_prompt(prompt: str) -> RuntimeStructuredContract | None:
+    metadata: dict[str, str] = {}
     for line in prompt.splitlines():
-        if line.startswith("ROLE="):
-            return runtime_contract_for_role(line.partition("=")[2].strip())
-    return None
+        key, separator, value = line.partition("=")
+        if separator and key in {"ROLE", "STAGE", "PROMPT_VERSION"}:
+            metadata[key] = value.strip()
+    contract = runtime_contract_for_role(metadata.get("ROLE", ""))
+    if contract is None:
+        return None
+    if metadata.get("STAGE") != contract.stage:
+        return None
+    if metadata.get("PROMPT_VERSION") != contract.runtime_prompt_version:
+        return None
+    return contract
 
 
 def render_runtime_stage_prompt(
