@@ -19,12 +19,12 @@ from memcore.memory_worker.execution import (
 )
 from memcore.memory_worker.providers.openai_compatible import ProviderAttempt
 from memcore.memory_worker.service import _is_terminal_memory_job_error
-from memcore.model_control.registry import test_profile_health
-from memcore.model_control.role_contracts import role_contract_manifest
-from memcore.model_control.runtime_contracts import runtime_contract_for_role
 from memcore.model_control.providers.runtime_openai import (
     RuntimeContractOpenAICompatibleLLMProvider,
 )
+from memcore.model_control.registry import test_profile_health as run_profile_health
+from memcore.model_control.role_contracts import role_contract_manifest
+from memcore.model_control.runtime_contracts import runtime_contract_for_role
 from memcore.models import ModelRole
 
 
@@ -180,7 +180,10 @@ def test_certification_executes_the_same_runtime_contract(
     contract = runtime_contract_for_role(ModelRole.HIGH_CONFIDENCE_EXTRACTION)
     assert contract is not None
     role_contract_server.role_output = _high_confidence_output()
-    health = test_profile_health(_profile(role_contract_server, structured=True), timeout_seconds=5)
+    health = run_profile_health(
+        _profile(role_contract_server, structured=True),
+        timeout_seconds=5,
+    )
     assert len(role_contract_server.requests) == 2
     assert health.overall_status == "ok"
     assert health.role_probe_status == "compatible"
@@ -194,7 +197,10 @@ def test_certification_rejects_connectivity_only_success(
     role_contract_server: type[_RoleContractHandler],
 ) -> None:
     role_contract_server.role_output = {"status": "ok"}
-    health = test_profile_health(_profile(role_contract_server, structured=True), timeout_seconds=5)
+    health = run_profile_health(
+        _profile(role_contract_server, structured=True),
+        timeout_seconds=5,
+    )
     assert len(role_contract_server.requests) == 2
     assert health.overall_status == "incompatible"
     assert health.role_probe_status == "incompatible"
