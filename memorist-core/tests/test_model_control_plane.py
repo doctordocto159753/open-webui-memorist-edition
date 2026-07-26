@@ -18,12 +18,13 @@ from memcore.main import create_app
 from memcore.memory_control.policy import normalize_turn_policy
 from memcore.memory_control.repository import MemoryControlRepository, ResolvedTurnPolicy
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
-from memcore.memory_worker.prompts.schemas import valid_jakobson_output
+from memcore.memory_worker.prompts.contracts import canonical_jakobson_v3_example
 from memcore.model_control.providers.openai_compatible import (
     OpenAICompatibleEmbeddingProvider,
     OpenAICompatibleLLMProvider,
 )
 from memcore.model_control.repository import ModelControlRepository
+from memcore.model_control.role_contracts import role_contract_manifest
 from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
 from memcore.validators.ijson import load_ijson
@@ -55,6 +56,17 @@ def test_model_control_roles(client_and_db: tuple[TestClient, Path]) -> None:
     assert roles["preflight"]["fail_open"] is True
     assert roles["memory_extraction"]["blocks_main_request"] is False
     assert roles["embedding"]["lifecycle"].startswith("asynchronous")
+
+
+def test_role_contract_manifest_uses_each_roles_actual_contract() -> None:
+    extraction = role_contract_manifest("memory_extraction")
+    reconstruction = role_contract_manifest("import_reconstruction")
+    assert extraction["prompt"]["metadata"]["prompt_id"] == "memorist.jakobson_sentence_analysis"
+    assert extraction["prompt"]["metadata"]["prompt_version"] == "3.0"
+    assert reconstruction["prompt"]["metadata"]["prompt_id"] == "memorist.import_reconstruction"
+    assert reconstruction["prompt"]["metadata"]["prompt_version"] == "2.0"
+    assert extraction != reconstruction
+    assert role_contract_manifest("main_chat_observed")["certifiable"] is False
 
 
 def test_processing_nodes_selectable_roles_exclude_openwebui_main_chat() -> None:
@@ -448,6 +460,72 @@ def test_certification_is_server_authoritative_stale_and_removable(
     assert _assert_ok(client.get("/memcore/model-control/defaults"))["items"] == []
 
 
+def test_generic_health_marker_cannot_certify_memory_extraction_contract(
+    client_and_db: tuple[TestClient, Path],
+) -> None:
+    client, _db_path = client_and_db
+    with _served(_HealthCheckHandler) as endpoint_url:
+        created = _assert_ok(
+            client.post(
+                "/memcore/model-control/profiles",
+                json={
+                    "provider_type": "openai_compatible_llm",
+                    "model_name": "mock-chat",
+                    "role": "memory_extraction",
+                    "endpoint_url": endpoint_url,
+                    "endpoint_is_local": True,
+                    "supports_json_mode": True,
+                },
+            )
+        )
+        result = _assert_ok(
+            client.post(
+                f"/memcore/model-control/profiles/{created['model_profile_uuid']}/test",
+                json={},
+            )
+        )
+    assert result["health"]["overall_status"] == "incompatible"
+    assert result["health"]["failure_stage"] == "role_contract_probe"
+    assert result["health"]["role_probe_status"] == "incompatible"
+    assert result["certification"]["certification_status"] == "failed"
+    rejected = client.post(
+        "/memcore/model-control/defaults",
+        json={
+            "role": "memory_extraction",
+            "model_profile_uuid": created["model_profile_uuid"],
+        },
+    )
+    assert rejected.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        "preflight",
+        "import_reconstruction",
+        "high_confidence_extraction",
+        "block_compaction",
+        "privacy_sensitivity",
+    ],
+)
+def test_generic_health_marker_cannot_certify_other_structured_roles(role: str) -> None:
+    from memcore.model_control.registry import test_profile_health
+
+    with _served(_HealthCheckHandler) as endpoint_url:
+        health = test_profile_health(
+            {
+                "provider_type": "openai_compatible_llm",
+                "model_name": "mock-chat",
+                "role": role,
+                "endpoint_url": endpoint_url,
+                "supports_json_mode": True,
+            }
+        )
+    assert health.overall_status == "incompatible"
+    assert health.failure_stage == "role_contract_probe"
+    assert health.role_probe_status == "incompatible"
+
+
 def test_preflight_provider_fail_open(client_and_db: tuple[TestClient, Path]) -> None:
     client, db_path = client_and_db
     session = _assert_ok(client.post("/memcore/sessions", json={"title": "preflight"}))
@@ -719,10 +797,13 @@ def test_memory_worker_uses_tested_memory_extraction_profile(
     )
 
     assert health["health"]["status"] == "ok"
-    assert _OpenAICompatibleHandler.post_paths == ["/v1/chat/completions"]
+    assert _OpenAICompatibleHandler.post_paths == [
+        "/v1/chat/completions",
+        "/v1/chat/completions",
+    ]
     assert _OpenAICompatibleHandler.last_payload["model"] == "mock-chat"
-    provider_output = valid_jakobson_output()
-    provider_output["sentences"][0]["text"] = (
+    provider_output = canonical_jakobson_v3_example()
+    provider_output["items"][0]["text"] = (
         "The user prefers local OpenAI-compatible memory extraction tests."
     )
     _OpenAICompatibleHandler.response_content = json.dumps(provider_output)
@@ -1520,9 +1601,25 @@ class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            body = json.dumps(
-                {"choices": [{"message": {"content": self.__class__.response_content}}]}
-            ).encode("utf-8")
+            response_content = self.__class__.response_content
+            schema = payload.get("response_format", {}).get("json_schema", {})
+            messages = payload.get("messages", [])
+            prompt_text = json.dumps(messages, ensure_ascii=False)
+            role_output = _role_contract_probe_output(prompt_text)
+            if role_output is not None and response_content == json.dumps(
+                {"memorist_provider_test": "ok"}
+            ):
+                response_content = json.dumps(role_output)
+            elif (
+                schema.get("name") == "memorist_jakobson_sentence_analysis_v3"
+                or "memorist.jakobson_sentence_analysis" in prompt_text
+            ) and response_content == json.dumps({"memorist_provider_test": "ok"}):
+                output = canonical_jakobson_v3_example()
+                output["items"][0]["text"] = "Keep backups enabled."
+                response_content = json.dumps(output)
+            body = json.dumps({"choices": [{"message": {"content": response_content}}]}).encode(
+                "utf-8"
+            )
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -1620,6 +1717,68 @@ def _assert_no_auth_failure_secret_material(text: str) -> None:
         "query-token",
     ):
         assert secret not in text
+
+
+def _role_contract_probe_output(prompt_text: str) -> dict[str, Any] | None:
+    base: dict[str, Any] = {
+        "schema_version": "1.0",
+        "prompt_version": "2.0",
+        "status": "ok",
+        "warnings": [],
+        "items": [],
+    }
+    fixtures: list[tuple[str, dict[str, Any]]] = [
+        (
+            "memorist.preflight_planning",
+            {
+                "attachment_mode": "lite",
+                "compression_strategy": "none",
+                "estimated_tokens": 32,
+            },
+        ),
+        (
+            "memorist.import_reconstruction",
+            {
+                "trust_level": "historical_untrusted",
+                "candidate_processing_recommendation": "none",
+            },
+        ),
+        (
+            "memorist.unit_analysis",
+            {
+                "unit_uuid": "certification-unit",
+                "memory_signal": "none",
+                "evidence": {
+                    "quote": "Backups stay enabled.",
+                    "span_start": 0,
+                    "span_end": 21,
+                },
+            },
+        ),
+        (
+            "memorist.block_compaction",
+            {
+                "block_type": "ProjectContextBlock",
+                "block_text": "Backups stay enabled.",
+                "source_memory_uuids": ["certification-memory"],
+                "token_estimate": 8,
+                "coverage": {},
+            },
+        ),
+        (
+            "memorist.privacy_sensitivity",
+            {
+                "sensitivity_level": "none",
+                "allowed_storage": "allow",
+                "allowed_retrieval": "normal",
+                "requires_confirmation": False,
+            },
+        ),
+    ]
+    for prompt_id, item in fixtures:
+        if prompt_id in prompt_text:
+            return {**base, "prompt_id": prompt_id, "items": [item]}
+    return None
 
 
 class _HealthCheckHandler(_OpenAICompatibleHandler):
@@ -1739,9 +1898,10 @@ def test_profile_health_routes_roles_and_provider_types(openai_compatible_server
                 "supports_json_mode": True,
             }
         )
-        assert health.status == "ok"
+        assert health.status == "ok", (role, health.model_dump(mode="json"))
         assert health.provider_type == "openai_compatible_llm"
-        assert _OpenAICompatibleHandler.post_paths == ["/v1/chat/completions"]
+        expected_calls = 2
+        assert _OpenAICompatibleHandler.post_paths == ["/v1/chat/completions"] * expected_calls
         assert _OpenAICompatibleHandler.get_paths == []
 
     _OpenAICompatibleHandler.post_paths = []

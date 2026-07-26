@@ -131,7 +131,7 @@ class PromptContract:
         ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
-    def validate(self, output: Mapping[str, Any]) -> list[dict[str, str]]:
+    def validate(self, output: Any) -> list[dict[str, str]]:
         """Return a list of {path, code, message} issues (empty when valid).
 
         Never raises for schema problems; callers use the issues to drive
@@ -140,7 +140,7 @@ class PromptContract:
         """
 
         try:
-            self.model.model_validate(dict(output))
+            self.model.model_validate(output)
         except ValidationError as error:
             return _issues_from_validation_error(error)
         return []

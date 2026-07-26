@@ -7,8 +7,8 @@ from typing import Any
 
 from memcore.memory_worker.contracts import PIPELINE_VERSION, PROMPT_BUNDLE_VERSION
 from memcore.memory_worker.prompts.versions import (
+    JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
     JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-    PROMPT_PACK_VERSION,
 )
 from memcore.models import ModelRole
 from memcore.repositories.memory_worker import canonical_text_hash
@@ -42,7 +42,7 @@ def build_processing_identity(
     pipeline_version: str = PIPELINE_VERSION,
     prompt_bundle_version: str = PROMPT_BUNDLE_VERSION,
     prompt_id: str = JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-    prompt_version: str = PROMPT_PACK_VERSION,
+    prompt_version: str = JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
 ) -> ProcessingIdentity:
     target = model_target or {}
     provider_type = str(target.get("provider_type") or "deterministic")

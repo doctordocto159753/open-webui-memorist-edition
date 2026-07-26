@@ -22,6 +22,11 @@ class PreparedJakobsonInference:
     processing_identity_hash: str
     input_content_hash: str
     profile_fingerprint: str
+    requested_role: str
+    effective_role: str
+    scope_source: str
+    inheritance_source: str | None
+    contract_hash: str
     output: dict[str, Any]
     input_tokens: int
     output_tokens: int
@@ -38,3 +43,7 @@ class PreparedJakobsonInference:
     provider_response_id: str | None = None
     parse_status: str = "not_called"
     validation_error_paths: list[str] = field(default_factory=list)
+    processing_run_uuid: str | None = None
+    stage_execution_uuid: str | None = None
+    job_uuid: str | None = None
+    attempt_count: int = 0

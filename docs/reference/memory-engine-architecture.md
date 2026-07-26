@@ -1502,3 +1502,11 @@ The result is not a general claim that Memorist is “better” than these syste
 
 
 
+# Provider execution boundary
+
+Provider inference and canonical mutation are separate. The runtime freezes
+source, requested/effective role, scope, profile, prompt, and contract; reserves
+the run and provider attempt in a short fenced transaction; performs HTTP;
+revalidates authority; and publishes only contract-valid provider output or a
+validated deterministic fallback. This keeps paid-call evidence durable across
+crashes and prevents stale workers from publishing memory.

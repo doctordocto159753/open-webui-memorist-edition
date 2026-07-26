@@ -1,7 +1,7 @@
 # Memorist — Open WebUI Memorist Edition
 
 Package version: `0.2.0-beta.3`<br>
-Storage schema version: `22`
+Storage schema version: `24`
 
 **Memorist is an independent community project built on Open WebUI. It is not affiliated with or endorsed by the Open WebUI team.
 ******

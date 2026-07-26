@@ -72,3 +72,11 @@ sanitized validator paths — so an invalid provider output is auditable rather 
 lost. The certification fingerprint folds in the active role contract hash, so a
 contract/schema change invalidates existing certification and forces
 re-certification. See `docs/reference/full-mode-memory-extraction.md`.
+# Attempt-level audit
+
+For remote Jakobson execution, attempt 1 and the optional repair attempt 2 are
+separate append-only audit rows. Reservations precede HTTP and completion updates
+store hashes and sanitized error paths, never raw output. The final
+`processing_stage_runs` row records the frozen role/scope/profile/contract
+identity, attempt count, total provider latency, canonicalization, repair, and
+fallback outcome in both Lite/SQLite and Full/PostgreSQL modes.

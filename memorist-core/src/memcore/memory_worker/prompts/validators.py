@@ -129,6 +129,32 @@ def validate_prompt_output_against_input(
     input_payload: Mapping[str, Any],
     output: dict[str, Any],
 ) -> None:
+    if prompt_id == JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID:
+        sentences = input_payload.get("sentences")
+        items = output.get("items")
+        if not isinstance(sentences, list):
+            raise PromptValidationError("jakobson input sentences must be a list")
+        if not isinstance(items, list):
+            raise PromptValidationError("jakobson output items must be a list")
+        if output.get("status") != "ok":
+            if items:
+                raise PromptValidationError("non-ok jakobson output must not contain items")
+        else:
+            if len(items) != len(sentences):
+                raise PromptValidationError("jakobson items must match input sentence count")
+            for index, (sentence, item) in enumerate(zip(sentences, items, strict=True)):
+                if not isinstance(sentence, Mapping) or not isinstance(item, Mapping):
+                    raise PromptValidationError(
+                        f"jakobson sentence binding is invalid at index {index}"
+                    )
+                if item.get("id") != sentence.get("id"):
+                    raise PromptValidationError(
+                        f"jakobson item id does not match input at index {index}"
+                    )
+                if item.get("text") != sentence.get("text"):
+                    raise PromptValidationError(
+                        f"jakobson item text does not match input at index {index}"
+                    )
     if prompt_id == "memorist.preflight_planning":
         budget = input_payload.get("attachment_budget")
         max_tokens = budget.get("max_tokens") if isinstance(budget, Mapping) else None

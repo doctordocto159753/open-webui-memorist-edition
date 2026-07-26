@@ -13,26 +13,16 @@ _SELF_CERTIFYING_PROVIDERS = {"deterministic", "local_embedding"}
 
 
 def role_contract_hash(role_value: str) -> str | None:
-    """Return the active prompt-contract hash for a structured role, if any.
+    """Return the complete active role-manifest hash.
 
-    Roles that execute the Jakobson sentence-analysis contract must have their
-    certification invalidated whenever that contract (schema/version) changes, so
-    the contract hash is folded into the certification fingerprint below.
+    The compatibility name is retained for stored callers; the value now covers
+    the actual prompt/version/schema/capability/fallback probe manifest rather
+    than incorrectly aliasing import reconstruction to Jakobson.
     """
 
-    # Imported lazily to avoid a circular import with the prompt package.
-    from memcore.memory_worker.prompts.contracts import get_contract
-    from memcore.memory_worker.prompts.versions import (
-        JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
-        JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-    )
+    from memcore.model_control.role_contracts import role_contract_manifest_hash
 
-    if role_value in {"memory_extraction", "import_reconstruction"}:
-        contract = get_contract(
-            JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID, JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION
-        )
-        return contract.contract_hash if contract is not None else None
-    return None
+    return role_contract_manifest_hash(role_value)
 
 
 def profile_certification_fingerprint(profile: ModelProfile) -> str:
@@ -100,6 +90,8 @@ def certification_status(
         str(event.get("status") or "") == "ok"
         and result.get("overall_status") == "ok"
         and result.get("role_compatibility_status") == "compatible"
+        and result.get("role_probe_status") in {"compatible", "not_applicable"}
+        and result.get("role_manifest_hash") == role_contract_hash(profile.role.value)
     )
     if event_fingerprint != base["profile_fingerprint"]:
         state = "stale"

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -11,8 +14,10 @@ from memcore.api.routes_openwebui import _pg_enqueue_capture_jobs
 from memcore.config import Settings
 from memcore.imports.runtime import import_connection, initialize_runtime_storage
 from memcore.memory_worker.postgres.pipeline import PostgresMemoryWorkerPipeline
+from memcore.memory_worker.prompts.contracts import canonical_jakobson_v3_example
 from memcore.model_control.postgres_repository import PostgresModelControlRepository
 from memcore.model_control.providers.base import ProviderHealth
+from memcore.model_control.role_contracts import role_contract_manifest_hash
 from memcore.model_control.schemas import ModelProfileCreate, ProviderType
 from memcore.model_control.stage_contracts import (
     deterministic_privacy,
@@ -124,6 +129,36 @@ def _create_deterministic_profile(
     return profile.model_profile_uuid
 
 
+class _MemoryProviderHandler(BaseHTTPRequestHandler):
+    calls = 0
+
+    def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        type(self).calls += 1
+        output = canonical_jakobson_v3_example()
+        if type(self).calls == 1:
+            output["status"] = "done"
+        else:
+            input_payload = json.loads(payload["messages"][1]["content"])
+            output["items"][0]["text"] = input_payload["sentences"][0]["text"]
+        body = json.dumps(
+            {
+                "id": f"pg-attempt-{type(self).calls}",
+                "choices": [{"message": {"content": json.dumps(output)}}],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 5},
+            }
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+
 def test_full_postgres_capture_schedules_remote_jsonb_profile(
     tmp_path: Path,
 ) -> None:
@@ -170,6 +205,8 @@ def test_full_postgres_capture_schedules_remote_jsonb_profile(
                 role_compatibility_status="compatible",
                 overall_status="ok",
                 schema_mode="json_schema",
+                role_manifest_hash=role_contract_manifest_hash(profile.role),
+                role_probe_status="compatible",
             ),
         )
         repository.set_default(ModelRole.MEMORY_EXTRACTION, profile.model_profile_uuid)
@@ -432,6 +469,64 @@ def test_full_postgres_candidate_stage_replay_keeps_status_and_memory_stable(
     assert replay_candidates == first_candidates
     assert replay_memories == first_memories
     assert replay_stages == first_stages
+
+
+def test_full_postgres_remote_attempt_audit_and_final_stage_parity(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    initialize_runtime_storage(settings)
+    _MemoryProviderHandler.calls = 0
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _MemoryProviderHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    profile: dict[str, Any] = {
+        "model_role": "memory_extraction",
+        "requested_role": "memory_extraction",
+        "effective_role": "memory_extraction",
+        "scope_source": "explicit_override",
+        "provider_type": "openai_compatible_llm",
+        "model_name": "controlled-pg-provider",
+        "endpoint_url": f"http://127.0.0.1:{server.server_port}/v1",
+        "supports_json_mode": True,
+        "supports_structured_output": False,
+    }
+    try:
+        with import_connection(settings) as connection:
+            message_uuid = _create_message(connection, "Keep PostgreSQL backups enabled.")
+            pipeline = PostgresMemoryWorkerPipeline(connection, settings)
+            prepared = pipeline.prepare_message(
+                message_uuid,
+                profile,
+                job_uuid="pg-provider-audit-job",
+            )
+            attempts = connection.execute(
+                "SELECT * FROM processing_provider_attempts "
+                "WHERE processing_run_uuid = ? ORDER BY attempt_index",
+                (prepared.processing_run_uuid,),
+            ).fetchall()
+            assert len(attempts) == 2
+            assert attempts[0]["schema_valid"] is False
+            assert attempts[1]["schema_valid"] is True
+            assert all(row["completed_at"] is not None for row in attempts)
+            pipeline.process_message(
+                message_uuid,
+                model_target=profile,
+                prepared_inference=prepared,
+            )
+            stage = connection.execute(
+                "SELECT * FROM processing_stage_runs "
+                "WHERE processing_run_uuid = ? AND stage = 'jakobson_sentence_analysis'",
+                (prepared.processing_run_uuid,),
+            ).fetchone()
+            assert stage["status"] == "ok"
+            assert stage["attempt_count"] == 2
+            assert stage["contract_hash"] == prepared.contract_hash
+            assert stage["scope_source"] == "explicit_override"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def test_full_postgres_embedding_projection_recovers_after_stage_persisted_crash(

@@ -202,3 +202,11 @@ project artifacts remain `assistant_claim` evidence with an explicit
 - [reference/memory-control-contract.md](reference/memory-control-contract.md) — authenticated control-plane contract
 - [reference/prompt-pack.md](reference/prompt-pack.md) / [reference/prompt-safety.md](reference/prompt-safety.md) — schema-bound prompts and injection defenses
 - [reference/import.md](reference/import.md) / [reference/heritage-roundtrip.md](reference/heritage-roundtrip.md) / [reference/forget-residue.md](reference/forget-residue.md) — import, portability, and forgetting
+# Real-provider failure semantics
+
+Memory extraction is asynchronous and fail-open, but never audit-open. Each
+remote initial or repair attempt is durably reserved before network I/O and
+finalized with transport, parse, schema, token, latency, and sanitized validation
+metadata. The canonical memory pipeline receives only active-contract-valid
+output. Provider failures therefore cannot poison the whole job or turn a
+completed chat capture into a Core HTTP 500.

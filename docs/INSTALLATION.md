@@ -253,3 +253,10 @@ stage succeeds again.
 - Remote semantic quality depends on the profiles and models you configure.
 
 For failures, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+# Schema 24 upgrade
+
+Normal startup applies the additive SQLite or PostgreSQL schema 24 migration.
+It creates `processing_provider_attempts` and extends
+`processing_stage_runs`; existing canonical rows are preserved. Back up the
+canonical database before upgrading. Do not delete Docker volumes as an upgrade
+step.

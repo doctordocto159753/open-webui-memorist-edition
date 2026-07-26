@@ -21,6 +21,7 @@ from memcore.memory_worker.prompts.schemas import valid_jakobson_output
 from memcore.model_control.postgres_repository import PostgresModelControlRepository
 from memcore.model_control.providers.base import ProviderHealth
 from memcore.model_control.registry import test_profile_health as run_profile_health
+from memcore.model_control.role_contracts import role_contract_manifest_hash
 from memcore.model_control.schemas import ModelProfileCreate, ProviderType
 from memcore.models import ModelRole
 
@@ -31,10 +32,25 @@ class _ProviderHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length).decode("utf-8"))
-        user_content = payload["messages"][1]["content"]
+        messages = payload["messages"]
+        user_content = messages[-1]["content"]
         output: dict[str, Any]
         if "memorist_provider_test" in user_content:
             output = {"memorist_provider_test": "ok"}
+        elif len(messages) == 1 and "memorist.import_reconstruction" in user_content:
+            output = {
+                "schema_version": "1.0",
+                "prompt_id": "memorist.import_reconstruction",
+                "prompt_version": "2.0",
+                "status": "ok",
+                "warnings": [],
+                "items": [
+                    {
+                        "trust_level": "historical_untrusted",
+                        "candidate_processing_recommendation": "none",
+                    }
+                ],
+            }
         else:
             input_payload = json.loads(user_content)
             output = valid_jakobson_output()
@@ -132,7 +148,7 @@ def test_full_postgres_remote_provider_background_worker_e2e(
                 profile.model_profile_uuid,
                 run_profile_health(profile, timeout_seconds=5),
             )
-            assert len(_ProviderHandler.requests) == 1
+            assert len(_ProviderHandler.requests) == 2
             _ProviderHandler.requests = []
             model_control.set_default(ModelRole.IMPORT_RECONSTRUCTION, profile.model_profile_uuid)
             service = ImportService(connection, settings.object_store_path)
@@ -258,6 +274,8 @@ def test_full_postgres_scheduled_profile_cannot_be_hard_deleted(
                 authentication_status="valid",
                 role_compatibility_status="compatible",
                 overall_status="ok",
+                role_manifest_hash=role_contract_manifest_hash(profile.role),
+                role_probe_status="compatible",
             ),
         )
         model_control.set_default(ModelRole.IMPORT_RECONSTRUCTION, profile.model_profile_uuid)
@@ -364,7 +382,7 @@ def test_full_postgres_remote_profile_failures_do_not_call_provider(
                 profile.model_profile_uuid,
                 run_profile_health(profile, timeout_seconds=5),
             )
-            assert len(_ProviderHandler.requests) == 1
+            assert len(_ProviderHandler.requests) == 2
             _ProviderHandler.requests = []
             model_control.set_default(ModelRole.IMPORT_RECONSTRUCTION, profile.model_profile_uuid)
             service = ImportService(connection, settings.object_store_path)

@@ -17,6 +17,7 @@ from memcore.model_control.registry import provider_for_profile
 from memcore.model_control.resolution import EffectiveRoleResolution, RoleResolutionService
 from memcore.model_control.schemas import UsageEventCreate
 from memcore.model_control.security import sanitize_error_message
+from memcore.model_control.stage_status import normalize_stage_status
 from memcore.models import ModelRole, new_uuid, utc_now
 from memcore.validators.ijson import canonical_hash_ijson, dump_ijson, load_ijson
 
@@ -334,7 +335,7 @@ class StageInvoker:
                 output = load_ijson(output)
             if output is not None and not isinstance(output, dict):
                 return None
-            status = str(values["status"])
+            status = normalize_stage_status(str(values["status"])).value
             if status in {"ok", "failed_open"} and output is None:
                 return None
             expected_metadata = {

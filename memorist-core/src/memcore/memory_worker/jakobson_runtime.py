@@ -8,9 +8,10 @@ core lives here so Lite and Full keep semantic parity.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
+from memcore.memory_worker.attempt_audit import ProviderAttemptAuditRepository
 from memcore.memory_worker.execution import (
     ContractExecutionOutcome,
     run_contract_execution,
@@ -40,6 +41,8 @@ def execute_jakobson_contract(
     deterministic_builder: Callable[[], dict[str, Any]],
     revalidate: Callable[[], None] | None = None,
     timeout_ms: int = 8000,
+    allow_fallback: bool = True,
+    attempt_audit: ProviderAttemptAuditRepository | None = None,
 ) -> ContractExecutionOutcome:
     """Execute the active Jakobson contract for a message and return the outcome.
 
@@ -54,19 +57,21 @@ def execute_jakobson_contract(
     )
 
     def validate(output: Any) -> list[dict[str, str]]:
-        try:
-            validate_prompt_execution(
-                JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-                JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
-                input_payload,
-                dict(output),
-            )
-            return []
-        except PromptValidationError:
-            issues = contract.validate(output) if contract is not None else []
-            return issues or [
-                {"path": "(root)", "code": "invalid", "message": "contract validation failed"}
-            ]
+        if isinstance(output, Mapping):
+            try:
+                validate_prompt_execution(
+                    JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
+                    JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
+                    input_payload,
+                    dict(output),
+                )
+                return []
+            except PromptValidationError:
+                pass
+        issues = contract.validate(output) if contract is not None else []
+        return issues or [
+            {"path": "(root)", "code": "invalid", "message": "contract validation failed"}
+        ]
 
     if provider_type not in REMOTE_PROVIDER_TYPES:
         return run_contract_execution(
@@ -76,6 +81,9 @@ def execute_jakobson_contract(
             contract=contract,
             validate=validate,
             deterministic_output=deterministic_builder,
+            revalidate=revalidate,
+            allow_fallback=allow_fallback,
+            attempt_audit=attempt_audit,
         )
 
     provider = OpenAICompatibleMemoryExtractionProvider.from_profile(profile, timeout_ms=timeout_ms)
@@ -92,5 +100,6 @@ def execute_jakobson_contract(
         validate=validate,
         deterministic_output=deterministic_builder,
         revalidate=revalidate,
-        allow_fallback=True,
+        allow_fallback=allow_fallback,
+        attempt_audit=attempt_audit,
     )

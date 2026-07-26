@@ -23,15 +23,17 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from memcore.memory_worker.attempt_audit import ProviderAttemptAuditRepository
 from memcore.memory_worker.prompts.contracts import PromptContract
 from memcore.memory_worker.providers.openai_compatible import (
     OpenAICompatibleMemoryExtractionProvider,
     OpenAICompatibleProviderError,
 )
+from memcore.model_control.stage_status import stage_status_for_output
 
 # Documented, lossless status aliases. Applied only when replacing the status
 # makes the entire output schema-valid and nothing else changes.
-STATUS_ALIASES = {"success": "ok", "ok": "ok", "done": "ok", "complete": "ok", "completed": "ok"}
+STATUS_ALIASES = {"success": "ok"}
 
 Validator = Callable[[Mapping[str, Any]], list[dict[str, str]]]
 
@@ -53,6 +55,7 @@ class ContractExecutionOutcome:
     output_tokens: int
     latency_ms: int
     parse_status: str
+    attempt_count: int = 0
     validation_error_paths: list[str] = field(default_factory=list)
 
 
@@ -62,6 +65,14 @@ class NoDeterministicFallbackError(RuntimeError):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+class DeterministicContractError(RuntimeError):
+    """The trusted fallback violated its own active contract."""
+
+    def __init__(self, issues: list[dict[str, str]]) -> None:
+        super().__init__("deterministic fallback violated the active prompt contract")
+        self.validation_error_paths = _paths(issues)
 
 
 def run_contract_execution(
@@ -74,13 +85,21 @@ def run_contract_execution(
     deterministic_output: Callable[[], dict[str, Any]],
     revalidate: Callable[[], None] | None = None,
     allow_fallback: bool = True,
+    attempt_audit: ProviderAttemptAuditRepository | None = None,
 ) -> ContractExecutionOutcome:
     if provider is None:
         # Configured deterministic profile: not a fallback, the intended behavior.
         output = deterministic_output()
+        deterministic_issues = validate(output)
+        if deterministic_issues:
+            raise DeterministicContractError(deterministic_issues)
         return ContractExecutionOutcome(
             output=output,
-            status=str(output.get("status") or "ok"),
+            status=stage_status_for_output(
+                output.get("status"),
+                fallback_used=False,
+                provider_failed=False,
+            ).value,
             called_provider=False,
             provider_output_valid=False,
             canonicalized=False,
@@ -94,6 +113,7 @@ def run_contract_execution(
             output_tokens=len(output.get("items") or output.get("sentences") or []),
             latency_ms=0,
             parse_status="not_called",
+            attempt_count=0,
             validation_error_paths=[],
         )
 
@@ -111,6 +131,28 @@ def run_contract_execution(
     last_issues: list[dict[str, str]] = []
 
     # ---- Attempt 1 -------------------------------------------------------
+    if revalidate is not None:
+        revalidate()
+    if attempt_audit is not None and not attempt_audit.reserve(1, "initial"):
+        if revalidate is not None:
+            revalidate()
+        return _fallback(
+            deterministic_output,
+            validate=validate,
+            allow_fallback=allow_fallback,
+            reason="provider_attempt_unknown_completion",
+            called_provider=True,
+            capability_mode=capability_mode,
+            repair_attempted=False,
+            repair_succeeded=False,
+            parse_status="unknown_completion",
+            provider_response_id=None,
+            input_tokens=0,
+            output_tokens=0,
+            latency_ms=0,
+            attempt_count=attempt_audit.count(),
+            validation_error_paths=[],
+        )
     try:
         attempt = provider.run(
             system_prompt=system_prompt,
@@ -119,8 +161,13 @@ def run_contract_execution(
             schema_name=schema_name,
         )
     except OpenAICompatibleProviderError as error:
+        if attempt_audit is not None:
+            attempt_audit.finalize_error(1, error)
+        if revalidate is not None:
+            revalidate()
         return _fallback(
             deterministic_output,
+            validate=validate,
             allow_fallback=allow_fallback,
             reason=f"provider_{error.category}",
             called_provider=True,
@@ -132,6 +179,7 @@ def run_contract_execution(
             input_tokens=0,
             output_tokens=0,
             latency_ms=0,
+            attempt_count=attempt_audit.count() if attempt_audit is not None else 1,
             validation_error_paths=[],
         )
 
@@ -140,9 +188,22 @@ def run_contract_execution(
     output_tokens = attempt.output_tokens
     latency_ms = attempt.latency_ms
 
+    canonical: dict[str, Any] | None = None
     if attempt.parsed is not None:
         parse_status = "parsed"
         issues = validate(attempt.parsed)
+        if issues:
+            canonical = _canonicalize(attempt.parsed, validate)
+        if attempt_audit is not None:
+            attempt_audit.finalize(
+                1,
+                attempt,
+                schema_valid=not issues,
+                canonicalized=canonical is not None,
+                validation_issues=issues,
+            )
+        if revalidate is not None:
+            revalidate()
         if not issues:
             return _valid_provider_outcome(
                 attempt.parsed,
@@ -154,8 +215,8 @@ def run_contract_execution(
                 canonicalized=False,
                 repair_attempted=False,
                 repair_succeeded=False,
+                attempt_count=attempt_audit.count() if attempt_audit is not None else 1,
             )
-        canonical = _canonicalize(attempt.parsed, validate)
         if canonical is not None:
             return _valid_provider_outcome(
                 canonical,
@@ -167,20 +228,57 @@ def run_contract_execution(
                 canonicalized=True,
                 repair_attempted=False,
                 repair_succeeded=False,
+                attempt_count=attempt_audit.count() if attempt_audit is not None else 1,
             )
         last_issues = issues
+    else:
+        if attempt_audit is not None:
+            attempt_audit.finalize(
+                1,
+                attempt,
+                schema_valid=False,
+                canonicalized=False,
+                validation_issues=[
+                    {
+                        "path": "(root)",
+                        "code": "parse",
+                        "message": attempt.parse_error or "invalid JSON",
+                    }
+                ],
+            )
+        if revalidate is not None:
+            revalidate()
 
     # ---- Bounded repair (exactly one) -----------------------------------
     # Re-check lease / source / profile identity BEFORE the repair call. A
     # raised invalidation must propagate; it is never masked as a fallback.
-    if revalidate is not None:
-        revalidate()
-
     corrective = {
         "invalid_output": attempt.parsed if attempt.parsed is not None else {},
         "issues": last_issues
         or [{"path": "(root)", "code": "parse", "message": attempt.parse_error or "invalid JSON"}],
     }
+    if revalidate is not None:
+        revalidate()
+    if attempt_audit is not None and not attempt_audit.reserve(2, "repair"):
+        if revalidate is not None:
+            revalidate()
+        return _fallback(
+            deterministic_output,
+            validate=validate,
+            allow_fallback=allow_fallback,
+            reason="provider_attempt_unknown_completion",
+            called_provider=True,
+            capability_mode=capability_mode,
+            repair_attempted=True,
+            repair_succeeded=False,
+            parse_status=parse_status,
+            provider_response_id=provider_response_id,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            latency_ms=latency_ms,
+            attempt_count=attempt_audit.count(),
+            validation_error_paths=_paths(last_issues),
+        )
     try:
         repair = provider.run(
             system_prompt=system_prompt,
@@ -190,8 +288,13 @@ def run_contract_execution(
             corrective=corrective,
         )
     except OpenAICompatibleProviderError as error:
+        if attempt_audit is not None:
+            attempt_audit.finalize_error(2, error)
+        if revalidate is not None:
+            revalidate()
         return _fallback(
             deterministic_output,
+            validate=validate,
             allow_fallback=allow_fallback,
             reason=f"provider_{error.category}",
             called_provider=True,
@@ -203,6 +306,7 @@ def run_contract_execution(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             latency_ms=latency_ms,
+            attempt_count=attempt_audit.count() if attempt_audit is not None else 2,
             validation_error_paths=_paths(last_issues),
         )
 
@@ -211,8 +315,21 @@ def run_contract_execution(
     output_tokens += repair.output_tokens
     latency_ms += repair.latency_ms
 
+    repair_canonical: dict[str, Any] | None = None
     if repair.parsed is not None:
         repaired_issues = validate(repair.parsed)
+        if repaired_issues:
+            repair_canonical = _canonicalize(repair.parsed, validate)
+        if attempt_audit is not None:
+            attempt_audit.finalize(
+                2,
+                repair,
+                schema_valid=not repaired_issues,
+                canonicalized=repair_canonical is not None,
+                validation_issues=repaired_issues,
+            )
+        if revalidate is not None:
+            revalidate()
         if not repaired_issues:
             return _valid_provider_outcome(
                 repair.parsed,
@@ -224,11 +341,11 @@ def run_contract_execution(
                 canonicalized=False,
                 repair_attempted=True,
                 repair_succeeded=True,
+                attempt_count=attempt_audit.count() if attempt_audit is not None else 2,
             )
-        canonical = _canonicalize(repair.parsed, validate)
-        if canonical is not None:
+        if repair_canonical is not None:
             return _valid_provider_outcome(
-                canonical,
+                repair_canonical,
                 capability_mode,
                 provider_response_id,
                 input_tokens,
@@ -237,13 +354,32 @@ def run_contract_execution(
                 canonicalized=True,
                 repair_attempted=True,
                 repair_succeeded=True,
+                attempt_count=attempt_audit.count() if attempt_audit is not None else 2,
             )
         last_issues = repaired_issues
         parse_status = "parsed"
+    else:
+        if attempt_audit is not None:
+            attempt_audit.finalize(
+                2,
+                repair,
+                schema_valid=False,
+                canonicalized=False,
+                validation_issues=[
+                    {
+                        "path": "(root)",
+                        "code": "parse",
+                        "message": repair.parse_error or "invalid JSON",
+                    }
+                ],
+            )
+        if revalidate is not None:
+            revalidate()
 
     # ---- Deterministic fallback -----------------------------------------
     return _fallback(
         deterministic_output,
+        validate=validate,
         allow_fallback=allow_fallback,
         reason="provider_output_contract_invalid",
         called_provider=True,
@@ -255,6 +391,7 @@ def run_contract_execution(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         latency_ms=latency_ms,
+        attempt_count=attempt_audit.count() if attempt_audit is not None else 2,
         validation_error_paths=_paths(last_issues),
     )
 
@@ -270,10 +407,15 @@ def _valid_provider_outcome(
     canonicalized: bool,
     repair_attempted: bool,
     repair_succeeded: bool,
+    attempt_count: int,
 ) -> ContractExecutionOutcome:
     return ContractExecutionOutcome(
         output=output,
-        status=str(output.get("status") or "ok"),
+        status=stage_status_for_output(
+            output.get("status"),
+            fallback_used=False,
+            provider_failed=False,
+        ).value,
         called_provider=True,
         provider_output_valid=True,
         canonicalized=canonicalized,
@@ -287,6 +429,7 @@ def _valid_provider_outcome(
         output_tokens=output_tokens,
         latency_ms=latency_ms,
         parse_status="parsed",
+        attempt_count=attempt_count,
         validation_error_paths=[],
     )
 
@@ -294,6 +437,7 @@ def _valid_provider_outcome(
 def _fallback(
     deterministic_output: Callable[[], dict[str, Any]],
     *,
+    validate: Validator,
     allow_fallback: bool,
     reason: str,
     called_provider: bool,
@@ -305,14 +449,22 @@ def _fallback(
     input_tokens: int,
     output_tokens: int,
     latency_ms: int,
+    attempt_count: int,
     validation_error_paths: list[str],
 ) -> ContractExecutionOutcome:
     if not allow_fallback:
         raise NoDeterministicFallbackError(reason)
     output = deterministic_output()
+    deterministic_issues = validate(output)
+    if deterministic_issues:
+        raise DeterministicContractError(deterministic_issues)
     return ContractExecutionOutcome(
         output=output,
-        status=str(output.get("status") or "ok"),
+        status=stage_status_for_output(
+            output.get("status"),
+            fallback_used=True,
+            provider_failed=True,
+        ).value,
         called_provider=called_provider,
         provider_output_valid=False,
         canonicalized=False,
@@ -326,6 +478,7 @@ def _fallback(
         output_tokens=output_tokens,
         latency_ms=latency_ms,
         parse_status=parse_status,
+        attempt_count=attempt_count,
         validation_error_paths=validation_error_paths,
     )
 

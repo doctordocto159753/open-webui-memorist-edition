@@ -15,6 +15,7 @@ from memcore.model_control.endpoint import (
 from memcore.model_control.providers.base import ProviderHealth
 from memcore.model_control.repository import ModelControlRepository
 from memcore.model_control.resolution import RoleResolutionService
+from memcore.model_control.role_contracts import role_contract_manifest_hash
 from memcore.model_control.schemas import (
     ModelProfileCreate,
     ModelProfilePatch,
@@ -85,6 +86,8 @@ def _certify(repository: ModelControlRepository, profile_uuid: str) -> None:
             structured_output_status="supported",
             role_compatibility_status="compatible",
             overall_status="ok",
+            role_manifest_hash=role_contract_manifest_hash(profile.role),
+            role_probe_status="compatible",
         ),
     )
 

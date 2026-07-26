@@ -231,6 +231,7 @@ class JakobsonAnalysisService:
             output_version = str(
                 output.get("prompt_version") or JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION
             )
+            run.prompt_version = output_version
             execution = PromptExecutionRepository(self.connection).record_execution(
                 prompt_id=JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
                 prompt_version=output_version,
@@ -347,7 +348,11 @@ class JakobsonAnalysisService:
                 with fenced_write(self.connection, lease_fence):
                     execution = PromptExecutionRepository(self.connection).record_execution(
                         prompt_id=JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-                        prompt_version=JAKOBSON_SENTENCE_ANALYSIS_VERSION,
+                        prompt_version=(
+                            prepared_inference.prompt_version
+                            if prepared_inference is not None
+                            else JAKOBSON_SENTENCE_ANALYSIS_VERSION
+                        ),
                         model_role=self.model_role,
                         provider_type=self.provider.provider_type,
                         model_name=str(self.provider.model_name or self.provider.provider_type),

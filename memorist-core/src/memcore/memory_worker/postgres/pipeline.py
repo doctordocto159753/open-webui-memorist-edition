@@ -11,6 +11,11 @@ from typing import Any, cast
 from fastapi import HTTPException
 
 from memcore.config import Settings
+from memcore.memory_worker.attempt_audit import (
+    FrozenProviderExecution,
+    ProviderAttemptAuditRepository,
+    stable_stage_execution_uuid,
+)
 from memcore.memory_worker.contracts import PIPELINE_VERSION, PROMPT_BUNDLE_VERSION
 from memcore.memory_worker.fencing import LeaseFenceRejected, fenced_write
 from memcore.memory_worker.gating import DeterministicGate
@@ -28,7 +33,7 @@ from memcore.memory_worker.postgres.gated_candidate_adapter import (
 from memcore.memory_worker.postgres.routing_policy_adapter import record_routes
 from memcore.memory_worker.prepared import PreparedJakobsonInference
 from memcore.memory_worker.prompts import render_prompt, validate_prompt_execution
-from memcore.memory_worker.prompts.contracts import canonical_sentence_items
+from memcore.memory_worker.prompts.contracts import canonical_sentence_items, get_contract
 from memcore.memory_worker.prompts.versions import (
     JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
     JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
@@ -48,6 +53,7 @@ from memcore.model_control.stage_contracts import (
     validate_privacy_result,
 )
 from memcore.model_control.stage_invocation import StageInvocationRequest, StageInvoker
+from memcore.model_control.stage_status import stage_status_for_output
 from memcore.models import ModelRole, new_uuid, utc_now
 from memcore.validators.ijson import canonical_hash_ijson
 
@@ -58,6 +64,8 @@ class PostgresMemoryWorkerPipeline:
         self.settings = settings
         self.segmenter = SentenceSegmenter()
         self.gate = DeterministicGate()
+        self.provider_job_uuid: str | None = None
+        self.provider_lease_fence: Callable[[], None] | None = None
 
     def execution_snapshot(
         self,
@@ -86,14 +94,21 @@ class PostgresMemoryWorkerPipeline:
             "input_content_hash": identity.input_content_hash,
             "processing_identity_hash": identity.identity_hash,
             "profile_fingerprint": execution_profile_fingerprint(profile),
+            "contract_hash": _active_contract_hash(),
         }
 
     def prepare_message(
         self,
         message_uuid: str,
         model_target: dict[str, Any] | None = None,
+        *,
+        job_uuid: str | None = None,
+        lease_fence: Callable[[], None] | None = None,
     ) -> PreparedJakobsonInference:
         """Run and validate provider inference before opening a write transaction."""
+        job_uuid = job_uuid or self.provider_job_uuid
+        lease_fence = lease_fence or self.provider_lease_fence
+        explicit_override = model_target is not None
         message = self.connection.execute(
             "SELECT m.*, s.workspace_uuid, s.project_uuid FROM messages m JOIN sessions s ON s.session_uuid = m.session_uuid WHERE m.message_uuid = %s",
             (message_uuid,),
@@ -124,6 +139,12 @@ class PostgresMemoryWorkerPipeline:
             },
             model_role=model_role,
         )
+        expected_snapshot = {
+            "input_content_hash": identity.input_content_hash,
+            "processing_identity_hash": identity.identity_hash,
+            "profile_fingerprint": execution_profile_fingerprint(profile),
+            "contract_hash": _active_contract_hash(),
+        }
         units = self.segmenter.to_text_units(
             message_uuid=message_uuid,
             session_uuid=str(message["session_uuid"]),
@@ -143,9 +164,54 @@ class PostgresMemoryWorkerPipeline:
                 for index, unit in enumerate(units)
             ]
         }
-        # psycopg starts a transaction even for SELECT. End that read transaction
-        # before the potentially slow HTTP request.
-        self.connection.commit()
+        is_remote = provider_type in {"openai_compatible", "openai_compatible_llm"}
+        processing_run_uuid: str | None = None
+        stage_execution_uuid: str | None = None
+        attempt_audit: ProviderAttemptAuditRepository | None = None
+        if is_remote:
+            with fenced_write(self.connection, lease_fence, postgres=True):
+                run = self._get_or_create_run(
+                    message,
+                    identity,
+                    model_profile_uuid,
+                    provider_type,
+                    model_name,
+                )
+                processing_run_uuid = str(run["processing_run_uuid"])
+            authority_key = (
+                f"{processing_run_uuid}:{message_uuid}:{identity.identity_hash}:"
+                f"{_active_contract_hash()}"
+            )
+            stage_execution_uuid = stable_stage_execution_uuid(authority_key)
+            frozen = FrozenProviderExecution(
+                stage_execution_uuid=stage_execution_uuid,
+                processing_run_uuid=processing_run_uuid,
+                job_uuid=job_uuid,
+                source_type="message",
+                source_uuid=message_uuid,
+                requested_role=str(profile.get("requested_role") or model_role),
+                effective_role=str(profile.get("effective_role") or model_role),
+                model_profile_uuid=model_profile_uuid,
+                profile_fingerprint=expected_snapshot["profile_fingerprint"],
+                scope_source=str(profile.get("scope_source") or "explicit_override"),
+                inheritance_source=(
+                    str(profile["inheritance_source"])
+                    if profile.get("inheritance_source")
+                    else None
+                ),
+                provider_type=provider_type,
+                model_name=model_name,
+                capability_mode=_capability_mode(profile),
+                prompt_id=identity.prompt_id,
+                prompt_version=identity.prompt_version,
+                contract_hash=_active_contract_hash(),
+                input_hash=identity.input_content_hash,
+                idempotency_identity=authority_key,
+                deterministic_fallback_version="jakobson-deterministic-v1",
+            )
+            attempt_audit = ProviderAttemptAuditRepository(self.connection, frozen, postgres=True)
+        else:
+            self.connection.commit()
         speaker_role = str(message["role"])
 
         def _deterministic() -> dict[str, Any]:
@@ -168,10 +234,20 @@ class PostgresMemoryWorkerPipeline:
             "model_name": model_name,
             "model_profile_uuid": model_profile_uuid,
         }
+
+        def _revalidate() -> None:
+            if lease_fence is not None:
+                cast(Any, lease_fence)(before_provider=True)
+            snapshot_target = profile if explicit_override else None
+            if self.execution_snapshot(message_uuid, snapshot_target) != expected_snapshot:
+                raise LeaseFenceRejected("provider execution authority changed")
+
         outcome = execute_jakobson_contract(
             profile=execution_profile,
             input_payload=input_payload,
             deterministic_builder=_deterministic,
+            revalidate=_revalidate if is_remote else None,
+            attempt_audit=attempt_audit,
         )
         output = outcome.output
         return PreparedJakobsonInference(
@@ -183,6 +259,13 @@ class PostgresMemoryWorkerPipeline:
             processing_identity_hash=identity.identity_hash,
             input_content_hash=identity.input_content_hash,
             profile_fingerprint=execution_profile_fingerprint(profile),
+            requested_role=str(profile.get("requested_role") or model_role),
+            effective_role=str(profile.get("effective_role") or model_role),
+            scope_source=str(profile.get("scope_source") or "explicit_override"),
+            inheritance_source=(
+                str(profile["inheritance_source"]) if profile.get("inheritance_source") else None
+            ),
+            contract_hash=_active_contract_hash(),
             output=output,
             input_tokens=(
                 outcome.input_tokens
@@ -203,6 +286,10 @@ class PostgresMemoryWorkerPipeline:
             provider_response_id=outcome.provider_response_id,
             parse_status=outcome.parse_status,
             validation_error_paths=outcome.validation_error_paths,
+            processing_run_uuid=processing_run_uuid,
+            stage_execution_uuid=stage_execution_uuid,
+            job_uuid=job_uuid,
+            attempt_count=outcome.attempt_count,
         )
 
     def process_message(
@@ -242,7 +329,12 @@ class PostgresMemoryWorkerPipeline:
         )
         model_name = str((profile or {}).get("model_name") or provider_type)
         if prepared_inference is None:
-            prepared_inference = self.prepare_message(message_uuid, profile)
+            prepared_inference = self.prepare_message(
+                message_uuid,
+                model_target,
+                job_uuid=job_uuid,
+                lease_fence=lease_fence,
+            )
         if provider_type == "disabled":
             provider_type = "deterministic"
             model_profile_uuid = None
@@ -358,6 +450,11 @@ class PostgresMemoryWorkerPipeline:
                     import_run_uuid,
                     job_uuid,
                     usage,
+                    status=stage_status_for_output(
+                        output.get("status"),
+                        fallback_used=prepared_inference.fallback_used,
+                        provider_failed=not prepared_inference.provider_output_valid,
+                    ).value,
                 )
                 analysis_run_uuid = self._record_jakobson(
                     message,
@@ -367,6 +464,7 @@ class PostgresMemoryWorkerPipeline:
                     provider_type,
                     model_name,
                     prompt_execution_uuid,
+                    prompt_version,
                 )
                 annotations = self._record_annotations(
                     message_uuid,
@@ -489,7 +587,15 @@ class PostgresMemoryWorkerPipeline:
             profile = repository.get_profile(resolution.model_profile_uuid)
             if profile is not None:
                 values = profile.model_dump(mode="json")
-                values["model_role"] = ModelRole.MEMORY_EXTRACTION.value
+                values.update(
+                    {
+                        "model_role": resolution.requested_role.value,
+                        "requested_role": resolution.requested_role.value,
+                        "effective_role": resolution.effective_role.value,
+                        "scope_source": resolution.scope_source,
+                        "inheritance_source": resolution.inheritance_source,
+                    }
+                )
                 return values
         return resolution.runtime_profile()
 
@@ -743,31 +849,34 @@ class PostgresMemoryWorkerPipeline:
         (provider or fallback) output, so it never disappears.
         """
 
-        status = (
-            "succeeded"
-            if prepared.provider_output_valid or not prepared.called_provider
-            else "fallback"
-        )
+        status = stage_status_for_output(
+            output.get("status"),
+            fallback_used=prepared.fallback_used,
+            provider_failed=not prepared.provider_output_valid,
+        ).value
         row = {
-            "stage_execution_uuid": new_uuid(),
+            "stage_execution_uuid": prepared.stage_execution_uuid or new_uuid(),
             "processing_run_uuid": processing_run_uuid,
+            "job_uuid": prepared.job_uuid,
             "source_type": "message",
             "source_uuid": str(message["message_uuid"]),
-            "requested_role": model_role,
-            "effective_role": model_role,
+            "requested_role": prepared.requested_role,
+            "effective_role": prepared.effective_role,
             "stage": "jakobson_sentence_analysis",
             "model_profile_uuid": model_profile_uuid,
             "provider_type": provider_type,
             "model_name": model_name,
             "prompt_id": JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
             "prompt_version": prompt_version,
+            "contract_hash": prepared.contract_hash,
+            "profile_fingerprint": prepared.profile_fingerprint,
             "input_hash": canonical_hash_ijson(input_payload),
             "output_hash": canonical_hash_ijson(output),
             "status": status,
             "called_provider": prepared.called_provider,
             "fallback_used": prepared.fallback_used,
-            "scope_source": "message",
-            "inheritance_source": None,
+            "scope_source": prepared.scope_source,
+            "inheritance_source": prepared.inheritance_source,
             "fallback_reason": prepared.fallback_reason,
             "detail_sanitized": None,
             "validation_errors_jsonb": json.dumps(prepared.validation_error_paths, sort_keys=True),
@@ -785,6 +894,9 @@ class PostgresMemoryWorkerPipeline:
             "parse_status": prepared.parse_status,
             "capability_mode": prepared.capability_mode,
             "provider_response_id": prepared.provider_response_id,
+            "canonicalized": prepared.canonicalized,
+            "attempt_count": prepared.attempt_count,
+            "total_provider_latency_ms": prepared.latency_ms,
         }
         columns = list(row)
         placeholders = ",".join(
@@ -811,6 +923,8 @@ class PostgresMemoryWorkerPipeline:
         import_run_uuid: str | None,
         job_uuid: str | None,
         usage: dict[str, int],
+        *,
+        status: str,
     ) -> None:
         self.connection.execute(
             """
@@ -822,7 +936,7 @@ class PostgresMemoryWorkerPipeline:
             )
             VALUES (
               %s,%s,%s,'prompt_execution',%s,%s,%s,1,'jakobson_sentence_analysis',
-              %s,%s,%s,%s,%s,%s,%s,%s,%s,'ok'
+              %s,%s,%s,%s,%s,%s,%s,%s,%s,%s
             )
             """,
             (
@@ -841,6 +955,7 @@ class PostgresMemoryWorkerPipeline:
                 import_run_uuid,
                 job_uuid,
                 int(usage.get("latency_ms", 0)),
+                status,
             ),
         )
 
@@ -853,6 +968,7 @@ class PostgresMemoryWorkerPipeline:
         provider_type: str,
         model_name: str,
         prompt_execution_uuid: str,
+        prompt_version: str,
     ) -> str:
         existing = self.connection.execute(
             "SELECT analysis_run_uuid FROM jakobson_analysis_runs WHERE message_uuid = %s AND prompt_execution_uuid = %s",
@@ -874,7 +990,7 @@ class PostgresMemoryWorkerPipeline:
                 message["session_uuid"],
                 message["message_uuid"],
                 JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-                PROMPT_PACK_VERSION,
+                prompt_version,
                 model_profile_uuid,
                 provider_type,
                 model_name,
@@ -914,7 +1030,7 @@ class PostgresMemoryWorkerPipeline:
                     analysis_run_uuid,
                     message_uuid,
                     unit["text_unit_uuid"],
-                    idx,
+                    idx + 1,
                     sentence["text"],
                     sha256(sentence["text"].encode()).hexdigest(),
                     factors["sender_addresser"].get("value"),
@@ -1521,3 +1637,21 @@ def _json_mapping(value: Any) -> dict[str, Any]:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
+
+
+def _active_contract_hash() -> str:
+    contract = get_contract(
+        JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
+        JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
+    )
+    if contract is None:
+        raise RuntimeError("active Jakobson contract is not registered")
+    return contract.contract_hash
+
+
+def _capability_mode(profile: dict[str, Any]) -> str:
+    if bool(profile.get("supports_structured_output")):
+        return "json_schema"
+    if bool(profile.get("supports_json_mode")):
+        return "json_object"
+    return "incompatible"
