@@ -19,7 +19,7 @@ OutputValidator = Callable[[dict[str, Any]], None]
 
 
 class _StrictRuntimeOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
 
 class EvidenceSpan(_StrictRuntimeOutput):
