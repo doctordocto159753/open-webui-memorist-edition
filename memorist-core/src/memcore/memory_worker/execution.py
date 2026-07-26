@@ -133,9 +133,7 @@ def run_contract_execution(
     # ---- Attempt 1 -------------------------------------------------------
     if revalidate is not None:
         revalidate()
-    reservation = (
-        attempt_audit.reserve(1, "initial") if attempt_audit is not None else "reserved"
-    )
+    reservation = attempt_audit.reserve(1, "initial") if attempt_audit is not None else "reserved"
     if reservation != "reserved":
         if revalidate is not None:
             revalidate()

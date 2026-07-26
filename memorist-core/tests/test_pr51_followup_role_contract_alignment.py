@@ -297,13 +297,26 @@ def test_attempt_reservation_distinguishes_completed_from_unknown() -> None:
     connection.close()
 
 
+def test_deterministic_contract_violation_is_terminal() -> None:
+    # A trusted deterministic fallback that violates its own active contract is an
+    # internal defect; retrying cannot repair it, so it bypasses the retry budget.
+    error = DeterministicContractError([{"path": "items", "code": "invalid"}])
+    assert _is_terminal_memory_job_error(error) is True
+
+
 @pytest.mark.parametrize(
     "error",
     [
-        DeterministicContractError([{"path": "items", "code": "invalid"}]),
+        NoDeterministicFallbackError("provider_timeout"),
+        NoDeterministicFallbackError("provider_http_5xx"),
+        NoDeterministicFallbackError("provider_attempt_unknown_completion"),
         NoDeterministicFallbackError("no_safe_fallback"),
+        RuntimeError("transient"),
     ],
 )
-def test_internal_contract_failures_are_terminal(error: Exception) -> None:
-    assert _is_terminal_memory_job_error(error) is True
-    assert _is_terminal_memory_job_error(RuntimeError("transient")) is False
+def test_transient_and_no_fallback_failures_remain_retryable(error: Exception) -> None:
+    # A fail-closed role with no deterministic fallback surfaces every ending as a
+    # NoDeterministicFallbackError, including transient provider failures. These
+    # must not be made terminal on first occurrence; the normal retry budget
+    # (max_attempts) bounds them instead.
+    assert _is_terminal_memory_job_error(error) is False
