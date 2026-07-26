@@ -45,7 +45,7 @@ class RuntimeContractOpenAICompatibleLLMProvider(OpenAICompatibleLLMProvider):
                     "schema": runtime_contract.json_schema,
                 },
             }
-        elif self.supports_json_mode:
+        elif self.supports_json_mode or self.supports_structured_output:
             response_format = {"type": "json_object"}
             if runtime_contract is not None:
                 effective_prompt += json_mode_contract_suffix(runtime_contract)
