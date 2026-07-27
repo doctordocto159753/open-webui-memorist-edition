@@ -125,21 +125,15 @@ jobs:
             ${{ runner.temp }}/graph-results.xml
 
   package-release:
-    name: Package, Production Frontend, and Lifecycle
+    name: Package and Lifecycle
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           clean: true
           persist-credentials: false
           show-progress: false
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: package-lock.json
 
       - name: Require Docker, Compose, and PowerShell once
         run: |
@@ -181,13 +175,7 @@ jobs:
           $result = Invoke-Pester -Configuration $configuration
           if ($result.FailedCount -gt 0) { exit 1 }
 
-      - name: Validate, build frontend, and assemble package once
-        env:
-          APP_BUILD_HASH: consolidated-${{ github.sha }}
-          NODE_OPTIONS: --max-old-space-size=8192
-          CYPRESS_INSTALL_BINARY: "0"
-          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
-          npm_config_onnxruntime_node_install_cuda: skip
+      - name: Validate and assemble package once
         run: bash .github/scripts/ci-package.sh
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
