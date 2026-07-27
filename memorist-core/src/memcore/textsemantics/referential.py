@@ -92,6 +92,70 @@ PRONOUN_TOKENS = frozenset({"اش", "شان", "آنها", "اینها", "ایش�
 # confidence label says not to trust them as strongly.
 AMBIGUOUS_MARKERS = frozenset({"that", "it", "this", "such", "they", "آن", "این"})
 
+# Closed-class words a determiner must never absorb. "that the API is slow" is a
+# complementiser followed by an article, not the referring expression
+# "that the" -- and a span that is not a constituent is worse than no span.
+# Enumerating nouns is impossible; enumerating function words is not.
+NON_HEAD_TOKENS = frozenset(
+    {
+        # English
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "was",
+        "were",
+        "we",
+        "i",
+        "you",
+        "he",
+        "she",
+        "and",
+        "or",
+        "but",
+        "of",
+        "to",
+        "in",
+        "on",
+        "at",
+        "for",
+        "with",
+        "as",
+        "if",
+        "should",
+        "would",
+        "will",
+        "can",
+        "may",
+        "must",
+        "do",
+        "does",
+        "did",
+        "not",
+        # Persian
+        "را",
+        "که",
+        "از",
+        "به",
+        "در",
+        "با",
+        "بر",
+        "یا",
+        "هم",
+        "تا",
+        "برای",
+        "روی",
+        "است",
+        "بود",
+        "شد",
+        "می",
+        "نمی",
+        "یه",
+        "یک",
+    }
+)
+
 SUBJECT_MATTER_KINDS = frozenset({ClauseKind.STATEMENT, ClauseKind.EXPLANATION})
 
 
@@ -134,10 +198,17 @@ class AntecedentCandidate:
 
 @dataclass(frozen=True)
 class ReferentialMarker:
-    """One context-dependent expression, with its unresolved candidates."""
+    """One context-dependent expression, with its unresolved candidates.
+
+    ``text`` is the normalized form, useful for comparison. ``evidence`` is the
+    exact raw slice, and is what a caller persists. Both are kept for the same
+    reason ``LexicalMatch`` keeps both: matching happens on normalized text, and
+    storing normalized text as evidence is precisely what this package forbids.
+    """
 
     marker_type: MarkerType
     text: str
+    evidence: str
     raw_start: int
     raw_end: int
     normalized_start: int | None
@@ -180,6 +251,7 @@ def detect_referential_markers(
             ReferentialMarker(
                 marker_type=marker_type,
                 text=text,
+                evidence=resolved.raw[raw_start:raw_end],
                 raw_start=raw_start,
                 raw_end=raw_end,
                 normalized_start=_normalized(resolved, raw_start, raw_end, 0),
@@ -192,7 +264,9 @@ def detect_referential_markers(
                 ),
                 antecedent_candidate_spans=antecedents,
                 confidence_label=_confidence(text, marker_type),
-                reason_codes=_reason_codes(marker_type, antecedents),
+                reason_codes=_reason_codes(
+                    marker_type, antecedents, truncated=_truncated(clauses, clause)
+                ),
             )
         )
     return tuple(markers), tuple(warnings)
@@ -262,7 +336,7 @@ def _extend(
         return None
     if following.key in CLAUSE_FINAL_VERBS or following.key in DEMONSTRATIVE_TOKENS:
         return None
-    if following.key in PRONOUN_TOKENS:
+    if following.key in PRONOUN_TOKENS or following.key in NON_HEAD_TOKENS:
         return None
     gap = resolved.text[head.end : following.start]
     if gap and not gap.isspace():
@@ -339,10 +413,28 @@ def _antecedents(
     return tuple(candidates)
 
 
+def _truncated(clauses: tuple[ClauseSpan, ...], clause: ClauseSpan) -> bool:
+    """Whether older subject-matter clauses were dropped from the candidates."""
+
+    available = sum(
+        1
+        for previous in clauses[: clause.index]
+        if previous.kind in SUBJECT_MATTER_KINDS and not previous.is_code
+    )
+    return available > MAX_ANTECEDENT_CANDIDATES
+
+
 def _confidence(text: str, marker_type: MarkerType) -> ReferentialConfidence:
-    if marker_type is MarkerType.DEMONSTRATIVE and text.strip() in AMBIGUOUS_MARKERS:
-        return ReferentialConfidence.MARKER_AMBIGUOUS
-    if marker_type is MarkerType.PRONOUN and text.strip() in AMBIGUOUS_MARKERS:
+    """How certain the marker is, judged on its head token.
+
+    Growing ``this`` onto a noun makes the *span* more informative; it does not
+    make ``this`` less ambiguous. Judging the head regardless of marker type
+    stops extension from quietly promoting a doubtful marker to a certain one.
+    """
+
+    _ = marker_type
+    head = text.strip().split(" ")[0] if text.strip() else ""
+    if head in AMBIGUOUS_MARKERS:
         return ReferentialConfidence.MARKER_AMBIGUOUS
     return ReferentialConfidence.MARKER_CERTAIN
 
@@ -350,6 +442,8 @@ def _confidence(text: str, marker_type: MarkerType) -> ReferentialConfidence:
 def _reason_codes(
     marker_type: MarkerType,
     antecedents: tuple[AntecedentCandidate, ...],
+    *,
+    truncated: bool = False,
 ) -> tuple[str, ...]:
     codes = [f"marker_{marker_type.value}"]
     if not antecedents:
@@ -358,6 +452,10 @@ def _reason_codes(
         codes.append("multiple_antecedent_candidates")
     else:
         codes.append("single_local_antecedent")
+    if truncated:
+        # Nearest-first plus a cap is a recency cut, and a silent cut looks
+        # like "these are all the options" to a resolver. Say that it is not.
+        codes.append("antecedent_candidates_truncated")
     codes.append("unresolved_by_contract")
     return tuple(codes)
 

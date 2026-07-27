@@ -25,6 +25,7 @@ representation in which:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -277,33 +278,69 @@ PARITY_TEXTS = [
 
 
 @pytest.mark.parametrize("text", PARITY_TEXTS)
-def test_semantic_result_is_identical_in_both_runtimes(text: str) -> None:
-    """One pure implementation means one answer, whichever runtime asks.
+def test_replay_of_the_same_text_is_byte_identical(text: str) -> None:
+    """Same input, same contract version, same bytes out.
 
-    Serialized rather than compared field by field, so a future field added to
-    the contract is covered by this test the day it is added.
+    This is a determinism check and nothing more -- both calls run the same
+    function in the same process. It is deliberately *not* named as a parity
+    test: comparing a pure function to itself can never detect Lite/Full drift,
+    and a test that looks like it does is worse than no test.
     """
 
     assert analyze_text(text).as_json() == analyze_text(text).as_json()
 
 
 @pytest.mark.parametrize("text", PARITY_TEXTS)
-def test_lite_and_full_jakobson_paths_see_the_same_clauses(text: str) -> None:
-    """Neither runtime carries its own segmentation of the same text."""
+def test_lite_and_full_deterministic_paths_agree_on_the_same_text(text: str) -> None:
+    """A real cross-runtime comparison: two code paths, two results, compared.
 
-    lite_sentences = canonical_sentence_items(
+    Lite goes through ``DeterministicJakobsonProvider``; Full goes through
+    ``PostgresMemoryWorkerPipeline._deterministic_jakobson_output``. These are
+    separate implementations, so the values below are independently produced and
+    the assertion can actually fail.
+    """
+
+    lite = canonical_sentence_items(
         DeterministicJakobsonProvider().analyze([_lite_unit(text)], text)
     )
     pipeline = object.__new__(PostgresMemoryWorkerPipeline)
-    full_sentences = canonical_sentence_items(
+    full = canonical_sentence_items(
         PostgresMemoryWorkerPipeline._deterministic_jakobson_output(pipeline, [_full_unit(text)])
     )
-    assert len(lite_sentences) == len(full_sentences)
 
-    shared = analyze_text(text)
-    assert [clause.text for clause in shared.clauses] == [
-        clause.text for clause in analyze_text(text).clauses
-    ]
+    assert len(lite) == len(full)
+    for lite_item, full_item in zip(lite, full, strict=True):
+        assert lite_item["text"] == full_item["text"]
+        assert lite_item["dominant_function"] == full_item["dominant_function"]
+        assert lite_item["secondary_functions"] == full_item["secondary_functions"]
+        assert lite_item["function_reason"] == full_item["function_reason"]
+        assert (
+            lite_item["six_factors"]["context_referent"]
+            == full_item["six_factors"]["context_referent"]
+        )
+        # The v2 delta on top of each runtime's own sentence text. Because the
+        # two texts came from two different code paths, an accidental second
+        # segmentation authority in either runtime shows up right here.
+        assert (
+            analyze_text(lite_item["text"]).as_json() == analyze_text(full_item["text"]).as_json()
+        )
+
+
+def test_no_runtime_branch_exists_inside_the_semantics_package() -> None:
+    """Drift is prevented structurally, not just observed to be absent.
+
+    A parity test can only sample inputs. This asserts the stronger property
+    that makes sampling unnecessary: the package has nowhere to branch on which
+    runtime is calling, because it never learns.
+    """
+
+    package = Path(analyze_text.__module__.replace(".", "/")).parent
+    root = Path(__file__).resolve().parents[1] / "src" / package
+    forbidden = ("runtime_profile", "canonical_store", "postgres", "sqlite", "Settings", "getenv")
+    for module in sorted(root.glob("*.py")):
+        source = module.read_text(encoding="utf-8")
+        for needle in forbidden:
+            assert needle not in source, f"{module.name} branches on runtime via {needle!r}"
 
 
 def test_contract_version_reaches_replay_metadata() -> None:

@@ -433,7 +433,7 @@ def _clause_ranges(
 
     cuts = sorted(
         [
-            *_punctuation_cuts(raw, sentence),
+            *_punctuation_cuts(raw, sentence, index, warnings),
             *_conjunction_cuts(raw, sentence, index, warnings),
         ],
         key=lambda cut: cut[0],
@@ -457,7 +457,12 @@ def _clause_ranges(
     return ranges
 
 
-def _punctuation_cuts(raw: str, sentence: SentenceSpan) -> list[tuple[int, str]]:
+def _punctuation_cuts(
+    raw: str,
+    sentence: SentenceSpan,
+    index_: TokenIndex,
+    warnings: list[str],
+) -> list[tuple[int, str]]:
     cuts: list[tuple[int, str]] = []
     for index in range(sentence.raw_start, sentence.raw_end):
         char = raw[index]
@@ -466,8 +471,37 @@ def _punctuation_cuts(raw: str, sentence: SentenceSpan) -> list[tuple[int, str]]
         elif char in CLAUSE_TERMINATORS:
             cuts.append((index + 1, "clause_terminator"))
         elif char == "\n":
-            cuts.append((index + 1, "line_break"))
+            cuts.append(_line_break_cut(sentence, index, index_, warnings))
     return cuts
+
+
+def _line_break_cut(
+    sentence: SentenceSpan,
+    index: int,
+    tokens: TokenIndex,
+    warnings: list[str],
+) -> tuple[int, str]:
+    """Classify a newline that falls *inside* a sentence.
+
+    A newline between two sentences is already a sentence boundary and never
+    reaches here. What reaches here is a soft wrap, and a soft wrap is not
+    evidence of a clause boundary -- "the pipeline runs on\\nFriday afternoons"
+    is one proposition split by a text editor, not two.
+
+    Splitting anyway is still useful, because a genuine list or a hard-wrapped
+    clause does break here. So the split is taken either way, and the same guard
+    the coordinating conjunctions use decides whether it is *verified*: a
+    clause-final verb before the break means the first fragment really did end.
+    Otherwise the boundary is reported as unverified and the fragment is left
+    ``UNKNOWN``, which keeps a half-sentence out of the antecedent candidates
+    where it would read as a proposition the writer never made.
+    """
+
+    preceding = tokens.in_raw_range(sentence.raw_start, index)
+    if preceding and preceding[-1].key in CLAUSE_FINAL_VERBS:
+        return index + 1, "line_break_after_verb"
+    warnings.append("line_break_split_unverified")
+    return index + 1, "line_break_unverified"
 
 
 def _colon_explains(raw: str, index: int, end: int) -> bool:
@@ -540,6 +574,11 @@ def _classify(
     if reason == "colon_explanation":
         return ClauseKind.EXPLANATION
     if not slice_text.strip():
+        return ClauseKind.UNKNOWN
+    if reason == "line_break_unverified":
+        # A fragment carved out of a soft wrap is not a proposition until
+        # something confirms the boundary. Leaving it UNKNOWN keeps it out of
+        # SUBJECT_MATTER_KINDS, so it is never offered as an antecedent.
         return ClauseKind.UNKNOWN
     return ClauseKind.STATEMENT
 

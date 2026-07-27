@@ -46,9 +46,18 @@ def test_python_string_round_trip_is_exact(text: str) -> None:
 
 @pytest.mark.parametrize("text", CORPUS)
 def test_json_round_trip_is_exact(text: str) -> None:
+    """Text and the semantics derived from it both survive a JSON hop.
+
+    Asserting only that `json` round-trips a string would be a test of the
+    standard library. What matters here is that a value carried through JSON
+    still analyzes to the same result, which is how it reaches storage.
+    """
+
     for ensure_ascii in (True, False):
         payload = json.dumps({"text": text}, ensure_ascii=ensure_ascii)
-        assert json.loads(payload)["text"] == text
+        restored = json.loads(payload)["text"]
+        assert restored == text
+        assert analyze_text(restored).as_json() == analyze_text(text).as_json()
 
 
 @pytest.mark.parametrize("text", CORPUS)
@@ -61,6 +70,8 @@ def test_sqlite_round_trip_is_exact(tmp_path: Path, text: str) -> None:
         stored = connection.execute("SELECT raw FROM evidence").fetchone()[0]
     assert stored == text
     assert raw_text_hash(stored) == raw_text_hash(text)
+    # Offsets computed before storage still address the same characters after.
+    assert analyze_text(stored).as_json() == analyze_text(text).as_json()
 
 
 @pytest.mark.skipif(
@@ -80,6 +91,7 @@ def test_postgres_round_trip_is_exact(text: str) -> None:
     assert row is not None
     assert row[0] == text
     assert raw_text_hash(row[0]) == raw_text_hash(text)
+    assert analyze_text(row[0]).as_json() == analyze_text(text).as_json()
 
 
 @pytest.mark.skipif(
@@ -103,9 +115,19 @@ def test_postgres_stores_semantic_result_json_without_loss() -> None:
 
 
 def test_mixed_rtl_ltr_round_trip_preserves_code_points() -> None:
+    """Bidirectional text keeps exact offsets through normalization.
+
+    `.raw == text` alone would be vacuous -- `raw` is the constructor argument.
+    The real property is that every normalized character still maps back to a
+    slice of the original, which is what makes evidence auditable.
+    """
+
     text = f"{MIXED} :: PostgreSQL 16"
-    assert list(text) == list(text.encode("utf-8").decode("utf-8"))
-    assert normalize_with_mapping(text).raw == text
+    mapped = normalize_with_mapping(text)
+    for index in range(len(mapped.text)):
+        start, end = mapped.raw_span(index, index + 1)
+        assert 0 <= start < end <= len(text)
+        assert mapped.raw_slice(index, index + 1) == text[start:end]
 
 
 def test_composed_and_decomposed_forms_both_round_trip() -> None:

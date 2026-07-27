@@ -177,7 +177,10 @@ def test_every_span_reconstructs_its_exact_raw_evidence(text: str) -> None:
         assert text[clause.raw_start : clause.raw_end] == clause.text
     for marker in result.referential_markers:
         assert marker.raw_end > marker.raw_start
-        assert text[marker.raw_start : marker.raw_end].strip()
+        # Exact equality, not merely "non-empty". `marker.text` is the
+        # normalized form; `marker.evidence` is what a caller persists, so it
+        # is held to the same standard as every other span in the contract.
+        assert text[marker.raw_start : marker.raw_end] == marker.evidence
     for candidate in (
         candidate
         for marker in result.referential_markers
@@ -349,14 +352,15 @@ def test_code_identifiers_are_not_treated_as_pronouns() -> None:
 
 
 def test_english_demonstratives_in_mixed_text_are_marked() -> None:
-    result = analyze_text("ما Docker داریم. This layer is slow.")
-    markers = [
-        marker
-        for marker in result.referential_markers
-        if "This" in marker.text or "this" in marker.text
-    ]
+    text = "ما Docker داریم. This Layer is slow."
+    result = analyze_text(text)
+    markers = [marker for marker in result.referential_markers if "this" in marker.text]
     assert markers
     assert markers[0].requires_context is True
+    # Normalization lowercases for comparison; the evidence keeps the original
+    # casing, which is why both fields exist.
+    assert markers[0].evidence.startswith("This")
+    assert text[markers[0].raw_start : markers[0].raw_end] == markers[0].evidence
 
 
 def test_ambiguous_english_markers_are_labelled_ambiguous() -> None:
@@ -546,3 +550,107 @@ def test_whole_text_analysis_does_not_scale_quadratically() -> None:
     # Linear would be ~8x. Quadratic would be ~64x. Anything under 24x is not
     # quadratic, whatever the machine is doing.
     assert scaled < baseline * 24, f"8x the input took {scaled / baseline:.1f}x the time"
+
+
+# --------------------------------------------------------------------------
+# Independent-review findings, pinned
+# --------------------------------------------------------------------------
+
+
+def test_soft_wrap_does_not_fabricate_a_proposition() -> None:
+    """A newline inside a sentence is a text editor, not a claim boundary.
+
+    Splitting "the pipeline runs on\\nFriday afternoons" into two statements
+    invents a proposition the writer never made, and worse, offers the fragment
+    as an antecedent. The split still happens -- hard-wrapped lists need it --
+    but it is reported unverified and left UNKNOWN so it cannot be mistaken for
+    subject matter.
+    """
+
+    text = "The deployment pipeline runs on\nFriday afternoons and it is slow.\nTell me about it."
+    result = analyze_text(text)
+
+    fragment = next(clause for clause in result.clauses if clause.text.startswith("Friday"))
+    assert fragment.boundary_reason == "line_break_unverified"
+    assert fragment.kind is ClauseKind.UNKNOWN
+    assert "line_break_split_unverified" in result.warnings
+
+    offered = {
+        candidate.clause_id
+        for marker in result.referential_markers
+        for candidate in marker.antecedent_candidate_spans
+    }
+    assert fragment.clause_id not in offered
+
+
+def test_verified_line_break_is_not_warned() -> None:
+    """A break after a clause-final verb is real, so it is taken as a statement."""
+
+    result = analyze_text("سیستم آماده است\nتیم منتظر است.")
+    assert any(clause.boundary_reason == "line_break_after_verb" for clause in result.clauses)
+    assert "line_break_split_unverified" not in result.warnings
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "درباره‌اش بعدا حرف بزنیم.",
+        "That TEAM works well.",
+        "این‌ مزیت خوب است.",
+        "Docker is fine. This Layer is slow.",
+    ],
+)
+def test_marker_evidence_is_the_exact_raw_slice(text: str) -> None:
+    """`text` is normalized; `evidence` is raw. Persisting `text` would be wrong.
+
+    ZWNJ and letter-case both make the normalized form differ from what the user
+    wrote, so a marker carrying only the normalized form cannot be stored as
+    evidence -- which is the one thing this package exists to prevent.
+    """
+
+    markers = analyze_text(text).referential_markers
+    assert markers
+    for marker in markers:
+        assert text[marker.raw_start : marker.raw_end] == marker.evidence
+
+
+def test_determiner_does_not_absorb_a_function_word() -> None:
+    """`that the API` is a complementizer plus an article, not a phrase.
+
+    Extending onto any non-verb would produce the span "that the", which is not
+    a constituent, and would additionally promote an ambiguous marker to a
+    certain one.
+    """
+
+    for text in ("I think that the API is slow.", "She said that we should ship."):
+        markers = [m for m in analyze_text(text).referential_markers if m.text.startswith("that")]
+        assert markers, text
+        for marker in markers:
+            assert marker.marker_type is MarkerType.DEMONSTRATIVE
+            assert marker.text == "that"
+            assert marker.confidence_label is ReferentialConfidence.MARKER_AMBIGUOUS
+
+
+def test_extending_a_determiner_never_upgrades_its_confidence() -> None:
+    """A longer span is more informative; it is not more certain."""
+
+    bare = analyze_text("Docker is fine. This is slow.").referential_markers
+    grown = analyze_text("Docker is fine. This layer is slow.").referential_markers
+    assert bare and grown
+    assert grown[0].marker_type is MarkerType.DEMONSTRATIVE_PHRASE
+    assert bare[0].confidence_label == grown[0].confidence_label
+
+
+def test_truncated_antecedent_list_says_that_it_is_truncated() -> None:
+    """Nearest-first plus a cap is a recency cut; a silent cut reads as 'all'."""
+
+    many = "یک. دو. سه. چهار. پنج. شش. هفت. حالا درباره اش صحبت کنیم."
+    marker = analyze_text(many).referential_markers[-1]
+    assert len(marker.antecedent_candidate_spans) == MAX_ANTECEDENT_CANDIDATES
+    assert "antecedent_candidates_truncated" in marker.reason_codes
+
+    few = "کوبونتو مزیت دارد. حالا درباره اش صحبت کنیم."
+    assert (
+        "antecedent_candidates_truncated"
+        not in analyze_text(few).referential_markers[-1].reason_codes
+    )

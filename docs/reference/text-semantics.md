@@ -158,7 +158,8 @@ This is **not** a parser. It is a small set of high-precision boundary rules:
 | Sentence terminator followed by whitespace | `sentence_start` |
 | `:` followed by whitespace | `colon_explanation` |
 | `;` / `؛` | `clause_terminator` |
-| Line break inside a sentence | `line_break` |
+| Line break after a clause-final verb | `line_break_after_verb` |
+| Line break inside a sentence, otherwise | `line_break_unverified` |
 | `اما`, `ولی`, `بنابراین`, `however`, `therefore` | `contrastive_connective` |
 | `و` / `and` after a clause-final verb | `coordinating_conjunction_after_verb` |
 | `و` / `and` after a comma | `coordinating_conjunction_after_comma` |
@@ -180,8 +181,17 @@ warning, never a wrong split. English `and` rarely follows a verb, so in
 practice it splits only after a comma; that under-splitting is visible in the
 warnings rather than hidden.
 
+A newline *inside* a sentence is a soft wrap, not evidence of a clause
+boundary: `the pipeline runs on\nFriday afternoons` is one proposition split by
+a text editor. The split is still taken, because hard-wrapped lists need it, but
+the same guard the conjunctions use decides whether it is verified. An
+unverified fragment is left `unknown` rather than `statement`, which keeps a
+half-sentence out of the antecedent candidates where it would read as a claim
+the writer never made.
+
 Ambiguity is reported, never resolved by guessing. Other warnings:
-`sentence_without_terminator`, `unclosed_code_fence`.
+`sentence_without_terminator`, `line_break_split_unverified`,
+`unclosed_code_fence`.
 
 ### Clause kinds
 
@@ -205,17 +215,28 @@ that could be what they point at:
 carries `حذف لایه WSL2.` among its `antecedent_candidate_spans`.
 
 A determiner is grown onto the noun it heads (`این مزیت`) but not onto a verb
-(`این هست`), which separates the two cases without a parser. `درباره اش`
-matches whether written with a space or a ZWNJ, because the normalization
-contract already treats ZWNJ as a boundary.
+(`این هست`) and not onto a function word — `that the API is slow` yields the
+marker `that`, not the non-constituent `that the`. Growing a determiner makes
+the span more informative; it does not make the determiner less ambiguous, so
+confidence is judged on the head token either way. `درباره اش` matches whether
+written with a space or a ZWNJ, because the normalization contract already
+treats ZWNJ as a boundary.
+
+Markers carry both forms: `text` is normalized (lowercased, ZWNJ folded) for
+comparison, and `evidence` is the exact raw slice, which is what a caller
+persists. Storing the normalized form as evidence is the one thing this package
+exists to prevent, so every span-bearing type keeps both.
 
 ### What this deliberately does not do
 
 - It never asserts **which** candidate is the referent.
 - It never reaches across messages.
 - It never creates a claim because a marker exists.
-- Candidates are ordered nearest-first and are **not** ranked — a rank would be
-  a resolution wearing a different name.
+- Candidates are ordered nearest-first and are **not** scored — a rank would be
+  a resolution wearing a different name. Nearest-first plus a cap of 5 is still
+  a recency cut, so a truncated list carries
+  `antecedent_candidates_truncated`; a silent cut would read as "these are all
+  the options".
 - Instruction clauses are never offered as antecedents.
 
 There is no field on the contract that can express a chosen referent, and a
