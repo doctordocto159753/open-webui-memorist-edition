@@ -180,7 +180,9 @@ def test_complements_expose_a_boolean_view_without_owning_it() -> None:
 def test_historical_modality_payloads_read_back_truthfully(
     modality: dict[str, object], expected: Polarity
 ) -> None:
-    assert read_modality_polarity(modality) is expected
+    assert (
+        read_modality_polarity(modality, allow_legacy_unstamped=True) is expected
+    )
 
 
 def test_domain_models_default_polarity_to_unknown() -> None:
@@ -267,7 +269,6 @@ def test_polarity_migration_is_additive_over_an_existing_database(tmp_path: Path
     connection.commit()
 
     apply_migrations(connection, _migrations_through(36, tmp_path))
-
     row = connection.execute(
         "SELECT confidence, polarity FROM memory_candidates WHERE candidate_uuid = ?",
         (CANDIDATE_UUID,),
