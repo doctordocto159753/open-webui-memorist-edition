@@ -20,6 +20,7 @@ from memcore.models import (
     GateDecisionValue,
     MemorySignalRouteStatus,
     MemorySignalRouteType,
+    Polarity,
     new_uuid,
     utc_now,
 )
@@ -264,6 +265,7 @@ def _record_structured_project_artifact(
             json.dumps(artifact.metadata, ensure_ascii=False, sort_keys=True),
             utc_now(),
             prompt_execution_uuid,
+            Polarity.UNKNOWN.value,
         ),
     )
     self.connection.execute(
