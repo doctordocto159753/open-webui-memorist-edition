@@ -119,7 +119,6 @@ def test_valid_resolved_reference_is_accepted() -> None:
 
     assert report.ok
     assert report.accepted_reference_indexes == (0,)
-    # Old callers remain compatible while the name now tells the truth.
     assert validate_semantic_analysis(raw, payload) == report
 
 
@@ -165,3 +164,15 @@ def test_resolver_uses_stored_polarity_not_text_diagnostics() -> None:
 
     assert "polarities_contradict(current_version.polarity, candidate.polarity)" in resolver
     assert "appears_contradictory(" not in resolver
+
+
+def test_structured_project_artifact_insert_binds_unknown_polarity() -> None:
+    root = Path(__file__).resolve().parents[1] / "src" / "memcore"
+    adapter = (
+        root / "memory_worker" / "postgres" / "gated_candidate_adapter.py"
+    ).read_text(encoding="utf-8")
+    artifact_block = adapter.split("def _record_structured_project_artifact", 1)[1].split(
+        "def _linguistic_complements", 1
+    )[0]
+
+    assert "Polarity.UNKNOWN.value" in artifact_block
