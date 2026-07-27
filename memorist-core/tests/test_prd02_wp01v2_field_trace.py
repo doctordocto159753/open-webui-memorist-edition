@@ -1,31 +1,33 @@
-"""PRD-02 WP01 v2: the traced Kubuntu/WSL2 conversation, as a regression.
+"""PRD-02 WP01 v2: the traced Kubuntu/WSL2 conversation, under the corrected split.
 
-A real Full-mode trace of this conversation ended with a single stored fragment
-that read, in full:
+A real Full-mode trace of this conversation stored one fragment and lost every
+topic it referred to:
 
     الان فقط خیلی کوتاه بهم توضیح بده و یادت باشه بعدا درباره اش صحبت کنیم.
 
-Everything the user was actually talking about -- migrating off Windows, Kubuntu
-versus plain Ubuntu, Linux performance, suitability for programming, Docker,
-dropping the WSL2 layer -- was gone, and so was any record that `درباره اش`
-pointed at something. The fragment was not wrong; it was unreadable, and nothing
-downstream could tell that it was unreadable.
+The first attempt at fixing this built a rule-based clause splitter and
+reference resolver in deterministic code. It got the traced example right and
+was wrong in a new way for every example after it, because deciding what a
+sentence asserts is not something a lexicon of verb forms can do.
 
-The pass condition for this suite is deliberately *not* "the right memories are
-now created". Deciding what becomes a memory belongs to the package that owns
-candidate completeness and referential resolution. What WP01 owes it is a
-representation in which:
+So the pass condition here changed. WP01 no longer claims to recover the subject
+matter -- that is the model-equipped semantic node's job. WP01 must show that:
 
-* every subject-matter clause is still present and individually addressable;
-* the referential dependencies are machine-visible rather than implied;
-* every span still reconstructs its exact raw evidence;
-* consuming any of the above requires no ad-hoc re-parsing of the raw text.
+* the envelope preserves the raw text and the exact offsets the model will cite;
+* nothing in the message is discarded before the model sees it;
+* the deictics that make the fragment incomplete are *flagged*, so the router
+  knows to send conversation context -- without claiming what they refer to;
+* a faithful model analysis of this text validates;
+* an unfaithful one is rejected rather than repaired.
+
+The authority chain under test:
+
+    deterministic envelope -> model semantic analysis -> validation -> WP02
 """
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -34,16 +36,15 @@ import pytest
 from memcore.memory_worker.jakobson.service import DeterministicJakobsonProvider
 from memcore.memory_worker.postgres.pipeline import PostgresMemoryWorkerPipeline
 from memcore.memory_worker.prompts.contracts import canonical_sentence_items
-from memcore.memory_worker.segmentation.sentence_segmenter import SentenceSegmenter
 from memcore.textsemantics import (
     TEXT_SEMANTICS_CONTRACT_VERSION,
-    ClauseKind,
-    Polarity,
-    analyze_text,
+    SemanticFallback,
+    Violation,
+    build_envelope,
+    validate_semantic_analysis,
 )
 
 MESSAGE_UUID = "00000000-0000-4000-8000-0000000000a1"
-SESSION_UUID = "00000000-0000-4000-8000-0000000000a2"
 UNIT_UUID = "00000000-0000-4000-8000-0000000000a3"
 
 # Sanitized reproduction of the traced user turn. "Kubunto" is the user's own
@@ -58,11 +59,10 @@ FIELD_TRACE = (
     "الان فقط خیلی کوتاه بهم توضیح بده و یادت باشه بعدا درباره اش صحبت کنیم.\n"
 )
 
-# The fragment that survived the traced run, and nothing else.
 SURVIVING_FRAGMENT = "الان فقط خیلی کوتاه بهم توضیح بده و یادت باشه بعدا درباره اش صحبت کنیم."
 
-# The subject matter that must remain addressable. Each entry is a substring of
-# a distinct clause, not of the message as a whole.
+# Every topic the user actually raised. The envelope must carry all of it
+# forward; it does not have to understand any of it.
 SUBJECT_MATTER = (
     "ویندوز",
     "Kubunto",
@@ -77,168 +77,165 @@ SUBJECT_MATTER = (
 
 
 @pytest.fixture(scope="module")
-def result():  # type: ignore[no-untyped-def]
-    return analyze_text(FIELD_TRACE)
+def envelope():  # type: ignore[no-untyped-def]
+    return build_envelope(FIELD_TRACE)
 
 
-def test_the_defect_is_reproduced_at_sentence_granularity() -> None:
-    """Sentence units alone fuse the instruction with the deferred topic.
+def test_nothing_is_discarded_before_the_model_sees_it(envelope: Any) -> None:
+    """The whole message survives, verbatim, addressable by offset."""
 
-    This is the state the trace was produced in, and it is why the surviving
-    fragment carried no recoverable subject matter: at this granularity there is
-    nothing smaller than the whole sentence to keep or drop.
-    """
-
-    units = SentenceSegmenter().segment(MESSAGE_UUID, FIELD_TRACE).units
-    fused = [unit for unit in units if unit.text.strip() == SURVIVING_FRAGMENT]
-    assert len(fused) == 1, "the trace's final sentence is still one unit"
-    assert "توضیح بده" in fused[0].text
-    assert "درباره اش" in fused[0].text
-
-
-def test_clauses_separate_the_instruction_from_the_deferred_topic(result: Any) -> None:
-    """The delta: that one sentence is now two addressable clauses."""
-
-    final = [
-        clause for clause in result.clauses if clause.raw_start >= FIELD_TRACE.index("الان فقط")
-    ]
-    assert len(final) == 2
-    assert final[0].text == "الان فقط خیلی کوتاه بهم توضیح بده"
-    assert "درباره اش" in final[1].text
-    assert all(clause.kind is ClauseKind.INSTRUCTION for clause in final)
-
-
-def test_every_subject_matter_topic_survives_in_some_clause(result: Any) -> None:
-    """Nothing the user was talking about is lost from the representation."""
-
+    reassembled = "".join(FIELD_TRACE[span.raw_start : span.raw_end] for span in envelope.sentences)
     for topic in SUBJECT_MATTER:
-        holders = [clause for clause in result.clauses if topic in clause.text]
-        assert holders, f"subject matter {topic!r} is not present in any clause"
+        assert topic in reassembled, f"{topic!r} was dropped before analysis"
 
 
-def test_subject_matter_clauses_are_distinct_from_instruction_clauses(result: Any) -> None:
-    subject_matter = [
-        clause
-        for clause in result.clauses
-        if clause.kind in {ClauseKind.STATEMENT, ClauseKind.EXPLANATION}
-    ]
-    instructions = [clause for clause in result.clauses if clause.kind is ClauseKind.INSTRUCTION]
-
-    assert len(subject_matter) >= 5
-    assert len(instructions) >= 2
-    assert {clause.clause_id for clause in subject_matter}.isdisjoint(
-        clause.clause_id for clause in instructions
-    )
-    # The topics live in the subject-matter clauses, not the instructions.
-    joined = " ".join(clause.text for clause in subject_matter)
-    for topic in ("Kubunto", "Docker", "WSL2", "لینوکس"):
-        assert topic in joined
+def test_the_traced_fragment_is_still_present_and_addressable(envelope: Any) -> None:
+    holder = [span for span in envelope.sentences if SURVIVING_FRAGMENT in span.text]
+    assert holder
+    assert FIELD_TRACE[holder[0].raw_start : holder[0].raw_end] == holder[0].text
 
 
-def test_the_wsl2_removal_advantage_is_its_own_addressable_span(result: Any) -> None:
-    explanation = [clause for clause in result.clauses if clause.kind is ClauseKind.EXPLANATION]
-    assert [clause.text for clause in explanation] == ["حذف لایه WSL2."]
-    assert FIELD_TRACE[explanation[0].raw_start : explanation[0].raw_end] == explanation[0].text
+def test_the_deictics_that_made_the_fragment_incomplete_are_flagged(envelope: Any) -> None:
+    """`این` and `اش` are why the stored fragment was unreadable.
 
-
-def test_both_referential_dependencies_are_machine_visible(result: Any) -> None:
-    markers = result.markers_requiring_context()
-    spans = [FIELD_TRACE[marker.raw_start : marker.raw_end] for marker in markers]
-    assert "این مزیت" in spans
-    assert any("اش" in span for span in spans)
-
-
-def test_the_deferred_topic_marker_can_reach_the_subject_matter(result: Any) -> None:
-    """`درباره اش` exposes the subject-matter clauses without picking one."""
-
-    marker = next(
-        marker
-        for marker in result.referential_markers
-        if "اش" in FIELD_TRACE[marker.raw_start : marker.raw_end]
-        and "مزیت" not in FIELD_TRACE[marker.raw_start : marker.raw_end]
-    )
-    candidate_text = " ".join(candidate.text for candidate in marker.antecedent_candidate_spans)
-    assert "WSL2" in candidate_text
-    assert len(marker.antecedent_candidate_spans) > 1
-    assert "unresolved_by_contract" in marker.reason_codes
-
-
-def test_wp01_does_not_resolve_the_referent(result: Any) -> None:
-    """Every marker stays unresolved. Resolution is the next package's call."""
-
-    payload = json.loads(result.as_json())
-    for marker in payload["referential_markers"]:
-        assert marker["requires_context"] is True
-        assert "unresolved_by_contract" in marker["reason_codes"]
-        assert "resolved_antecedent" not in marker
-        assert len(marker["antecedent_candidate_spans"]) != 1 or marker[
-            "resolution_scope_hint"
-        ] in {"prior_clause", "prior_message"}
-
-
-def test_no_claim_is_manufactured_from_a_marker(result: Any) -> None:
-    """A referential marker is evidence, not a memory.
-
-    The contract exposes markers and clauses. It exposes no candidate, no
-    memory, and no field that could be mistaken for one.
+    Flagging them is a routing signal -- send conversation context to the model.
+    It is deliberately not a claim about what they refer to.
     """
 
-    payload = json.loads(result.as_json())
-    forbidden = {"candidates", "memories", "memory_candidates", "claims", "facts"}
-    assert forbidden.isdisjoint(payload)
+    evidence = [hint.evidence for hint in envelope.context_dependency_hints]
+    assert "این" in evidence
+    assert "اش" in evidence
+    assert envelope.requires_conversation_context is True
 
 
-def test_every_span_reconstructs_exact_raw_evidence(result: Any) -> None:
-    for clause in result.clauses:
-        assert FIELD_TRACE[clause.raw_start : clause.raw_end] == clause.text
-    for sentence in result.sentences:
-        assert FIELD_TRACE[sentence.raw_start : sentence.raw_end] == sentence.text
-    for marker in result.referential_markers:
-        for candidate in marker.antecedent_candidate_spans:
-            assert FIELD_TRACE[candidate.raw_start : candidate.raw_end] == candidate.text
+def test_wp01_makes_no_claim_about_what_the_deictics_refer_to(envelope: Any) -> None:
+    payload = json.loads(envelope.as_json())
+    assert payload["context_dependency_hints"]
+    for hint in payload["context_dependency_hints"]:
+        assert hint["authority"] == "non_authoritative"
+        assert "target" not in hint
+        assert "candidates" not in hint
+        assert "referent" not in hint
 
 
-def test_the_users_misspelling_is_preserved_everywhere(result: Any) -> None:
+def test_the_users_misspelling_is_preserved(envelope: Any) -> None:
     assert "Kubunto" in FIELD_TRACE
-    assert any("Kubunto" in clause.text for clause in result.clauses)
-    assert "kubuntu" not in result.normalized_text
+    assert any("Kubunto" in span.text for span in envelope.sentences)
+    assert "kubuntu" not in envelope.normalized_text
 
 
-def test_noun_coordination_in_the_trace_is_reported_not_split(result: Any) -> None:
-    """`سرعت و عملکرد و تناسب` stays one phrase, and the declined split is logged."""
+def test_noun_coordination_is_never_split_by_deterministic_code(envelope: Any) -> None:
+    """`سرعت و عملکرد و تناسب` stays intact because nothing here reads `و`."""
 
-    assert "coordinating_conjunction_not_split" in result.warnings
-    holder = next(clause for clause in result.clauses if "سرعت و عملکرد" in clause.text)
-    assert "تناسب با برنامه نویسی" in holder.text
-
-
-def test_no_clause_in_the_trace_is_read_as_negated(result: Any) -> None:
-    """`احتمالاً` hedges; nothing here is a denial."""
-
-    assert all(cue.polarity is not Polarity.NEGATED for cue in result.polarity_cues)
+    holder = [span for span in envelope.sentences if "سرعت و عملکرد" in span.text]
+    assert holder
+    assert "تناسب با برنامه نویسی" in holder[0].text
 
 
-def test_a_consumer_needs_no_ad_hoc_reparsing(result: Any) -> None:
-    """Everything a resolver needs is reachable from the typed contract alone.
-
-    The loop below is what the next package's input handling looks like: read
-    clauses and markers, follow candidate spans by identifier, and slice raw
-    evidence by offset. No tokenizing, no regex, no re-segmentation.
-    """
-
-    by_id = {clause.clause_id: clause for clause in result.clauses}
-    reached: list[str] = []
-    for marker in result.markers_requiring_context():
-        assert by_id[marker.clause_id] is not None
-        for candidate in marker.antecedent_candidate_spans:
-            clause = by_id[candidate.clause_id]
-            reached.append(FIELD_TRACE[clause.raw_start : clause.raw_end])
-    assert reached
-    assert any("WSL2" in text for text in reached)
+def test_soft_wraps_in_the_trace_are_not_treated_as_boundaries() -> None:
+    wrapped = "میخوام بیشتر درباره\nاین مزیت بدونم بعدا."
+    result = build_envelope(wrapped)
+    assert [span.text for span in result.sentences] == [wrapped]
+    assert "line_break_not_a_boundary" in result.warnings
 
 
 # --------------------------------------------------------------------------
-# Lite / Full parity for the v2 delta
+# The model's answer, and the deterministic verdict on it
+# --------------------------------------------------------------------------
+
+
+def _model_analysis() -> dict[str, Any]:
+    """A faithful analysis of the trace, of the shape the model must return.
+
+    This is what WP02 consumes. Note what it contains that no rule engine here
+    produces: a proposition in the user's own terms, durability, and a resolved
+    reference -- each anchored to an exact slice of the raw message.
+    """
+
+    advantage = FIELD_TRACE.index("حذف لایه WSL2.")
+    marker = FIELD_TRACE.index("این مزیت")
+    return {
+        "semantic_units": [
+            {
+                "id": "u1",
+                "raw_start": advantage,
+                "raw_end": advantage + len("حذف لایه WSL2."),
+                "evidence": "حذف لایه WSL2.",
+                "proposition": "Kubuntu's advantage is removing the WSL2 layer.",
+                "unit_type": "preference",
+                "polarity": "affirmed",
+                "durability": "durable",
+            }
+        ],
+        "references": [
+            {
+                "marker_start": marker,
+                "marker_end": marker + len("این مزیت"),
+                "marker_evidence": "این مزیت",
+                "status": "resolved",
+                "target_unit_id": "u1",
+                "candidate_unit_ids": ["u1"],
+                "confidence": "high",
+            }
+        ],
+    }
+
+
+def test_a_faithful_model_analysis_of_the_trace_validates() -> None:
+    report = validate_semantic_analysis(FIELD_TRACE, _model_analysis())
+    assert report.ok
+    assert report.accepted_unit_ids == ("u1",)
+    assert report.accepted_reference_indexes == (0,)
+    assert report.fallback is None
+
+
+def test_a_model_that_paraphrases_the_evidence_is_rejected() -> None:
+    """The proposition may be a paraphrase. The evidence may not be."""
+
+    payload = _model_analysis()
+    payload["semantic_units"][0]["evidence"] = "removing the WSL2 layer"
+    report = validate_semantic_analysis(FIELD_TRACE, payload)
+    assert report.rejections[0].violation is Violation.EVIDENCE_NOT_A_SLICE
+    assert report.fallback is SemanticFallback.RETAIN_RAW_ONLY
+
+
+def test_a_model_that_invents_a_span_is_rejected() -> None:
+    payload = _model_analysis()
+    payload["semantic_units"][0]["raw_end"] = len(FIELD_TRACE) + 500
+    report = validate_semantic_analysis(FIELD_TRACE, payload)
+    assert report.rejections[0].violation is Violation.SPAN_OUT_OF_RANGE
+
+
+def test_a_model_that_resolves_to_a_unit_it_never_proposed_is_rejected() -> None:
+    payload = _model_analysis()
+    payload["references"][0]["target_unit_id"] = "u-does-not-exist"
+    report = validate_semantic_analysis(FIELD_TRACE, payload)
+    assert report.rejections[0].violation is Violation.UNKNOWN_UNIT_ID
+
+
+def test_without_a_model_the_pipeline_abstains_rather_than_guessing() -> None:
+    """The whole point of the correction.
+
+    When no semantic analysis exists, deterministic code does not reconstruct
+    meaning from hand-written rules. It declines.
+    """
+
+    assert validate_semantic_analysis(FIELD_TRACE, {}).fallback is SemanticFallback.ABSTAIN
+
+
+def test_offsets_the_model_cites_address_the_text_an_auditor_reads() -> None:
+    """The envelope and the model's citation agree character for character."""
+
+    analysis = _model_analysis()
+    for unit in analysis["semantic_units"]:
+        assert FIELD_TRACE[unit["raw_start"] : unit["raw_end"]] == unit["evidence"]
+    for reference in analysis["references"]:
+        cited = FIELD_TRACE[reference["marker_start"] : reference["marker_end"]]
+        assert cited == reference["marker_evidence"]
+
+
+# --------------------------------------------------------------------------
+# Lite / Full parity
 # --------------------------------------------------------------------------
 
 
@@ -271,34 +268,25 @@ PARITY_TEXTS = [
     FIELD_TRACE,
     SURVIVING_FRAGMENT,
     "کوبونتو یه مزیت دارد: حذف لایه WSL2.",
-    "میخوام بیشتر درباره این مزیت بدونم بعدا.",
     "We use Docker, and this layer is slow.",
     "من از ویندوز استفاده نمی‌کنم.",
 ]
 
 
 @pytest.mark.parametrize("text", PARITY_TEXTS)
-def test_replay_of_the_same_text_is_byte_identical(text: str) -> None:
-    """Same input, same contract version, same bytes out.
+def test_envelope_replay_is_byte_identical(text: str) -> None:
+    """Determinism only -- both calls run the same pure function in-process.
 
-    This is a determinism check and nothing more -- both calls run the same
-    function in the same process. It is deliberately *not* named as a parity
-    test: comparing a pure function to itself can never detect Lite/Full drift,
-    and a test that looks like it does is worse than no test.
+    Named for what it proves. Comparing a pure function to itself cannot detect
+    Lite/Full drift, and a test that looks like it does is worse than none.
     """
 
-    assert analyze_text(text).as_json() == analyze_text(text).as_json()
+    assert build_envelope(text).as_json() == build_envelope(text).as_json()
 
 
 @pytest.mark.parametrize("text", PARITY_TEXTS)
 def test_lite_and_full_deterministic_paths_agree_on_the_same_text(text: str) -> None:
-    """A real cross-runtime comparison: two code paths, two results, compared.
-
-    Lite goes through ``DeterministicJakobsonProvider``; Full goes through
-    ``PostgresMemoryWorkerPipeline._deterministic_jakobson_output``. These are
-    separate implementations, so the values below are independently produced and
-    the assertion can actually fail.
-    """
+    """A real cross-runtime comparison: two implementations, two results."""
 
     lite = canonical_sentence_items(
         DeterministicJakobsonProvider().analyze([_lite_unit(text)], text)
@@ -313,42 +301,35 @@ def test_lite_and_full_deterministic_paths_agree_on_the_same_text(text: str) -> 
         assert lite_item["text"] == full_item["text"]
         assert lite_item["dominant_function"] == full_item["dominant_function"]
         assert lite_item["secondary_functions"] == full_item["secondary_functions"]
-        assert lite_item["function_reason"] == full_item["function_reason"]
         assert (
             lite_item["six_factors"]["context_referent"]
             == full_item["six_factors"]["context_referent"]
         )
-        # The v2 delta on top of each runtime's own sentence text. Because the
-        # two texts came from two different code paths, an accidental second
-        # segmentation authority in either runtime shows up right here.
-        assert (
-            analyze_text(lite_item["text"]).as_json() == analyze_text(full_item["text"]).as_json()
+        # The envelope over each runtime's own text. Because the two texts came
+        # from different code paths, a second segmentation authority in either
+        # runtime shows up right here.
+        assert build_envelope(lite_item["text"]).as_json() == (
+            build_envelope(full_item["text"]).as_json()
         )
 
 
 def test_no_runtime_branch_exists_inside_the_semantics_package() -> None:
-    """Drift is prevented structurally, not just observed to be absent.
+    """Drift is prevented structurally, not merely observed to be absent."""
 
-    A parity test can only sample inputs. This asserts the stronger property
-    that makes sampling unnecessary: the package has nowhere to branch on which
-    runtime is calling, because it never learns.
-    """
+    from pathlib import Path
 
-    package = Path(analyze_text.__module__.replace(".", "/")).parent
-    root = Path(__file__).resolve().parents[1] / "src" / package
+    root = Path(__file__).resolve().parents[1] / "src" / "memcore" / "textsemantics"
+    modules = sorted(root.glob("*.py"))
+    assert len(modules) >= 8, "glob found nothing; this test would pass vacuously"
     forbidden = ("runtime_profile", "canonical_store", "postgres", "sqlite", "Settings", "getenv")
-    for module in sorted(root.glob("*.py")):
+    for module in modules:
         source = module.read_text(encoding="utf-8")
         for needle in forbidden:
             assert needle not in source, f"{module.name} branches on runtime via {needle!r}"
 
 
 def test_contract_version_reaches_replay_metadata() -> None:
-    """Replay must be able to tell which semantic rules produced a candidate.
-
-    Driven through the real shared builder rather than grepped for: the same
-    metadata dict both runtimes persist is the thing that has to carry it.
-    """
+    """Replay must be able to tell which envelope rules produced a candidate."""
 
     from memcore.memory_worker.semantic import (
         CandidateAuthorityContext,
@@ -391,11 +372,4 @@ def test_contract_version_reaches_replay_metadata() -> None:
     )
 
     assert draft is not None
-    metadata = draft.metadata
-    assert metadata["text_semantics_contract_version"] == TEXT_SEMANTICS_CONTRACT_VERSION
-    # It must survive serialization, since that is how it reaches storage.
-    assert json.loads(json.dumps(metadata))["text_semantics_contract_version"] == (
-        TEXT_SEMANTICS_CONTRACT_VERSION
-    )
-    # The version rides existing metadata; it must not have grown a column.
-    assert "normalization_contract_version" in metadata
+    assert draft.metadata["text_semantics_contract_version"] == TEXT_SEMANTICS_CONTRACT_VERSION

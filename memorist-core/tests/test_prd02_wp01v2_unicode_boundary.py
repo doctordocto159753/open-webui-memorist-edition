@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 from memcore.textsemantics import (
-    analyze_text,
+    build_envelope,
     normalize_text,
     normalize_with_mapping,
     raw_text_hash,
@@ -57,7 +57,7 @@ def test_json_round_trip_is_exact(text: str) -> None:
         payload = json.dumps({"text": text}, ensure_ascii=ensure_ascii)
         restored = json.loads(payload)["text"]
         assert restored == text
-        assert analyze_text(restored).as_json() == analyze_text(text).as_json()
+        assert build_envelope(restored).as_json() == build_envelope(text).as_json()
 
 
 @pytest.mark.parametrize("text", CORPUS)
@@ -71,7 +71,7 @@ def test_sqlite_round_trip_is_exact(tmp_path: Path, text: str) -> None:
     assert stored == text
     assert raw_text_hash(stored) == raw_text_hash(text)
     # Offsets computed before storage still address the same characters after.
-    assert analyze_text(stored).as_json() == analyze_text(text).as_json()
+    assert build_envelope(stored).as_json() == build_envelope(text).as_json()
 
 
 @pytest.mark.skipif(
@@ -91,7 +91,7 @@ def test_postgres_round_trip_is_exact(text: str) -> None:
     assert row is not None
     assert row[0] == text
     assert raw_text_hash(row[0]) == raw_text_hash(text)
-    assert analyze_text(row[0]).as_json() == analyze_text(text).as_json()
+    assert build_envelope(row[0]).as_json() == build_envelope(text).as_json()
 
 
 @pytest.mark.skipif(
@@ -103,7 +103,7 @@ def test_postgres_stores_semantic_result_json_without_loss() -> None:
 
     import psycopg
 
-    result = analyze_text(f"{PERSIAN}\n{DEFERRED}")
+    result = build_envelope(f"{PERSIAN}\n{DEFERRED}")
     with (
         psycopg.connect(os.environ["MEMORIST_POSTGRES_DSN"]) as connection,
         connection.cursor() as cursor,
@@ -217,7 +217,7 @@ def test_runtime_does_not_repair_mojibake() -> None:
     mojibake = PERSIAN.encode("utf-8").decode("cp1252", errors="replace")
     assert mojibake != PERSIAN
 
-    result = analyze_text(mojibake)
+    result = build_envelope(mojibake)
     assert PERSIAN not in result.normalized_text
     assert result.raw_text_hash == raw_text_hash(mojibake)
     assert result.raw_text_hash != raw_text_hash(PERSIAN)
@@ -234,8 +234,8 @@ def test_normalization_never_spell_corrects() -> None:
     """
 
     raw = "میخوام از ویندوز مهاجرت کنم به سیستم عامل Kubunto یا اوبونتو عادی."
-    result = analyze_text(raw)
+    result = build_envelope(raw)
     assert "kubunto" in result.normalized_text
     assert "kubuntu" not in result.normalized_text
-    for clause in result.clauses:
-        assert raw[clause.raw_start : clause.raw_end] == clause.text
+    for span in result.sentences:
+        assert raw[span.raw_start : span.raw_end] == span.text

@@ -1,17 +1,29 @@
-"""The one typed view of a piece of text that downstream packages consume.
+"""The deterministic envelope a model's semantic analysis is validated against.
 
-Everything here is derived from immutable raw text and nothing here is
-authoritative on its own. Two guarantees make it safe to build on:
+This is a **technical** container, not an analysis. It records what can be
+established without interpreting language:
 
-* every span-bearing record carries the exact raw ``[start, end)`` that produced
-  it, so a consumer can persist auditable evidence without ever storing
-  normalized text as evidence;
-* the same raw text under the same ``contract_version`` produces a
-  byte-equivalent result, because every function reached from here is pure.
+* exact, immutable raw text and its hash;
+* the normalized comparison view and a bidirectional offset map;
+* fenced-code ranges, which must survive byte for byte;
+* spans delimited by the writer's own punctuation;
+* tokens and written identifiers;
+* which scripts are present;
+* where closed-class deictics occur -- a routing hint, stamped
+  ``non_authoritative``.
 
-The result is a snapshot of what deterministic rules can see, including what
-they could not decide -- ``warnings`` and unresolved referential markers are
-part of the contract, not omissions from it.
+It deliberately carries **no** propositions, clause kinds, instruction/statement
+labels, referents, or antecedent candidates. An earlier version carried all of
+them, produced by hand-written lexicons of verb forms and conjunctions, and the
+result was a small rule-based parser masquerading as deterministic
+infrastructure: each new example needed another lexicon entry, and each entry
+was a new way to be confidently wrong.
+
+Those questions belong to the model-equipped semantic node, whose answer is then
+checked against this envelope by ``textsemantics.validation``. The division:
+
+    model              -> what does the text say?
+    deterministic code -> is that answer admissible, and what may we store?
 """
 
 from __future__ import annotations
@@ -28,28 +40,22 @@ from memcore.textsemantics.contract import (
     NormalizationContract,
 )
 from memcore.textsemantics.normalize import NormalizedText, normalize_with_mapping
-from memcore.textsemantics.polarity import (
-    POLARITY_CONTRACT_VERSION,
-    Polarity,
-    extract_polarity,
-)
 from memcore.textsemantics.referential import (
     REFERENTIAL_CONTRACT_VERSION,
-    ReferentialMarker,
-    detect_referential_markers,
+    ContextDependencyHint,
+    detect_context_dependency,
+    requires_conversation_context,
 )
 from memcore.textsemantics.segmentation import (
     SEGMENTATION_CONTRACT_VERSION,
-    ClauseSpan,
     SentenceSpan,
-    TokenIndex,
     language_hints,
-    segment_clauses,
     segment_sentences,
 )
 from memcore.textsemantics.tokens import Token, identifier_phrases, tokenize
+from memcore.textsemantics.validation import VALIDATION_CONTRACT_VERSION
 
-TEXT_SEMANTICS_CONTRACT_VERSION = "memorist.text.semantics.v2"
+TEXT_SEMANTICS_CONTRACT_VERSION = "memorist.text.envelope.v3"
 
 
 class PhraseKind(StrEnum):
@@ -74,45 +80,34 @@ class PhraseSpan:
 
 
 @dataclass(frozen=True)
-class PolarityCue:
-    """Clause-level polarity with the raw evidence that decided it."""
-
-    clause_id: str
-    clause_index: int
-    polarity: Polarity
-    marker: str | None
-    evidence: str | None
-    raw_start: int | None
-    raw_end: int | None
-
-
-@dataclass(frozen=True)
-class TextSemanticsResult:
-    """One deterministic semantic view of one piece of raw text."""
+class TextEnvelope:
+    """Everything deterministic code can say about one piece of raw text."""
 
     contract_version: str
     raw_text_hash: str
     language_hints: tuple[str, ...]
     blocks: tuple[TextBlock, ...]
     sentences: tuple[SentenceSpan, ...]
-    clauses: tuple[ClauseSpan, ...]
     normalized_text: str
     tokens: tuple[Token, ...]
     phrases: tuple[PhraseSpan, ...]
-    polarity_cues: tuple[PolarityCue, ...]
-    referential_markers: tuple[ReferentialMarker, ...]
+    context_dependency_hints: tuple[ContextDependencyHint, ...]
     warnings: tuple[str, ...]
     normalization_contract_version: str
     normalization_contract_fingerprint: str
     segmentation_contract_version: str = SEGMENTATION_CONTRACT_VERSION
-    polarity_contract_version: str = POLARITY_CONTRACT_VERSION
     referential_contract_version: str = REFERENTIAL_CONTRACT_VERSION
+    validation_contract_version: str = VALIDATION_CONTRACT_VERSION
 
-    def clause(self, clause_id: str) -> ClauseSpan | None:
-        return next((item for item in self.clauses if item.clause_id == clause_id), None)
+    @property
+    def requires_conversation_context(self) -> bool:
+        """Whether the model should receive a wider context window.
 
-    def markers_requiring_context(self) -> tuple[ReferentialMarker, ...]:
-        return tuple(item for item in self.referential_markers if item.requires_context)
+        The only intended use of the deictic hints, and it is about how much
+        history to send -- not about what the text means.
+        """
+
+        return requires_conversation_context(self.context_dependency_hints)
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-serializable view.
@@ -129,8 +124,9 @@ class TextSemanticsResult:
             "normalization_contract_version": self.normalization_contract_version,
             "normalization_contract_fingerprint": self.normalization_contract_fingerprint,
             "segmentation_contract_version": self.segmentation_contract_version,
-            "polarity_contract_version": self.polarity_contract_version,
             "referential_contract_version": self.referential_contract_version,
+            "validation_contract_version": self.validation_contract_version,
+            "requires_conversation_context": self.requires_conversation_context,
             "blocks": [
                 {"kind": str(block.kind.value), "start": block.start, "end": block.end}
                 for block in self.blocks
@@ -145,25 +141,10 @@ class TextSemanticsResult:
                     "normalized_end": sentence.normalized_end,
                     "block_index": sentence.block_index,
                     "is_code": sentence.is_code,
+                    "boundary_reason": sentence.boundary_reason,
                     "language_hints": list(sentence.language_hints),
                 }
                 for sentence in self.sentences
-            ],
-            "clauses": [
-                {
-                    "clause_id": clause.clause_id,
-                    "index": clause.index,
-                    "sentence_index": clause.sentence_index,
-                    "block_index": clause.block_index,
-                    "kind": str(clause.kind.value),
-                    "raw_start": clause.raw_start,
-                    "raw_end": clause.raw_end,
-                    "normalized_start": clause.normalized_start,
-                    "normalized_end": clause.normalized_end,
-                    "boundary_reason": clause.boundary_reason,
-                    "is_code": clause.is_code,
-                }
-                for clause in self.clauses
             ],
             "tokens": [
                 {
@@ -188,42 +169,13 @@ class TextSemanticsResult:
                 }
                 for phrase in self.phrases
             ],
-            "polarity_cues": [
+            "context_dependency_hints": [
                 {
-                    "clause_id": cue.clause_id,
-                    "clause_index": cue.clause_index,
-                    "polarity": str(cue.polarity.value),
-                    "raw_start": cue.raw_start,
-                    "raw_end": cue.raw_end,
+                    "raw_start": hint.raw_start,
+                    "raw_end": hint.raw_end,
+                    "authority": hint.authority,
                 }
-                for cue in self.polarity_cues
-            ],
-            "referential_markers": [
-                {
-                    "marker_type": str(marker.marker_type.value),
-                    "raw_start": marker.raw_start,
-                    "raw_end": marker.raw_end,
-                    "normalized_start": marker.normalized_start,
-                    "normalized_end": marker.normalized_end,
-                    "clause_id": marker.clause_id,
-                    "clause_index": marker.clause_index,
-                    "requires_context": marker.requires_context,
-                    "resolution_scope_hint": str(marker.resolution_scope_hint.value),
-                    "confidence_label": str(marker.confidence_label.value),
-                    "reason_codes": list(marker.reason_codes),
-                    "antecedent_candidate_spans": [
-                        {
-                            "clause_id": candidate.clause_id,
-                            "clause_index": candidate.clause_index,
-                            "raw_start": candidate.raw_start,
-                            "raw_end": candidate.raw_end,
-                            "distance_clauses": candidate.distance_clauses,
-                            "reason_codes": list(candidate.reason_codes),
-                        }
-                        for candidate in marker.antecedent_candidate_spans
-                    ],
-                }
-                for marker in self.referential_markers
+                for hint in self.context_dependency_hints
             ],
             "warnings": list(self.warnings),
         }
@@ -238,38 +190,30 @@ def raw_text_hash(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def analyze_text(
+def build_envelope(
     raw: str,
     contract: NormalizationContract = DEFAULT_NORMALIZATION_CONTRACT,
-) -> TextSemanticsResult:
-    """Build the full semantic view of ``raw``.
+) -> TextEnvelope:
+    """Build the deterministic envelope for ``raw``.
 
-    Pure and offline by construction: no I/O, no configuration lookup, no
-    model call. Lite and Full both reach this function, which is what keeps the
-    two runtimes from drifting apart on what a sentence, a clause, or a
-    negation is.
+    Pure and offline by construction: no I/O, no configuration lookup, no model
+    call. Lite and Full both reach this function, which is what keeps the two
+    runtimes from disagreeing about offsets, tokens, or code ranges.
     """
 
     normalized = normalize_with_mapping(raw, contract)
-    sentences, sentence_warnings = segment_sentences(raw, normalized, contract)
-    clauses, clause_warnings = segment_clauses(raw, sentences, normalized, contract)
-    markers, marker_warnings = detect_referential_markers(raw, clauses, normalized, contract)
-    warnings = _dedupe(
-        (*sentence_warnings, *clause_warnings, *marker_warnings, *_block_warnings(raw))
-    )
-    return TextSemanticsResult(
+    sentences, warnings = segment_sentences(raw, normalized, contract)
+    return TextEnvelope(
         contract_version=TEXT_SEMANTICS_CONTRACT_VERSION,
         raw_text_hash=raw_text_hash(raw),
         language_hints=language_hints(raw),
         blocks=scan_blocks(raw),
         sentences=sentences,
-        clauses=clauses,
         normalized_text=normalized.text,
         tokens=tokenize(normalized, include_code=True),
         phrases=_phrases(normalized),
-        polarity_cues=_polarity_cues(normalized, clauses),
-        referential_markers=markers,
-        warnings=warnings,
+        context_dependency_hints=detect_context_dependency(raw, normalized, contract),
+        warnings=_dedupe((*warnings, *_block_warnings(raw))),
         normalization_contract_version=normalized.contract_version,
         normalization_contract_fingerprint=normalized.contract_fingerprint,
     )
@@ -293,89 +237,6 @@ def _phrases(normalized: NormalizedText) -> tuple[PhraseSpan, ...]:
             )
         )
     return tuple(phrases)
-
-
-def _polarity_cues(
-    normalized: NormalizedText,
-    clauses: tuple[ClauseSpan, ...],
-) -> tuple[PolarityCue, ...]:
-    """Polarity per clause, so a negated clause cannot flip its neighbour.
-
-    Running the detector over a whole message would let one negation mark every
-    claim in it. Clause scope is the smallest unit this contract can defend.
-    """
-
-    # One tokenization for the whole text; see TokenIndex.
-    index = TokenIndex.build(tokenize(normalized))
-    cues: list[PolarityCue] = []
-    for clause in clauses:
-        if clause.is_code or clause.normalized_start is None or clause.normalized_end is None:
-            cues.append(
-                PolarityCue(
-                    clause_id=clause.clause_id,
-                    clause_index=clause.index,
-                    polarity=Polarity.UNKNOWN,
-                    marker=None,
-                    evidence=None,
-                    raw_start=None,
-                    raw_end=None,
-                )
-            )
-            continue
-        slice_text = normalized.text[clause.normalized_start : clause.normalized_end]
-        result = extract_polarity(slice_text)
-        # ``extract_polarity`` ran against a detached slice, so the offsets it
-        # returns index that slice, not the message. Rather than shifting them
-        # -- which would silently assume normalizing normalized text never
-        # moves a character -- the marker is located again in the real token
-        # stream, so the persisted evidence span is exact by construction.
-        raw_start, raw_end = _marker_span(index, clause, result.marker)
-        cues.append(
-            PolarityCue(
-                clause_id=clause.clause_id,
-                clause_index=clause.index,
-                polarity=result.polarity,
-                marker=result.marker,
-                evidence=(
-                    normalized.raw[raw_start:raw_end]
-                    if raw_start is not None and raw_end is not None
-                    else None
-                ),
-                raw_start=raw_start,
-                raw_end=raw_end,
-            )
-        )
-    return tuple(cues)
-
-
-def _marker_span(
-    index: TokenIndex,
-    clause: ClauseSpan,
-    marker: str | None,
-) -> tuple[int | None, int | None]:
-    """Locate a polarity marker inside one clause, in real raw coordinates.
-
-    Returns ``(None, None)`` when there is no marker, or when the marker is a
-    bound prefix that no whole token equals -- the polarity still stands, only
-    its span is unavailable, and reporting no span is honest where reporting an
-    approximate one would not be.
-    """
-
-    if not marker:
-        return None, None
-    tokens = index.in_raw_range(clause.raw_start, clause.raw_end)
-    needle = tuple(item.key for item in tokenize(marker))
-    if not needle:
-        return None, None
-    for offset in range(len(tokens) - len(needle) + 1):
-        window = tokens[offset : offset + len(needle)]
-        if tuple(token.key for token in window) == needle:
-            return window[0].raw_start, window[-1].raw_end
-    if len(needle) == 1:
-        for token in tokens:
-            if token.key.startswith(needle[0]):
-                return token.raw_start, token.raw_end
-    return None, None
 
 
 def _block_warnings(raw: str) -> tuple[str, ...]:

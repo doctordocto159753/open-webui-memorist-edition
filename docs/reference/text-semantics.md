@@ -136,180 +136,113 @@ Full cannot interpret it differently:
 | `{"negated": false}` (pre-polarity row) | `affirmed` |
 | `{}` | `unknown` |
 
-## Sentences and clauses
+## Sentence spans: typography, not syntax
 
-A sentence is often not the unit a claim lives in. This one carries two
-unrelated instructions:
-
-```
-الان فقط خیلی کوتاه بهم توضیح بده و یادت باشه بعدا درباره اش صحبت کنیم.
-```
-
-Kept whole, "answer briefly" and "remember to return to this later" cannot be
-told apart, which is how a real Full-mode trace ended up storing the fragment
-and losing everything it referred to. `segment_sentences` and `segment_clauses`
-give a caller somewhere smaller to attach a claim, a polarity, and a
-referential marker.
-
-This is **not** a parser. It is a small set of high-precision boundary rules:
+`segment_sentences` reports where the writer put explicit boundary marks. That
+is transcription, and code can do it exactly.
 
 | Boundary | Reason code |
 | --- | --- |
-| Sentence terminator followed by whitespace | `sentence_start` |
-| `:` followed by whitespace | `colon_explanation` |
-| `;` / `؛` | `clause_terminator` |
-| Line break after a clause-final verb | `line_break_after_verb` |
-| Line break before a list item | `line_break_list_item` |
-| Line break inside a sentence, otherwise | **not split** + warning |
-| `اما`, `ولی`, `بنابراین`, `however`, `therefore` | `contrastive_connective` |
-| `و` / `and` after a clause-final verb | `coordinating_conjunction_after_verb` |
-| `و` / `and` after a comma | `coordinating_conjunction_after_comma` |
+| Terminator (`.` `!` `?` `؟`) followed by whitespace | `sentence_terminator` |
+| Blank line | `blank_line` |
+| Line beginning with a bullet or enumerator | `list_item` |
+| Fenced code block | `code_block` |
+| Start of a block | `block_start` |
 
-A period glued to content on both sides (`GPT-5.4`, `example.com`, `1.2.3`) and
-a short abbreviation list do not end a sentence.
+A period glued to content on both sides (`GPT-5.4`, `example.com`, `1.2.3`), a
+short abbreviation list, and a line-leading enumerator (`2.`) do not end a span.
 
-### Conjunctions are guarded, and declined splits are reported
+**A bare newline is not a boundary.** It is usually a text editor wrapping a
+line, and `the pipeline runs on\nFriday afternoons` is one proposition broken by
+line width, not two propositions. Splitting it produces two half-sentences that
+then look like claims the writer never made. The wrap is recorded as
+`line_break_not_a_boundary` and the text is left alone.
 
-`و` joins clauses and noun phrases equally, so an unguarded split would shred
-`سرعت و عملکرد و تناسب با برنامه نویسی` into fragments and fabricate
-propositions the writer never made. A split therefore requires evidence: a
-comma, or a preceding token in the closed `CLAUSE_FINAL_VERBS` lexicon.
+### What this module used to do, and why it stopped
 
-That lexicon is a word list, in the same spirit as the negation lexicon — not a
-stemmer, not a morphological analyser — and it is deliberately under-inclusive.
-A miss produces an unsplit clause plus a `coordinating_conjunction_not_split`
-warning, never a wrong split. English `and` rarely follows a verb, so in
-practice it splits only after a comma; that under-splitting is visible in the
-warnings rather than hidden.
+An earlier revision also decided where *clauses* began and ended, whether a
+clause was a statement or an instruction, whether `و` joined clauses or nouns,
+and which earlier span a pronoun pointed at. It did this with hand-written lists
+of Persian and English verb forms, conjunctions, and imperatives.
 
-A newline *inside* a sentence is a wrap, not evidence of a clause boundary:
-`the pipeline runs on\nFriday afternoons` is one proposition broken by a text
-editor. **No evidence, no boundary** — an unverified wrap produces no cut at
-all, and the proposition stays whole with its newline inside it.
+Every new example needed another lexicon entry, and every entry was a new way to
+be confidently wrong. That is the signature of responsibility sitting in the
+wrong layer: deterministic code cannot weigh what a conversation has been about.
 
-Splitting and labelling the pieces is not sufficient, and an earlier attempt at
-this proved it. A cut's reason attaches to the fragment that *follows* it, so
-marking the boundary unverified left the fragment *before* it carrying the
-previous reason, still classified `statement`, and still offered to a resolver
-as something a pronoun could refer to. Half a sentence presented as a
-proposition is exactly the corruption this package exists to prevent.
+Those questions now belong to the model-equipped semantic node. See
+[Semantic analysis contract](semantic-analysis-contract.md).
 
-Two things count as evidence and do cut: a clause-final verb before the break,
-and a list marker after it — a bullet or an enumerator is structure the writer
-typed on purpose. An enumerator's period is also not a sentence terminator, so
-`1. install` stays with its item.
+Contract version: `memorist.text.segmentation.v2`.
 
-Ambiguity is reported, never resolved by guessing. Other warnings:
-`sentence_without_terminator`, `line_break_split_unverified`,
-`unclosed_code_fence`.
+## Context-dependency hints
 
-### Clause kinds
+`detect_context_dependency` reports that a closed-class deictic — a pronoun or a
+demonstrative — occurs at an offset. That is all.
 
-`statement`, `instruction`, `question`, `explanation`, `code`, `unknown`.
-Instructions are identified by a closed imperative lexicon (`توضیح بده`,
-`یادت باشه`, `explain`, `remember`, …). Separating them is what lets a consumer
-keep "explain briefly" from being stored as a fact about the world.
+It does not say what the word refers to, does not offer candidates, and does not
+rank anything. Its one intended use is routing: a message containing deictics
+should be sent to the model with a wider history window, which is what
+`TextEnvelope.requires_conversation_context` answers.
 
-Contract version: `memorist.text.segmentation.v1`.
+Pronouns and demonstratives are a **closed class** in both target languages, so
+unlike verb forms this list does not grow with every new example — which is
+precisely why it is safe to hard-code where the others were not.
 
-## Referential markers
+Every record is stamped `non_authoritative`, and a test asserts that no
+production path outside this package consumes it.
 
-Expressions that cannot be understood on their own are marked, with the spans
-that could be what they point at:
+Contract version: `memorist.text.referential.v2`.
 
-```
-میخوام بیشتر درباره این مزیت بدونم بعدا.
-```
+## `TextEnvelope`
 
-`این مزیت` is marked `demonstrative_phrase`, `requires_context=True`, and
-carries `حذف لایه WSL2.` among its `antecedent_candidate_spans`.
-
-A determiner is grown onto the noun it heads (`این مزیت`) but not onto a verb
-(`این هست`) and not onto a function word — `that the API is slow` yields the
-marker `that`, not the non-constituent `that the`. Growing a determiner makes
-the span more informative; it does not make the determiner less ambiguous, so
-confidence is judged on the head token either way. `درباره اش` matches whether
-written with a space or a ZWNJ, because the normalization contract already
-treats ZWNJ as a boundary.
-
-Markers carry both forms: `text` is normalized (lowercased, ZWNJ folded) for
-comparison, and `evidence` is the exact raw slice, which is what a caller
-persists. Storing the normalized form as evidence is the one thing this package
-exists to prevent, so every span-bearing type keeps both.
-
-### What this deliberately does not do
-
-- It never asserts **which** candidate is the referent.
-- It never reaches across messages.
-- It never creates a claim because a marker exists.
-- Candidates are ordered nearest-first and are **not** scored — a rank would be
-  a resolution wearing a different name. Nearest-first plus a cap of 5 is still
-  a recency cut, so a truncated list carries
-  `antecedent_candidates_truncated`; a silent cut would read as "these are all
-  the options".
-- Instruction clauses are never offered as antecedents.
-
-There is no field on the contract that can express a chosen referent, and a
-test asserts that. Ambiguous markers (`it`, `that`, bare `این`/`آن`) are still
-reported — a missed dependency is worse than a flagged one when nothing here
-creates a memory — but labelled `marker_ambiguous`.
-
-Choosing a referent needs conversation state and the authority to be wrong in a
-way that corrupts a stored memory. That belongs to the package that owns
-resolution and candidate completeness.
-
-Contract version: `memorist.text.referential.v1`.
-
-## Unicode transport integrity is not normalization
-
-```
-Unicode transport integrity  ≠  linguistic normalization
-```
-
-A field trace showed Persian arriving as mojibake in a Windows PowerShell
-diagnostic export while the database rows behind it were intact. The cause was
-`subprocess.run(..., text=True)` with no explicit encoding, which decodes
-captured output with `locale.getpreferredencoding()` — an OEM/ANSI code page on
-a Windows console. The mojibake was then written faithfully into a UTF-8
-artifact.
-
-That is a transport bug, fixed at the boundary that decoded the bytes wrongly.
-The diagnostic exporters now pin `encoding="utf-8"` on every captured child.
-
-**The runtime never repairs mojibake.** A repair rule has to decide that some
-bytes were meant to be Persian; when it guesses right nobody notices, and when
-it guesses wrong it has silently rewritten the raw record an auditor relies on.
-Spelling correction is the same class of error, which is why the user's
-`Kubunto` is never turned into `Kubuntu`.
-
-## `TextSemanticsResult`
-
-One typed, versioned, immutable, JSON-serializable view of one piece of text:
+One typed, versioned, immutable, JSON-serializable **technical** view:
 
 ```python
-from memcore.textsemantics import analyze_text
+from memcore.textsemantics import build_envelope
 
-result = analyze_text(raw)
-result.clauses                    # ClauseSpan, with exact raw offsets
-result.referential_markers        # unresolved, with candidate spans
-result.polarity_cues              # per clause, not per message
-result.warnings                   # what the rules declined to decide
-result.as_json()                  # audit-safe: offsets and codes, no raw text
+envelope = build_envelope(raw)
+envelope.sentences                     # spans on explicit marks, exact offsets
+envelope.blocks                        # prose vs fenced code
+envelope.tokens, envelope.phrases      # boundaries and written identifiers
+envelope.context_dependency_hints      # non-authoritative routing signal
+envelope.requires_conversation_context # how much history to send the model
+envelope.warnings                      # what was seen and declined
+envelope.as_json()                     # audit-safe: offsets and codes, no raw text
 ```
 
+It carries **no** propositions, clause kinds, instruction/statement labels,
+referents, or antecedent candidates, and a test asserts their absence. Those are
+the model's output, checked against this envelope by
+`validate_semantic_analysis`.
+
 Same raw text plus same `contract_version` gives byte-identical output, because
-everything reached from `analyze_text` is pure. `as_dict()` carries offsets,
+everything reached from `build_envelope` is pure. `as_dict()` carries offsets,
 hashes, counts, and reason codes — never the text itself, so an audit payload
 cannot leak a credential that appeared in the message.
 
-Polarity is computed **per clause**, so one negated clause cannot drag its
-neighbours negative.
-
 The contract version rides the existing candidate metadata payload as
-`text_semantics_contract_version`. Clause and referential views are recomputable
-from immutable raw text, so nothing here needs a schema migration.
+`text_semantics_contract_version`. Nothing here needs a schema migration.
 
-Contract version: `memorist.text.semantics.v2`.
+Contract version: `memorist.text.envelope.v3`.
+
+## Validating a model's analysis
+
+The deterministic responsibility that replaced the rule engine:
+
+```python
+from memcore.textsemantics import validate_semantic_analysis
+
+report = validate_semantic_analysis(raw, model_output)
+report.accepted_unit_ids     # admissible units
+report.rejections            # what was thrown out, and why
+report.fallback              # abstain / retain_raw_only when nothing survived
+```
+
+Spans must lie inside the text, quoted evidence must be byte-identical to its
+slice, units must not overlap, and a resolved reference must target a unit the
+model itself proposed. Nothing is repaired by guessing.
+
+Full specification: [Semantic analysis contract](semantic-analysis-contract.md).
 
 ## API
 
@@ -319,8 +252,9 @@ from memcore.textsemantics import (
     normalized_span_for_raw_span, raw_span_for_normalized_span,
     contains_token, contains_phrase, find_token, find_phrase,
     find_all_phrases, identifier_phrases,
-    segment_sentences, segment_clauses, detect_referential_markers,
-    analyze_text, TextSemanticsResult,
+    segment_sentences, detect_context_dependency,
+    build_envelope, TextEnvelope,
+    validate_semantic_analysis, ValidationReport, SemanticFallback,
     extract_polarity, Polarity, Lexicon, scan_blocks,
 )
 ```
