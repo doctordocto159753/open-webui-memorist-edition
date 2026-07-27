@@ -1,0 +1,238 @@
+name: Consolidated CI
+
+"on":
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: consolidated-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  MEMORIST_E2E_STUB_KEY: memorist-e2e-secret-canary-000000000000
+
+jobs:
+  quality-unit-ui:
+    name: Quality, Unit, Integration, and UI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          clean: true
+          persist-credentials: false
+          show-progress: false
+
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            memorist-core/pyproject.toml
+            memorist-core/uv.lock
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install backend and frontend dependencies once
+        run: |
+          (cd memorist-core && uv sync --all-extras --quiet)
+          npm ci --no-audit --no-fund
+
+      - name: Run consolidated quality suite
+        run: bash .github/scripts/ci-quality.sh
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: consolidated-quality-results
+          path: |
+            ${{ runner.temp }}/core-unit-results.xml
+            ${{ runner.temp }}/openwebui-integration-results.xml
+            ${{ runner.temp }}/frontend-results.xml
+
+  postgres-graph:
+    name: PostgreSQL, Full Runtime, and FalkorDB
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: memorist
+          POSTGRES_PASSWORD: memorist
+          POSTGRES_DB: memorist_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U memorist -d memorist_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      falkordb:
+        image: falkordb/falkordb:v4.18.10
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      MEMORIST_RUNTIME_PROFILE: full
+      MEMORIST_CANONICAL_STORE: postgres
+      MEMORIST_POSTGRES_DSN: postgresql://memorist:memorist@localhost:5432/memorist_test
+      MEMORIST_GRAPH_BACKEND: disabled
+      MEMORIST_ALLOW_FULL_GRAPH_DEGRADED: "true"
+      MEMORIST_HOT_SCHEDULER: in_memory
+      MEMORIST_OBJECT_STORE_PATH: /tmp/memorist-objects
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          clean: true
+          persist-credentials: false
+          show-progress: false
+
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            memorist-core/pyproject.toml
+            memorist-core/uv.lock
+          cache-suffix: postgres-graph
+
+      - name: Install backend dependencies once
+        working-directory: memorist-core
+        run: uv sync --all-extras --quiet
+
+      - name: Run fresh PostgreSQL and graph suites
+        run: bash .github/scripts/ci-postgres-graph.sh
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: consolidated-postgres-graph-results
+          path: |
+            ${{ runner.temp }}/postgres-results.xml
+            ${{ runner.temp }}/graph-results.xml
+
+  package-release:
+    name: Package and Lifecycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          clean: true
+          persist-credentials: false
+          show-progress: false
+
+      - name: Require Docker, Compose, and PowerShell once
+        run: |
+          bash .github/scripts/ensure-compose.sh --require-docker
+          bash .github/scripts/ensure-pwsh.sh
+
+      - name: Install Pester once
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pester = Get-Module -ListAvailable -Name Pester |
+            Where-Object { $_.Version -ge [version]'5.5.0' } |
+            Sort-Object Version -Descending | Select-Object -First 1
+          if (-not $pester) {
+            if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
+              Register-PSRepository -Default
+            }
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+            Install-Module Pester -RequiredVersion 5.6.1 -Force -Scope CurrentUser -AllowClobber
+          }
+
+      - name: Parse and test lifecycle scripts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem release/memorist-openwebui -Recurse -Include *.ps1,*.psm1 | ForEach-Object {
+            $tokens=$null; $errors=$null
+            [Management.Automation.Language.Parser]::ParseFile($_.FullName,[ref]$tokens,[ref]$errors) | Out-Null
+            if ($errors.Count) { throw "PowerShell parse failed: $($_.FullName)" }
+          }
+          Import-Module Pester -MinimumVersion 5.5 -Force
+          $configuration = New-PesterConfiguration
+          $configuration.Run.Path = 'release/memorist-openwebui/tests'
+          $configuration.Run.PassThru = $true
+          $configuration.Output.Verbosity = 'Detailed'
+          $configuration.TestResult.Enabled = $true
+          $configuration.TestResult.OutputPath = "$env:RUNNER_TEMP/pester-results.xml"
+          $configuration.TestResult.OutputFormat = 'NUnitXml'
+          $result = Invoke-Pester -Configuration $configuration
+          if ($result.FailedCount -gt 0) { exit 1 }
+
+      - name: Validate and assemble package once
+        run: bash .github/scripts/ci-package.sh
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: consolidated-release-zip
+          path: release/rc/memorist-openwebui-*.zip
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: consolidated-package-results
+          path: |
+            release/rc/memorist-openwebui-*.sha256
+            release/package-manifest.ijson
+            ${{ runner.temp }}/pester-results.xml
+            ${{ runner.temp }}/rc-package-schema.json
+            ${{ runner.temp }}/version-consistency.json
+            ${{ runner.temp }}/upgrade-contract.json
+            ${{ runner.temp }}/zip-digest.txt
+
+  product-e2e:
+    name: One Deployment Product E2E
+    needs: [quality-unit-ui, postgres-graph, package-release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          clean: true
+          persist-credentials: false
+          show-progress: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: consolidated-release-zip
+          path: release/rc
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Require Docker, Compose, and PowerShell once
+        run: |
+          bash .github/scripts/ensure-compose.sh --require-docker
+          bash .github/scripts/ensure-pwsh.sh
+
+      - name: Run one-build, one-deployment product certification
+        run: bash .github/scripts/ci-product-e2e.sh
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: consolidated-product-e2e-results
+          path: |
+            tests/e2e/playwright-report
+            tests/e2e/playwright-results.json
+            tests/e2e/test-results
+            ${{ runner.temp }}/product-diagnostics
