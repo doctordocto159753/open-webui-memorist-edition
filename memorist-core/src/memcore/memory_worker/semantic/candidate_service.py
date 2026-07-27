@@ -38,24 +38,35 @@ from memcore.textsemantics import (
 CANDIDATE_SERVICE_VERSION = "pr4d-candidate-service-v1"
 
 
-def read_modality_polarity(modality: dict[str, Any]) -> Polarity:
-    """Read only authoritative or historical polarity decisions.
+def read_modality_polarity(
+    modality: dict[str, Any],
+    *,
+    allow_legacy_unstamped: bool = False,
+) -> Polarity:
+    """Read polarity only from an authoritative model payload.
 
-    New deterministic modality payloads are lexical hints stamped
-    ``non_authoritative``. They are useful for diagnostics and bounded repair,
-    but they must never become candidate or memory semantics. A future WP02
-    model-analysis payload is accepted only when stamped ``validated_model``.
+    Fresh candidate creation is fail-closed: an unstamped payload is not assumed
+    to be historical and therefore reads as ``unknown``. New deterministic
+    payloads are explicitly stamped ``non_authoritative`` and also read as
+    ``unknown``. WP02 may supply canonical polarity only after strict schema and
+    evidence validation by stamping the payload ``validated_model``.
 
-    Historical rows predate the authority stamp. Their recorded ``polarity`` or
-    legacy ``negated`` value remains readable for compatibility and audit.
-    Unknown authority labels fail closed to ``unknown``.
+    Audit or migration code that is deliberately reading pre-authority rows may
+    set ``allow_legacy_unstamped=True``. This compatibility path is explicit so
+    a fresh, unvalidated model payload cannot silently masquerade as history.
     """
 
     authority = modality.get("semantic_authority")
     if authority == NON_AUTHORITATIVE_LEXICAL_HINT:
         return Polarity.UNKNOWN
-    if authority not in {None, VALIDATED_MODEL_ANALYSIS}:
-        return Polarity.UNKNOWN
+    if authority == VALIDATED_MODEL_ANALYSIS:
+        return _polarity_value(modality)
+    if authority is None and allow_legacy_unstamped:
+        return _polarity_value(modality)
+    return Polarity.UNKNOWN
+
+
+def _polarity_value(modality: dict[str, Any]) -> Polarity:
     if "polarity" in modality:
         return coerce_polarity(modality.get("polarity"))
     if "negated" in modality:
