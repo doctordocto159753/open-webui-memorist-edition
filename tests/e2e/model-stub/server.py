@@ -70,7 +70,7 @@ def _deterministic_answer(messages: list[dict]) -> str:
 
 
 def _jakobson_output(input_payload: dict) -> dict:
-    sentences = []
+    items = []
     for index, item in enumerate(input_payload.get("sentences") or [], start=1):
         text = str(item.get("text") or "")
         lowered = text.lower()
@@ -86,7 +86,7 @@ def _jakobson_output(input_payload: dict) -> dict:
             "evidence": evidence,
             "confidence": "high",
         }
-        sentences.append(
+        items.append(
             {
                 "id": int(item.get("id") or index),
                 "text": text,
@@ -104,27 +104,26 @@ def _jakobson_output(input_payload: dict) -> dict:
                 "notes": "local deterministic stub",
             }
         )
-    dominant_overall = sentences[0]["dominant_function"] if sentences else "referential"
+    dominant_overall = items[0]["dominant_function"] if items else "referential"
     return {
         "schema_version": "1.0",
         "prompt_id": "memorist.jakobson_sentence_analysis",
-        "prompt_version": "2.0",
+        "prompt_version": "3.0",
         "status": "ok",
         "warnings": [],
-        "items": [],
+        "items": items,
         "analysis_level": "sentence",
         "model": "jakobson_six_factor",
         "input_language": "English",
-        "sentence_count": len(sentences),
-        "sentences": sentences,
+        "sentence_count": len(items),
         "overall_summary": {
             "dominant_overall_function": dominant_overall,
             "secondary_overall_functions": [],
             "main_sender": "user",
             "main_receiver": "assistant",
             "main_context": (
-                sentences[0]["six_factors"]["context_referent"]["value"]
-                if sentences
+                items[0]["six_factors"]["context_referent"]["value"]
+                if items
                 else "conversation"
             ),
             "main_code": "English",
