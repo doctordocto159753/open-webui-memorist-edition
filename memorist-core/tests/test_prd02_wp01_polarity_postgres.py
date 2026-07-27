@@ -1,9 +1,4 @@
-"""PRD-02 WP01: the polarity column exists and behaves the same in Full mode.
-
-Gated on a real PostgreSQL. Proves the Full migration lands the same additive,
-default-``unknown`` column as the SQLite one, so Lite and Full store the same
-semantic decision in the same shape.
-"""
+"""PRD-02 WP01: polarity storage and authority behavior in Full mode."""
 
 from __future__ import annotations
 
@@ -17,9 +12,10 @@ import pytest
 
 from memcore.config import Settings
 from memcore.imports.runtime import import_connection, initialize_runtime_storage
+from memcore.memory_worker.analysis.modality import NON_AUTHORITATIVE_LEXICAL_HINT
 from memcore.memory_worker.postgres.pipeline import PostgresMemoryWorkerPipeline
 from memcore.models import ModelRole, utc_now
-from memcore.textsemantics import Polarity, extract_polarity
+from memcore.textsemantics import Polarity
 
 pytestmark = pytest.mark.skipif(
     not os.getenv("MEMORIST_POSTGRES_DSN"),
@@ -104,20 +100,18 @@ def test_full_mode_rows_default_to_unknown_polarity(tmp_path: Path) -> None:
     assert Polarity.UNKNOWN.value in str(dict(row)["column_default"])
 
 
-def test_full_pipeline_stores_the_same_polarity_lite_would(tmp_path: Path) -> None:
-    """End-to-end: a negated claim lands as `negated`, not `unknown`.
+def test_deterministic_full_pipeline_does_not_persist_lexical_polarity_hint(
+    tmp_path: Path,
+) -> None:
+    """No model analysis means canonical polarity remains ``unknown``.
 
-    This is the assertion that catches the two defects the unit-level parity
-    test could not: Full used to write an empty modality payload, and the Full
-    candidate adapter used to read a column name that does not exist. Either
-    one alone silently produced `unknown` in Full while Lite recorded the real
-    polarity.
+    The deterministic analyzer may record a lexical hint for diagnostics, but
+    the hint is stamped non-authoritative. Candidates and durable memory
+    versions must therefore fail closed to ``unknown`` until WP02 supplies a
+    validated model semantic unit.
     """
 
     text = "Do not disable PostgreSQL backups."
-    expected = extract_polarity(text).polarity
-    assert expected is Polarity.NEGATED, "fixture must be a negated claim"
-
     settings = _settings(tmp_path)
     initialize_runtime_storage(settings)
 
@@ -170,19 +164,13 @@ def test_full_pipeline_stores_the_same_polarity_lite_would(tmp_path: Path) -> No
         ]
 
     assert modality is not None
-    assert json.loads(str(dict(modality)["m"]))["polarity"] == expected.value, (
-        "Full must persist a real modality payload, not an empty one"
-    )
+    payload = json.loads(str(dict(modality)["m"]))
+    assert payload["polarity"] == Polarity.NEGATED.value
+    assert payload["semantic_authority"] == NON_AUTHORITATIVE_LEXICAL_HINT
     assert polarities, "the fixture must produce at least one candidate"
-    assert set(polarities) == {expected.value}, (
-        f"Full stored {polarities}, but Lite would store {expected.value!r}"
-    )
-    # memory_versions is the durable record. Lite sets it in the consolidator;
-    # Full omitted it from its INSERT, so the column default silently won.
+    assert set(polarities) == {Polarity.UNKNOWN.value}
     assert version_polarities, "the fixture must produce at least one memory version"
-    assert set(version_polarities) == {expected.value}, (
-        f"Full memory_versions stored {version_polarities}, expected {expected.value!r}"
-    )
+    assert set(version_polarities) == {Polarity.UNKNOWN.value}
 
 
 def _seed_message(connection: Any, text: str) -> str:
