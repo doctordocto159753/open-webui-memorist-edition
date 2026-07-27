@@ -1,25 +1,20 @@
-"""Validate a model's semantic analysis against the immutable raw text.
+"""Validate model evidence against immutable raw text.
 
-This is the deterministic half of the split. The model decides **what the text
-says**; this module decides **whether the model's answer is admissible** -- and
-admissibility is a question about characters and offsets, which code can settle
-exactly.
+This module is intentionally an **evidence-integrity validator**, not the strict
+semantic output contract. The model decides what the text says; WP02 must bind
+that output to one closed typed schema before this validator runs. This module
+then decides whether the model's citations and reference links are admissible.
 
-Every check here is of that kind:
+Every check here is character- or identity-based:
 
 * does the declared span lie inside the text?
-* is the quoted evidence byte-identical to that slice, or was it paraphrased,
-  reformatted, or invented?
-* do two units claim the same characters?
-* does a reference point at a unit that exists?
-* was the selected referent among the candidates the model itself offered?
+* is quoted evidence byte-identical to that slice?
+* do semantic units overlap or reuse an id?
+* does a reference point at an accepted unit?
+* did a resolved reference select from a non-empty candidate list?
 
-None of these require judgement about meaning, and all of them catch the
-failure that actually matters: an analysis that reads plausibly while pointing
-at text that is not there.
-
-A violation is never repaired by guessing. The caller either drops the offending
-unit or abstains for the whole message -- see ``SemanticFallback``.
+A violation is never repaired by guessing. The caller drops the offending
+record or uses the fail-closed fallback.
 """
 
 from __future__ import annotations
@@ -29,28 +24,22 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-VALIDATION_CONTRACT_VERSION = "memorist.text.semantic_validation.v1"
+EVIDENCE_VALIDATION_CONTRACT_VERSION = "memorist.text.semantic_evidence_validation.v1"
+# Compatibility export for the pre-correction WP01 API. New code should use the
+# explicit evidence-integrity name above.
+VALIDATION_CONTRACT_VERSION = EVIDENCE_VALIDATION_CONTRACT_VERSION
 
 
 class SemanticFallback(StrEnum):
-    """What to do when no trustworthy semantic analysis exists.
+    """What to do when no trustworthy semantic analysis exists."""
 
-    All three are fail-closed. None of them creates a memory, because the
-    alternative -- letting deterministic code reconstruct meaning from
-    hand-written rules when the model is unavailable -- is how a fragile parser
-    gets built by accident.
-    """
-
-    #: Keep the raw message and derive nothing from it.
     RETAIN_RAW_ONLY = "retain_raw_only"
-    #: Keep it and mark it for a human.
     NEEDS_REVIEW = "needs_review"
-    #: Decline to analyse; no candidate, no annotation.
     ABSTAIN = "abstain"
 
 
 class Violation(StrEnum):
-    """Why a unit or reference was rejected."""
+    """Why a semantic unit or reference was rejected."""
 
     SPAN_OUT_OF_RANGE = "span_out_of_range"
     SPAN_INVERTED = "span_inverted"
@@ -59,6 +48,8 @@ class Violation(StrEnum):
     UNITS_OVERLAP = "units_overlap"
     DUPLICATE_UNIT_ID = "duplicate_unit_id"
     UNKNOWN_UNIT_ID = "unknown_unit_id"
+    CANDIDATE_LIST_REQUIRED = "candidate_list_required"
+    UNKNOWN_CANDIDATE_UNIT_ID = "unknown_candidate_unit_id"
     REFERENT_NOT_A_CANDIDATE = "referent_not_a_candidate"
     RESOLVED_WITHOUT_TARGET = "resolved_without_target"
     MALFORMED_RECORD = "malformed_record"
@@ -76,12 +67,12 @@ class Rejection:
 
 @dataclass(frozen=True)
 class ValidationReport:
-    """The admissible subset, plus everything that was thrown out and why."""
+    """The evidence-admissible subset, plus every rejection and reason."""
 
     accepted_unit_ids: tuple[str, ...] = ()
     accepted_reference_indexes: tuple[int, ...] = ()
     rejections: tuple[Rejection, ...] = field(default_factory=tuple)
-    contract_version: str = VALIDATION_CONTRACT_VERSION
+    contract_version: str = EVIDENCE_VALIDATION_CONTRACT_VERSION
 
     @property
     def ok(self) -> bool:
@@ -96,12 +87,18 @@ class ValidationReport:
         return SemanticFallback.RETAIN_RAW_ONLY if self.rejections else SemanticFallback.ABSTAIN
 
 
-def validate_semantic_analysis(raw: str, payload: Mapping[str, Any]) -> ValidationReport:
-    """Check a model's ``semantic_units`` / ``references`` against ``raw``.
+# Explicit name for the final authority boundary.
+EvidenceValidationReport = ValidationReport
 
-    Returns which records are admissible rather than raising, so a caller can
-    keep the good units and drop the bad ones instead of discarding a whole
-    message because of one bad span.
+
+def validate_semantic_evidence(raw: str, payload: Mapping[str, Any]) -> ValidationReport:
+    """Check model evidence and references against ``raw``.
+
+    This does **not** validate semantic enum values such as ``unit_type``,
+    ``polarity``, ``durability``, or ``epistemic_status``. WP02 must perform
+    strict closed-schema validation first. This function returns the
+    evidence-admissible subset rather than raising, so one bad citation does not
+    force the caller to trust or reconstruct it.
     """
 
     rejections: list[Rejection] = []
@@ -130,6 +127,17 @@ def validate_semantic_analysis(raw: str, payload: Mapping[str, Any]) -> Validati
         accepted_reference_indexes=tuple(accepted_references),
         rejections=tuple(rejections),
     )
+
+
+def validate_semantic_analysis(raw: str, payload: Mapping[str, Any]) -> ValidationReport:
+    """Compatibility alias for :func:`validate_semantic_evidence`.
+
+    The older name implied that this module validated semantic meaning and enum
+    structure. It never did. Keeping the alias avoids breaking callers while the
+    explicit name makes the WP01/WP02 boundary auditable.
+    """
+
+    return validate_semantic_evidence(raw, payload)
 
 
 def _validate_unit(
@@ -213,6 +221,18 @@ def _validate_reference(
 
     status = reference.get("status")
     target = reference.get("target_unit_id")
+    offered_raw = reference.get("candidate_unit_ids")
+    offered = _sequence(offered_raw)
+
+    for candidate in offered:
+        if not isinstance(candidate, str) or candidate not in accepted:
+            return Rejection(
+                Violation.UNKNOWN_CANDIDATE_UNIT_ID,
+                "reference",
+                label,
+                f"candidate {candidate!r} is not an accepted semantic unit",
+            )
+
     if status == "resolved":
         if not isinstance(target, str) or not target:
             return Rejection(
@@ -222,11 +242,14 @@ def _validate_reference(
             return Rejection(
                 Violation.UNKNOWN_UNIT_ID, "reference", label, f"target {target!r} is not a unit"
             )
-        # A model may only choose from the options it itself put forward.
-        # Picking outside its own candidate list means the choice came from
-        # somewhere the record does not account for.
-        offered = _sequence(reference.get("candidate_unit_ids"))
-        if offered and target not in offered:
+        if not offered:
+            return Rejection(
+                Violation.CANDIDATE_LIST_REQUIRED,
+                "reference",
+                label,
+                "status=resolved requires a non-empty candidate_unit_ids list",
+            )
+        if target not in offered:
             return Rejection(
                 Violation.REFERENT_NOT_A_CANDIDATE,
                 "reference",
@@ -245,12 +268,7 @@ def _check_evidence(
     kind: str,
     key: str = "evidence",
 ) -> Rejection | None:
-    """Evidence must be the exact slice, never a tidied-up version of it.
-
-    A model that returns text it reformatted -- collapsed whitespace, stripped a
-    ZWNJ, fixed a typo -- has produced something that no longer addresses the
-    stored message. Accepting it would put unauditable text into evidence.
-    """
+    """Evidence must be the exact slice, never a tidied-up version."""
 
     evidence = record.get(key)
     if evidence is None:
