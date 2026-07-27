@@ -14,6 +14,7 @@ from typing import Any, cast
 
 import pytest
 
+from memcore.memory_worker.analysis.modality import VALIDATED_MODEL_ANALYSIS
 from memcore.memory_worker.analysis.provider import DeterministicStructuredAnalysisProvider
 from memcore.memory_worker.analysis.schemas import AnalysisRequest
 from memcore.memory_worker.extraction.extractor import CandidateExtractor
@@ -65,7 +66,7 @@ PARITY_TEXTS = [
 
 @pytest.mark.parametrize("text", PARITY_TEXTS)
 def test_normalized_tokens_and_polarity_are_runtime_independent(text: str) -> None:
-    """The service is pure, so both runtimes read the same values from it."""
+    """The diagnostic service is pure, so both runtimes read the same hints."""
 
     tokens = [token.text for token in tokenize(text)]
 
@@ -77,7 +78,7 @@ def test_normalized_tokens_and_polarity_are_runtime_independent(text: str) -> No
 def test_lite_and_full_deterministic_jakobson_agree_on_resolved_factors(text: str) -> None:
     """Both runtimes resolve the same receiver, context, and function.
 
-    This is the decision WP01 owns. How each runtime then renders an
+    This is the existing Jakobson decision. How each runtime renders an
     unresolved receiver into its annotation payload is a separate, pre-existing
     difference pinned by the characterization test below.
     """
@@ -95,7 +96,6 @@ def test_lite_and_full_deterministic_jakobson_agree_on_resolved_factors(text: st
     assert lite["secondary_functions"] == full["secondary_functions"]
     assert lite["function_reason"] == full["function_reason"]
     assert lite["six_factors"]["context_referent"] == full["six_factors"]["context_referent"]
-    # A resolved receiver is identical in both runtimes.
     if resolved.receiver.value is not None:
         assert (
             lite["six_factors"]["receiver_addressee"] == full["six_factors"]["receiver_addressee"]
@@ -103,15 +103,7 @@ def test_lite_and_full_deterministic_jakobson_agree_on_resolved_factors(text: st
 
 
 def test_unresolved_receiver_rendering_differs_between_runtimes_today() -> None:
-    """Characterization of a pre-existing Lite/Full difference.
-
-    When no receiver can be resolved, Lite records ``None`` while Full
-    substitutes the literal "assistant" and the whole sentence as evidence.
-    This predates PRD-02 WP01 and is out of its scope: changing it would alter
-    persisted Full annotations and the receiver hint that routing later reads.
-    The test pins today's behaviour so a future package changes it on purpose
-    rather than by accident.
-    """
+    """Characterization of a pre-existing Lite/Full difference."""
 
     text = "ما هرگز از این روش استفاده نمیکنیم."
     assert resolve_semantic_factors(text).receiver.value is None
@@ -128,7 +120,7 @@ def test_unresolved_receiver_rendering_differs_between_runtimes_today() -> None:
     assert full["six_factors"]["receiver_addressee"]["value"] == "assistant"
 
 
-def test_deterministic_analysis_modality_reports_polarity_and_the_legacy_flag() -> None:
+def test_deterministic_analysis_modality_reports_a_non_authoritative_hint() -> None:
     provider = DeterministicStructuredAnalysisProvider()
 
     negated = provider.analyze(_analysis_request("We never deploy on Friday."), {})
@@ -137,18 +129,19 @@ def test_deterministic_analysis_modality_reports_polarity_and_the_legacy_flag() 
     assert negated.modality["polarity"] == Polarity.NEGATED.value
     assert negated.modality["negated"] is True
     assert negated.modality["polarity_evidence"] == "never"
+    assert negated.modality["semantic_authority"] == "non_authoritative"
     assert affirmed.modality["polarity"] == Polarity.AFFIRMED.value
     assert affirmed.modality["negated"] is False
+    assert affirmed.modality["semantic_authority"] == "non_authoritative"
 
 
 def test_deterministic_analysis_modality_is_token_aware() -> None:
-    """The previous detector matched " not " and "never" as substrings."""
-
     provider = DeterministicStructuredAnalysisProvider()
     response = provider.analyze(_analysis_request("Nevertheless we deploy on Friday."), {})
 
     assert response.modality["negated"] is False
     assert response.modality["polarity"] == Polarity.AFFIRMED.value
+    assert response.modality["semantic_authority"] == "non_authoritative"
 
 
 @pytest.mark.parametrize(
@@ -158,8 +151,12 @@ def test_deterministic_analysis_modality_is_token_aware() -> None:
         ("Use cloud storage.", Polarity.AFFIRMED),
     ],
 )
-def test_lite_and_full_persist_the_same_polarity(text: str, expected: Polarity) -> None:
+def test_lite_and_full_persist_the_same_validated_model_polarity(
+    text: str,
+    expected: Polarity,
+) -> None:
     analysis_payload = {
+        "semantic_authority": VALIDATED_MODEL_ANALYSIS,
         "polarity": expected.value,
         "negated": expected is Polarity.NEGATED,
     }
@@ -187,8 +184,8 @@ def test_lite_and_full_persist_the_same_polarity(text: str, expected: Polarity) 
         RUN_UUID,
         _analysis(analysis_payload),
         authority=_authority(),
-        provider_type="deterministic",
-        model_name="deterministic_extraction",
+        provider_type="model",
+        model_name="validated_semantic_analysis",
     )
 
     full = _FakePipeline()
@@ -222,8 +219,8 @@ def test_lite_and_full_persist_the_same_polarity(text: str, expected: Polarity) 
             }
         ],
         EXECUTION_UUID,
-        "deterministic",
-        model_name="deterministic_extraction",
+        "model",
+        model_name="validated_semantic_analysis",
         analyses=[
             {
                 "analysis_uuid": ANALYSIS_UUID,
@@ -239,7 +236,6 @@ def test_lite_and_full_persist_the_same_polarity(text: str, expected: Polarity) 
     full_params = full.connection.candidate_params[0]
 
     assert lite_candidate.polarity is expected
-    # Polarity is the last bound parameter of the Full insert.
     assert full_params[-1] == expected.value
     assert lite_candidate.confidence == full_params[10]
     lite_metadata = json.loads(lite_candidate.extraction_metadata_ijson or "{}")
@@ -253,7 +249,11 @@ def test_negated_and_affirmed_candidates_share_confidence_in_both_runtimes() -> 
         ("Do not use cloud storage.", Polarity.NEGATED),
         ("Use cloud storage.", Polarity.AFFIRMED),
     ):
-        payload = {"polarity": polarity.value, "negated": polarity is Polarity.NEGATED}
+        payload = {
+            "semantic_authority": VALIDATED_MODEL_ANALYSIS,
+            "polarity": polarity.value,
+            "negated": polarity is Polarity.NEGATED,
+        }
         full = _FakePipeline()
         record_candidates(
             full,
@@ -285,8 +285,8 @@ def test_negated_and_affirmed_candidates_share_confidence_in_both_runtimes() -> 
                 }
             ],
             EXECUTION_UUID,
-            "deterministic",
-            model_name="deterministic_extraction",
+            "model",
+            model_name="validated_semantic_analysis",
             analyses=[
                 {
                     "analysis_uuid": ANALYSIS_UUID,
