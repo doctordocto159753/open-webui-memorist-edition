@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from memcore.memory_worker.analysis.modality import (
+    NON_AUTHORITATIVE_LEXICAL_HINT,
+    VALIDATED_MODEL_ANALYSIS,
+)
 from memcore.memory_worker.extraction.sensitivity import classify_sensitivity
 from memcore.memory_worker.semantic.authority import CandidateAuthorityContext
 from memcore.memory_worker.semantic.candidate_mapping import (
@@ -35,15 +39,23 @@ CANDIDATE_SERVICE_VERSION = "pr4d-candidate-service-v1"
 
 
 def read_modality_polarity(modality: dict[str, Any]) -> Polarity:
-    """Read polarity from a stored or freshly produced modality payload.
+    """Read only authoritative or historical polarity decisions.
 
-    Lite and Full share this reader so neither runtime can interpret the same
-    analysis differently. Rows written before polarity existed carry only the
-    older ``negated`` boolean; that boolean is an analyzer decision about the
-    evidence, so it reads as ``negated`` or ``affirmed`` rather than being
-    discarded. A payload with neither key stays ``unknown``.
+    New deterministic modality payloads are lexical hints stamped
+    ``non_authoritative``. They are useful for diagnostics and bounded repair,
+    but they must never become candidate or memory semantics. A future WP02
+    model-analysis payload is accepted only when stamped ``validated_model``.
+
+    Historical rows predate the authority stamp. Their recorded ``polarity`` or
+    legacy ``negated`` value remains readable for compatibility and audit.
+    Unknown authority labels fail closed to ``unknown``.
     """
 
+    authority = modality.get("semantic_authority")
+    if authority == NON_AUTHORITATIVE_LEXICAL_HINT:
+        return Polarity.UNKNOWN
+    if authority not in {None, VALIDATED_MODEL_ANALYSIS}:
+        return Polarity.UNKNOWN
     if "polarity" in modality:
         return coerce_polarity(modality.get("polarity"))
     if "negated" in modality:
@@ -165,10 +177,6 @@ def build_candidate_draft(value: CandidateServiceInput) -> CandidateDraft | None
         "semantic_authority": "jakobson",
         "polarity": value.complements.polarity.value,
         "normalization_contract_version": NORMALIZATION_CONTRACT_VERSION,
-        # Replay reads this to know which semantic rules produced a candidate.
-        # It rides the existing metadata payload on purpose: the clause and
-        # referential views are recomputable from immutable raw text, so
-        # recording the version costs nothing and needs no second migration.
         "text_semantics_contract_version": TEXT_SEMANTICS_CONTRACT_VERSION,
         "source_authority": provenance.source_authority.value,
         "explicitness": provenance.explicitness.value,
