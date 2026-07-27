@@ -1,10 +1,8 @@
-"""Shared deterministic text-semantics service.
+"""Shared deterministic text-envelope and lexical utility service.
 
-One normalization, tokenization, matching, and polarity contract for Persian,
-Arabic-script Persian, English, and mixed technical text. Lite and Full call
-these same pure functions, so both runtimes reach the same semantic decision.
-
-The service is pure: no persistence, no I/O, no configuration lookups.
+Normalization, tokenization, matching, offsets, and non-authoritative lexical
+hints are pure and shared by Lite and Full. Semantic meaning remains owned by a
+model-equipped node and validated against this package's evidence boundary.
 """
 
 from memcore.textsemantics.blocks import BlockKind, TextBlock, code_ranges, scan_blocks
@@ -36,11 +34,14 @@ from memcore.textsemantics.polarity import (
     polarity_from_flag,
 )
 from memcore.textsemantics.referential import (
+    BASELINE_SEMANTIC_HISTORY_UNITS,
+    EXPANDED_SEMANTIC_HISTORY_UNITS,
     NON_AUTHORITATIVE,
     REFERENTIAL_CONTRACT_VERSION,
     ContextDependencyHint,
     detect_context_dependency,
     requires_conversation_context,
+    semantic_history_window_size,
 )
 from memcore.textsemantics.result import (
     TEXT_SEMANTICS_CONTRACT_VERSION,
@@ -70,18 +71,24 @@ from memcore.textsemantics.tokens import (
     tokenize,
 )
 from memcore.textsemantics.validation import (
+    EVIDENCE_VALIDATION_CONTRACT_VERSION,
     VALIDATION_CONTRACT_VERSION,
+    EvidenceValidationReport,
     Rejection,
     SemanticFallback,
     ValidationReport,
     Violation,
     validate_semantic_analysis,
+    validate_semantic_evidence,
 )
 
 __all__ = [
     "ARABIC_DIACRITICS",
+    "BASELINE_SEMANTIC_HISTORY_UNITS",
     "DEFAULT_NORMALIZATION_CONTRACT",
     "DIGIT_MAP",
+    "EVIDENCE_VALIDATION_CONTRACT_VERSION",
+    "EXPANDED_SEMANTIC_HISTORY_UNITS",
     "NEGATION_PHRASES",
     "NORMALIZATION_CONTRACT_VERSION",
     "PERSIAN_LETTER_MAP",
@@ -93,6 +100,7 @@ __all__ = [
     "TEXT_SEMANTICS_CONTRACT_VERSION",
     "ContextDependencyHint",
     "BlockKind",
+    "EvidenceValidationReport",
     "LexicalMatch",
     "Lexicon",
     "NormalizationContract",
@@ -134,6 +142,8 @@ __all__ = [
     "requires_conversation_context",
     "scan_blocks",
     "segment_sentences",
+    "semantic_history_window_size",
     "tokenize",
     "validate_semantic_analysis",
+    "validate_semantic_evidence",
 ]
