@@ -25,6 +25,7 @@ from memcore.models import (
 )
 from memcore.textsemantics import (
     NORMALIZATION_CONTRACT_VERSION,
+    TEXT_SEMANTICS_CONTRACT_VERSION,
     Polarity,
     coerce_polarity,
     polarity_from_flag,
@@ -164,6 +165,11 @@ def build_candidate_draft(value: CandidateServiceInput) -> CandidateDraft | None
         "semantic_authority": "jakobson",
         "polarity": value.complements.polarity.value,
         "normalization_contract_version": NORMALIZATION_CONTRACT_VERSION,
+        # Replay reads this to know which semantic rules produced a candidate.
+        # It rides the existing metadata payload on purpose: the clause and
+        # referential views are recomputable from immutable raw text, so
+        # recording the version costs nothing and needs no second migration.
+        "text_semantics_contract_version": TEXT_SEMANTICS_CONTRACT_VERSION,
         "source_authority": provenance.source_authority.value,
         "explicitness": provenance.explicitness.value,
         "route_mapping_version": ROUTE_CANDIDATE_MAPPING_VERSION,

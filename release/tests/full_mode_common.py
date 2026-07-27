@@ -95,6 +95,8 @@ def docker_daemon_status() -> tuple[bool, str | None]:
         completed = subprocess.run(
             ["docker", "ps", "--format", "{{.ID}}"],
             text=True,
+            encoding="utf-8",
+            errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             timeout=10,
@@ -716,6 +718,8 @@ def _docker_run(argv: list[str], test_name: str, failing_step: str) -> None:
     completed = subprocess.run(
         argv,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         timeout=180,

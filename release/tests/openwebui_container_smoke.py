@@ -123,6 +123,10 @@ def _run(
         cwd=ROOT,
         env=env,
         text=True,
+        # UTF-8 pinned so captured non-ASCII output is not decoded through the
+        # host locale's code page. See scripts/baseline_check.py.
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         check=False,
     )

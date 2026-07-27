@@ -136,15 +136,168 @@ Full cannot interpret it differently:
 | `{"negated": false}` (pre-polarity row) | `affirmed` |
 | `{}` | `unknown` |
 
+## Sentences and clauses
+
+A sentence is often not the unit a claim lives in. This one carries two
+unrelated instructions:
+
+```
+الان فقط خیلی کوتاه بهم توضیح بده و یادت باشه بعدا درباره اش صحبت کنیم.
+```
+
+Kept whole, "answer briefly" and "remember to return to this later" cannot be
+told apart, which is how a real Full-mode trace ended up storing the fragment
+and losing everything it referred to. `segment_sentences` and `segment_clauses`
+give a caller somewhere smaller to attach a claim, a polarity, and a
+referential marker.
+
+This is **not** a parser. It is a small set of high-precision boundary rules:
+
+| Boundary | Reason code |
+| --- | --- |
+| Sentence terminator followed by whitespace | `sentence_start` |
+| `:` followed by whitespace | `colon_explanation` |
+| `;` / `؛` | `clause_terminator` |
+| Line break inside a sentence | `line_break` |
+| `اما`, `ولی`, `بنابراین`, `however`, `therefore` | `contrastive_connective` |
+| `و` / `and` after a clause-final verb | `coordinating_conjunction_after_verb` |
+| `و` / `and` after a comma | `coordinating_conjunction_after_comma` |
+
+A period glued to content on both sides (`GPT-5.4`, `example.com`, `1.2.3`) and
+a short abbreviation list do not end a sentence.
+
+### Conjunctions are guarded, and declined splits are reported
+
+`و` joins clauses and noun phrases equally, so an unguarded split would shred
+`سرعت و عملکرد و تناسب با برنامه نویسی` into fragments and fabricate
+propositions the writer never made. A split therefore requires evidence: a
+comma, or a preceding token in the closed `CLAUSE_FINAL_VERBS` lexicon.
+
+That lexicon is a word list, in the same spirit as the negation lexicon — not a
+stemmer, not a morphological analyser — and it is deliberately under-inclusive.
+A miss produces an unsplit clause plus a `coordinating_conjunction_not_split`
+warning, never a wrong split. English `and` rarely follows a verb, so in
+practice it splits only after a comma; that under-splitting is visible in the
+warnings rather than hidden.
+
+Ambiguity is reported, never resolved by guessing. Other warnings:
+`sentence_without_terminator`, `unclosed_code_fence`.
+
+### Clause kinds
+
+`statement`, `instruction`, `question`, `explanation`, `code`, `unknown`.
+Instructions are identified by a closed imperative lexicon (`توضیح بده`,
+`یادت باشه`, `explain`, `remember`, …). Separating them is what lets a consumer
+keep "explain briefly" from being stored as a fact about the world.
+
+Contract version: `memorist.text.segmentation.v1`.
+
+## Referential markers
+
+Expressions that cannot be understood on their own are marked, with the spans
+that could be what they point at:
+
+```
+میخوام بیشتر درباره این مزیت بدونم بعدا.
+```
+
+`این مزیت` is marked `demonstrative_phrase`, `requires_context=True`, and
+carries `حذف لایه WSL2.` among its `antecedent_candidate_spans`.
+
+A determiner is grown onto the noun it heads (`این مزیت`) but not onto a verb
+(`این هست`), which separates the two cases without a parser. `درباره اش`
+matches whether written with a space or a ZWNJ, because the normalization
+contract already treats ZWNJ as a boundary.
+
+### What this deliberately does not do
+
+- It never asserts **which** candidate is the referent.
+- It never reaches across messages.
+- It never creates a claim because a marker exists.
+- Candidates are ordered nearest-first and are **not** ranked — a rank would be
+  a resolution wearing a different name.
+- Instruction clauses are never offered as antecedents.
+
+There is no field on the contract that can express a chosen referent, and a
+test asserts that. Ambiguous markers (`it`, `that`, bare `این`/`آن`) are still
+reported — a missed dependency is worse than a flagged one when nothing here
+creates a memory — but labelled `marker_ambiguous`.
+
+Choosing a referent needs conversation state and the authority to be wrong in a
+way that corrupts a stored memory. That belongs to the package that owns
+resolution and candidate completeness.
+
+Contract version: `memorist.text.referential.v1`.
+
+## Unicode transport integrity is not normalization
+
+```
+Unicode transport integrity  ≠  linguistic normalization
+```
+
+A field trace showed Persian arriving as mojibake in a Windows PowerShell
+diagnostic export while the database rows behind it were intact. The cause was
+`subprocess.run(..., text=True)` with no explicit encoding, which decodes
+captured output with `locale.getpreferredencoding()` — an OEM/ANSI code page on
+a Windows console. The mojibake was then written faithfully into a UTF-8
+artifact.
+
+That is a transport bug, fixed at the boundary that decoded the bytes wrongly.
+The diagnostic exporters now pin `encoding="utf-8"` on every captured child.
+
+**The runtime never repairs mojibake.** A repair rule has to decide that some
+bytes were meant to be Persian; when it guesses right nobody notices, and when
+it guesses wrong it has silently rewritten the raw record an auditor relies on.
+Spelling correction is the same class of error, which is why the user's
+`Kubunto` is never turned into `Kubuntu`.
+
+## `TextSemanticsResult`
+
+One typed, versioned, immutable, JSON-serializable view of one piece of text:
+
+```python
+from memcore.textsemantics import analyze_text
+
+result = analyze_text(raw)
+result.clauses                    # ClauseSpan, with exact raw offsets
+result.referential_markers        # unresolved, with candidate spans
+result.polarity_cues              # per clause, not per message
+result.warnings                   # what the rules declined to decide
+result.as_json()                  # audit-safe: offsets and codes, no raw text
+```
+
+Same raw text plus same `contract_version` gives byte-identical output, because
+everything reached from `analyze_text` is pure. `as_dict()` carries offsets,
+hashes, counts, and reason codes — never the text itself, so an audit payload
+cannot leak a credential that appeared in the message.
+
+Polarity is computed **per clause**, so one negated clause cannot drag its
+neighbours negative.
+
+The contract version rides the existing candidate metadata payload as
+`text_semantics_contract_version`. Clause and referential views are recomputable
+from immutable raw text, so nothing here needs a schema migration.
+
+Contract version: `memorist.text.semantics.v2`.
+
 ## API
 
 ```python
 from memcore.textsemantics import (
     normalize_text, normalize_with_mapping, tokenize,
+    normalized_span_for_raw_span, raw_span_for_normalized_span,
     contains_token, contains_phrase, find_token, find_phrase,
+    find_all_phrases, identifier_phrases,
+    segment_sentences, segment_clauses, detect_referential_markers,
+    analyze_text, TextSemanticsResult,
     extract_polarity, Polarity, Lexicon, scan_blocks,
 )
 ```
+
+`identifier_phrases` recovers what tokenization split: `GPT-5.4` and
+`MEMORIST_MEMORY_EXTRACTION_API_KEY` come back as single spans. The written
+form is recovered as a span rather than by weakening the token boundaries that
+keep `token` out of `tokenizer`.
 
 `Lexicon` is the token-aware replacement for an alternation regex and keeps the
 same `search(...)` shape call sites already used.

@@ -90,6 +90,36 @@ class NormalizedText:
         raw_start, raw_end = self.raw_span(start, end)
         return self.raw[raw_start:raw_end]
 
+    def normalized_span(self, raw_start: int, raw_end: int) -> tuple[int, int] | None:
+        """Translate a raw ``[start, end)`` range to the normalized range it produced.
+
+        Returns ``None`` when the raw range produced no normalized characters at
+        all -- a run of dropped diacritics or trailing whitespace, for example.
+        That is a real answer, not an error: the caller asked about raw text
+        that the contract deliberately does not represent.
+
+        The result is the smallest normalized range covering every character
+        whose raw span overlaps the request, so a raw range that lands mid-way
+        through a composed cluster still yields the whole cluster rather than a
+        span that slices a character in half.
+        """
+
+        if raw_start < 0 or raw_end > len(self.raw) or raw_start >= raw_end:
+            raise ValueError(f"invalid raw span: [{raw_start}, {raw_end})")
+        first: int | None = None
+        last: int | None = None
+        for index, (span_start, span_end) in enumerate(self.spans):
+            if span_start >= raw_end:
+                break
+            if span_end <= raw_start:
+                continue
+            if first is None:
+                first = index
+            last = index
+        if first is None or last is None:
+            return None
+        return first, last + 1
+
     def is_code(self, index: int) -> bool:
         return any(start <= index < end for start, end in self.code_spans)
 
@@ -116,6 +146,26 @@ def normalize_with_mapping(
         else:
             state.emit_prose(raw, block.start, block.end)
     return state.finish(raw)
+
+
+def raw_span_for_normalized_span(
+    normalized: NormalizedText,
+    start: int,
+    end: int,
+) -> tuple[int, int]:
+    """Raw ``[start, end)`` evidence range behind a normalized slice."""
+
+    return normalized.raw_span(start, end)
+
+
+def normalized_span_for_raw_span(
+    normalized: NormalizedText,
+    raw_start: int,
+    raw_end: int,
+) -> tuple[int, int] | None:
+    """Normalized ``[start, end)`` range produced by a raw slice, if any."""
+
+    return normalized.normalized_span(raw_start, raw_end)
 
 
 class _Emitter:

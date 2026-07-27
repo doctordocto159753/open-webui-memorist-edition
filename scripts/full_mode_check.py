@@ -242,6 +242,10 @@ def _command_output(command: list[str]) -> str:
             command,
             capture_output=True,
             text=True,
+            # See scripts/baseline_check.py: captured stdout must be decoded as
+            # UTF-8 explicitly, not through the host locale's code page.
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
             check=True,
         )
