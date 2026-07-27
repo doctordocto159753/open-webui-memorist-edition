@@ -236,11 +236,11 @@ test("processing nodes: create, acknowledge, test, and assign a profile", async 
   await expect(nodes).toContainText("E2E extraction stub");
 
   type E2EProfile = {
-  model_profile_uuid: string;
-  profile_name?: string | null;
-  role?: string;
-  certification_current?: boolean;
-};
+    model_profile_uuid: string;
+    profile_name?: string | null;
+    role?: string;
+    certification_current?: boolean;
+  };
 
   let profileUuid = "";
   await expect
@@ -283,6 +283,17 @@ test("processing nodes: create, acknowledge, test, and assign a profile", async 
       { timeout: 30_000 },
     )
     .toBe(true);
+
+  // The profile test completes asynchronously inside the web component. The
+  // API can become current a few milliseconds before the component's final
+  // refresh replaces its local profile snapshot. Wait for the exact row to
+  // render that refreshed certification before invoking the UI default action.
+  const profileRow = nodes
+    .locator(`[data-action="test"][data-profile="${profileUuid}"]`)
+    .locator("xpath=ancestor::tr");
+  await expect(profileRow).toContainText(/certification current/i, {
+    timeout: 30_000,
+  });
 
   await nodes.locator('[name="default_role"]').selectOption("memory_extraction");
   await nodes.locator('[name="default_profile_uuid"]').selectOption(profileUuid);
