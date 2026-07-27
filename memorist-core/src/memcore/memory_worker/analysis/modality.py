@@ -1,8 +1,9 @@
-"""The single modality payload shared by both runtimes.
+"""Shared modality payload shape for Lite and Full.
 
-Lite builds this from its structured analyzer and Full from its pipeline. They
-must produce the same shape from the same text, or the two runtimes disagree
-about whether a stored claim is asserted or denied.
+The deterministic analyzer may emit lexical hints for diagnostics and bounded
+repair, but it is not semantic authority. Canonical polarity, polarity scope,
+and epistemic status belong to a validated model semantic unit. Until that
+validated unit exists, candidate persistence must read polarity as ``unknown``.
 """
 
 from __future__ import annotations
@@ -11,12 +12,18 @@ from typing import Any
 
 from memcore.textsemantics import extract_polarity, is_hypothetical, normalize_with_mapping
 
+NON_AUTHORITATIVE_LEXICAL_HINT = "non_authoritative"
+VALIDATED_MODEL_ANALYSIS = "validated_model"
+
 
 def modality_payload(text: str) -> dict[str, Any]:
-    """Derive modality for one text unit.
+    """Return non-authoritative lexical hints in the legacy payload shape.
 
-    ``negated`` is kept alongside ``polarity`` so readers written before
-    polarity existed keep working unchanged.
+    ``polarity`` and ``hypothetical`` remain present for diagnostics and bounded
+    repair compatibility. ``semantic_authority`` is the hard boundary: readers
+    that create candidates or memories must ignore these values unless the
+    payload is explicitly stamped ``validated_model`` by the model-analysis
+    contract introduced in WP02.
     """
 
     normalized = normalize_with_mapping(text)
@@ -26,4 +33,5 @@ def modality_payload(text: str) -> dict[str, Any]:
         "negated": polarity.negated,
         "polarity_evidence": polarity.evidence,
         "hypothetical": is_hypothetical(normalized),
+        "semantic_authority": NON_AUTHORITATIVE_LEXICAL_HINT,
     }
