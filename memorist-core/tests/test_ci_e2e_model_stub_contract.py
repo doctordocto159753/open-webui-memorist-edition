@@ -40,5 +40,18 @@ def test_e2e_model_stub_emits_the_certified_jakobson_v3_contract() -> None:
     assert output["prompt_version"] == "3.0"
     assert output["sentence_count"] == 1
     assert output["items"][0]["text"].startswith("My dog is named Alpha")
+    assert set(output) == {
+        "schema_version",
+        "prompt_id",
+        "prompt_version",
+        "status",
+        "warnings",
+        "items",
+        "analysis_level",
+        "model",
+        "input_language",
+        "sentence_count",
+        "overall_summary",
+    }
     assert "sentences" not in output
     assert JAKOBSON_V3_CONTRACT.validate(output) == []
