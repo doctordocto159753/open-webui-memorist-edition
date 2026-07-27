@@ -30,9 +30,13 @@ python3 scripts/check_doc_links.py
 bad=$(git ls-files | grep -E '(^|/)\.env$|(^|/)\.env\.[^e]|\.zip$|\.sqlite$|\.db$|\.log$|\.tmp$' || true)
 test -z "$bad" || { echo "FORBIDDEN tracked files:"; echo "$bad"; exit 1; }
 
+# Both scanner definitions contain the forbidden strings as data, so exclude
+# only those two scanner source files from this specific grep.
 bad=$(git grep -lIE \
   "claude\.ai/code/session|Generated with \[Claude Code\]|Co-Authored-By: Claude" \
-  -- . ':!.github/workflows/public-release-readiness.yml' || true)
+  -- . \
+  ':!.github/workflows/public-release-readiness.yml' \
+  ':!.github/scripts/ci-quality.sh' || true)
 test -z "$bad" || { echo "Agent artifacts found in:"; echo "$bad"; exit 1; }
 
 bad=$(git grep -nIE \
