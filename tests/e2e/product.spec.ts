@@ -235,27 +235,106 @@ test("processing nodes: create, acknowledge, test, and assign a profile", async 
   await form.locator('button[type="submit"]').click();
   await expect(nodes).toContainText("E2E extraction stub");
 
-  // Remote profiles require explicit privacy acknowledgement.
-  const ack = nodes.locator('[data-action="ack"]').first();
+  type E2EProfile = {
+  model_profile_uuid: string;
+  profile_name?: string | null;
+  role?: string;
+  certification_current?: boolean;
+};
+
+  let profileUuid = "";
+  await expect
+    .poll(
+      async () => {
+        const response = await apiFetch(page, "/api/v1/memorist/model-control/profiles");
+        if (response.status !== 200) return "";
+        const items = (response.body as { items?: E2EProfile[] }).items || [];
+        const profile = items.find(
+          (item) =>
+            item.profile_name === "E2E extraction stub" &&
+            item.role === "memory_extraction",
+        );
+        profileUuid = profile?.model_profile_uuid || "";
+        return profileUuid;
+      },
+      { timeout: 20_000 },
+    )
+    .not.toBe("");
+
+  const ack = nodes.locator(
+    `[data-action="ack"][data-profile="${profileUuid}"]`,
+  );
   await expect(ack).toBeVisible();
   await ack.click();
-  await expect(nodes.locator('[data-action="ack"]')).toHaveCount(0, { timeout: 20_000 });
+  await expect(ack).toHaveCount(0, { timeout: 20_000 });
 
-  // Role-aware provider test against the local stub.
-  await nodes.locator('[data-action="test"]').first().click();
-  await expect(nodes).toContainText(/ok|healthy|reachable/i, { timeout: 30_000 });
+  await nodes
+    .locator(`[data-action="test"][data-profile="${profileUuid}"]`)
+    .click();
+  await expect
+    .poll(
+      async () => {
+        const response = await apiFetch(page, "/api/v1/memorist/model-control/profiles");
+        if (response.status !== 200) return false;
+        const items = (response.body as { items?: E2EProfile[] }).items || [];
+        const profile = items.find((item) => item.model_profile_uuid === profileUuid);
+        return profile?.certification_current === true;
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(true);
 
-  // Assign as the memory_extraction default.
   await nodes.locator('[name="default_role"]').selectOption("memory_extraction");
-  await nodes.locator('[name="default_profile_uuid"]').selectOption({ index: 0 });
+  await nodes.locator('[name="default_profile_uuid"]').selectOption(profileUuid);
   await nodes.locator('[data-action="set-default"]').click();
-  await expect(nodes).toContainText(/memory_extraction/);
 
-  const profiles = await apiFetch(page, "/api/v1/memorist/model-control/profiles");
-  expect(profiles.status).toBe(200);
-  const items = (profiles.body as { items: Array<{ model_profile_uuid: string }> }).items;
-  expect(items.length).toBeGreaterThan(0);
-  state.profileUuid = items[0].model_profile_uuid;
+  await expect
+    .poll(
+      async () => {
+        const response = await apiFetch(page, "/api/v1/memorist/model-control/defaults");
+        if (response.status !== 200) return false;
+        const items = (
+          response.body as {
+            items?: Array<{ role?: string; model_profile_uuid?: string }>;
+          }
+        ).items || [];
+        return items.some(
+          (item) =>
+            item.role === "memory_extraction" &&
+            item.model_profile_uuid === profileUuid,
+        );
+      },
+      { timeout: 20_000 },
+    )
+    .toBe(true);
+
+  await expect
+    .poll(
+      async () => {
+        const response = await apiFetch(page, "/api/v1/memorist/model-control/effective");
+        if (response.status !== 200) return false;
+        const items = (
+          response.body as {
+            items?: Array<{
+              role?: string;
+              model_profile_uuid?: string | null;
+              capability_compatible?: boolean;
+            }>;
+          }
+        ).items || [];
+        return items.some(
+          (item) =>
+            item.role === "memory_extraction" &&
+            item.model_profile_uuid === profileUuid &&
+            item.capability_compatible !== false,
+        );
+      },
+      { timeout: 20_000 },
+    )
+    .toBe(true);
+
+  await expect(nodes.locator('[role="alert"]')).toHaveCount(0);
+  state.profileUuid = profileUuid;
   saveState(state);
 });
 
