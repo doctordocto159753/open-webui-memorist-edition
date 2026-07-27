@@ -33,7 +33,7 @@ def test_deterministic_modality_is_a_hint_not_candidate_authority() -> None:
     assert read_modality_polarity(payload) is Polarity.UNKNOWN
 
 
-def test_validated_model_and_legacy_rows_remain_readable() -> None:
+def test_only_validated_model_is_fresh_polarity_authority() -> None:
     assert (
         read_modality_polarity(
             {
@@ -43,12 +43,22 @@ def test_validated_model_and_legacy_rows_remain_readable() -> None:
         )
         is Polarity.NEGATED
     )
-    # Rows written before the authority stamp remain auditable.
-    assert read_modality_polarity({"polarity": "affirmed"}) is Polarity.AFFIRMED
-    assert read_modality_polarity({"negated": True}) is Polarity.NEGATED
+    assert read_modality_polarity({"polarity": "affirmed"}) is Polarity.UNKNOWN
+    assert read_modality_polarity({"negated": True}) is Polarity.UNKNOWN
     assert (
         read_modality_polarity({"semantic_authority": "unknown_source", "polarity": "negated"})
         is Polarity.UNKNOWN
+    )
+
+
+def test_legacy_unstamped_rows_require_an_explicit_audit_path() -> None:
+    assert (
+        read_modality_polarity({"polarity": "affirmed"}, allow_legacy_unstamped=True)
+        is Polarity.AFFIRMED
+    )
+    assert (
+        read_modality_polarity({"negated": True}, allow_legacy_unstamped=True)
+        is Polarity.NEGATED
     )
 
 
