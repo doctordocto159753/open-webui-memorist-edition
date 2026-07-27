@@ -23,7 +23,7 @@ def test_e2e_model_stub_emits_the_certified_jakobson_v3_contract() -> None:
     module = _load_stub_module()
     build_output = cast(
         Callable[[dict[str, Any]], dict[str, Any]],
-        getattr(module, "_jakobson_output"),
+        module.__dict__["_jakobson_output"],
     )
 
     output = build_output(
