@@ -557,30 +557,83 @@ def test_whole_text_analysis_does_not_scale_quadratically() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_soft_wrap_does_not_fabricate_a_proposition() -> None:
-    """A newline inside a sentence is a text editor, not a claim boundary.
+def test_soft_wrap_produces_no_clause_boundary_at_all() -> None:
+    """An unverified wrap must leave the proposition whole.
 
-    Splitting "the pipeline runs on\\nFriday afternoons" into two statements
-    invents a proposition the writer never made, and worse, offers the fragment
-    as an antecedent. The split still happens -- hard-wrapped lists need it --
-    but it is reported unverified and left UNKNOWN so it cannot be mistaken for
-    subject matter.
+    Splitting and labelling the pieces is not sufficient, and the earlier
+    attempt at this proved it: a cut's reason attaches to the fragment that
+    *follows* it, so marking the boundary unverified left the fragment *before*
+    it still a STATEMENT and still offered as an antecedent. The first half of a
+    sentence, presented to a resolver as a proposition, is exactly the
+    corruption being prevented.
+
+    So the rule is the stronger one: no evidence, no boundary.
     """
 
     text = "The deployment pipeline runs on\nFriday afternoons and it is slow.\nTell me about it."
     result = analyze_text(text)
 
-    fragment = next(clause for clause in result.clauses if clause.text.startswith("Friday"))
-    assert fragment.boundary_reason == "line_break_unverified"
-    assert fragment.kind is ClauseKind.UNKNOWN
+    whole = "The deployment pipeline runs on\nFriday afternoons and it is slow."
+    assert whole in [clause.text for clause in result.clauses]
     assert "line_break_split_unverified" in result.warnings
 
+    # Neither half may exist as a clause at all -- this is what the previous
+    # version of this test failed to check, and why the defect survived it.
+    halves = {"The deployment pipeline runs on", "Friday afternoons and it is slow."}
+    assert halves.isdisjoint(clause.text for clause in result.clauses)
+
+    # And neither half may reach a resolver by any route.
     offered = {
-        candidate.clause_id
+        candidate.text
         for marker in result.referential_markers
         for candidate in marker.antecedent_candidate_spans
     }
-    assert fragment.clause_id not in offered
+    assert halves.isdisjoint(offered)
+    assert offered <= {whole}
+
+
+def test_no_clause_boundary_carries_an_unverified_line_break_reason() -> None:
+    """The unverified reason code must not exist on any emitted clause.
+
+    A reason that can be produced is a boundary that can be taken. Asserting the
+    code is absent from the output pins the architectural choice itself, not
+    just one example of it.
+    """
+
+    for text in (
+        "The deployment pipeline runs on\nFriday afternoons and it is slow.",
+        "من از ویندوز\nاستفاده می‌کنم.",
+        "a really long line that wraps\nin the middle of a thought here",
+    ):
+        result = analyze_text(text)
+        assert all(
+            clause.boundary_reason != "line_break_unverified" for clause in result.clauses
+        ), text
+        assert all(clause.kind is not ClauseKind.UNKNOWN for clause in result.clauses), text
+
+
+def test_persian_soft_wrap_stays_one_proposition() -> None:
+    text = "من از ویندوز\nاستفاده می‌کنم."
+    result = analyze_text(text)
+    assert [clause.text for clause in result.clauses] == [text]
+    assert "line_break_split_unverified" in result.warnings
+
+
+def test_list_items_are_still_split_on_explicit_structure() -> None:
+    """A bullet or an enumerator is structure the writer typed on purpose.
+
+    Declining soft wraps must not also decline real lists, so the evidence for
+    a list is checked rather than assumed from the newline.
+    """
+
+    bullets = analyze_text("Steps:\n- install docker\n- remove wsl2")
+    assert any(clause.boundary_reason == "line_break_list_item" for clause in bullets.clauses)
+    assert "- remove wsl2" in [clause.text for clause in bullets.clauses]
+
+    numbered = analyze_text("Order:\n1. install docker\n2. remove wsl2")
+    assert "2. remove wsl2" in [clause.text for clause in numbered.clauses]
+    # The enumerator's period is not a sentence terminator.
+    assert "1. install docker" in [clause.text for clause in numbered.clauses]
 
 
 def test_verified_line_break_is_not_warned() -> None:

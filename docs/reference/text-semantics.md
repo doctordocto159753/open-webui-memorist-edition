@@ -159,7 +159,8 @@ This is **not** a parser. It is a small set of high-precision boundary rules:
 | `:` followed by whitespace | `colon_explanation` |
 | `;` / `؛` | `clause_terminator` |
 | Line break after a clause-final verb | `line_break_after_verb` |
-| Line break inside a sentence, otherwise | `line_break_unverified` |
+| Line break before a list item | `line_break_list_item` |
+| Line break inside a sentence, otherwise | **not split** + warning |
 | `اما`, `ولی`, `بنابراین`, `however`, `therefore` | `contrastive_connective` |
 | `و` / `and` after a clause-final verb | `coordinating_conjunction_after_verb` |
 | `و` / `and` after a comma | `coordinating_conjunction_after_comma` |
@@ -181,13 +182,22 @@ warning, never a wrong split. English `and` rarely follows a verb, so in
 practice it splits only after a comma; that under-splitting is visible in the
 warnings rather than hidden.
 
-A newline *inside* a sentence is a soft wrap, not evidence of a clause
-boundary: `the pipeline runs on\nFriday afternoons` is one proposition split by
-a text editor. The split is still taken, because hard-wrapped lists need it, but
-the same guard the conjunctions use decides whether it is verified. An
-unverified fragment is left `unknown` rather than `statement`, which keeps a
-half-sentence out of the antecedent candidates where it would read as a claim
-the writer never made.
+A newline *inside* a sentence is a wrap, not evidence of a clause boundary:
+`the pipeline runs on\nFriday afternoons` is one proposition broken by a text
+editor. **No evidence, no boundary** — an unverified wrap produces no cut at
+all, and the proposition stays whole with its newline inside it.
+
+Splitting and labelling the pieces is not sufficient, and an earlier attempt at
+this proved it. A cut's reason attaches to the fragment that *follows* it, so
+marking the boundary unverified left the fragment *before* it carrying the
+previous reason, still classified `statement`, and still offered to a resolver
+as something a pronoun could refer to. Half a sentence presented as a
+proposition is exactly the corruption this package exists to prevent.
+
+Two things count as evidence and do cut: a clause-final verb before the break,
+and a list marker after it — a bullet or an enumerator is structure the writer
+typed on purpose. An enumerator's period is also not a sentence terminator, so
+`1. install` stays with its item.
 
 Ambiguity is reported, never resolved by guessing. Other warnings:
 `sentence_without_terminator`, `line_break_split_unverified`,

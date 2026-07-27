@@ -176,6 +176,10 @@ IMPERATIVE_MARKERS: tuple[str, ...] = (
 
 QUESTION_MARKS = frozenset("?؟⁇⁈⁉？")
 
+# Bullets that mark a hand-written list item, which is explicit structure rather
+# than an accident of line width.
+LIST_BULLETS = frozenset("-*+•—–")
+
 MAX_ABBREVIATION_LOOKBACK = 16
 
 
@@ -388,10 +392,25 @@ def _terminates(raw: str, index: int, end: int) -> bool:
             return False
         if _preceding_abbreviation(raw, index):
             return False
+        if _is_enumerator(raw, index):
+            return False
     stop = _consume_closing(raw, index + 1, end)
     if stop >= end:
         return True
     return raw[stop].isspace()
+
+
+def _is_enumerator(raw: str, index: int) -> bool:
+    """Whether this period belongs to a line-leading list number.
+
+    ``2.`` opening a line is an enumerator, not the end of the sentence before
+    it. Without this, "install docker\\n2. remove wsl2" gets cut after the ``2.``
+    and the enumerator ends up glued to the previous item.
+    """
+
+    line_start = raw.rfind("\n", 0, index) + 1
+    prefix = raw[line_start:index]
+    return prefix.strip().isdigit() and prefix.strip() != ""
 
 
 def _preceding_abbreviation(raw: str, index: int) -> bool:
@@ -471,37 +490,68 @@ def _punctuation_cuts(
         elif char in CLAUSE_TERMINATORS:
             cuts.append((index + 1, "clause_terminator"))
         elif char == "\n":
-            cuts.append(_line_break_cut(sentence, index, index_, warnings))
+            cut = _line_break_cut(raw, sentence, index, index_, warnings)
+            if cut is not None:
+                cuts.append(cut)
     return cuts
 
 
 def _line_break_cut(
+    raw: str,
     sentence: SentenceSpan,
     index: int,
     tokens: TokenIndex,
     warnings: list[str],
-) -> tuple[int, str]:
-    """Classify a newline that falls *inside* a sentence.
+) -> tuple[int, str] | None:
+    """Decide whether a newline *inside* a sentence is a clause boundary.
 
     A newline between two sentences is already a sentence boundary and never
-    reaches here. What reaches here is a soft wrap, and a soft wrap is not
-    evidence of a clause boundary -- "the pipeline runs on\\nFriday afternoons"
-    is one proposition split by a text editor, not two.
+    reaches here. What reaches here is a wrap, and a wrap is not by itself
+    evidence of anything -- "the pipeline runs on\\nFriday afternoons" is one
+    proposition broken by a text editor, not two.
 
-    Splitting anyway is still useful, because a genuine list or a hard-wrapped
-    clause does break here. So the split is taken either way, and the same guard
-    the coordinating conjunctions use decides whether it is *verified*: a
-    clause-final verb before the break means the first fragment really did end.
-    Otherwise the boundary is reported as unverified and the fragment is left
-    ``UNKNOWN``, which keeps a half-sentence out of the antecedent candidates
-    where it would read as a proposition the writer never made.
+    Splitting it and labelling the pieces is not good enough. A cut's reason
+    attaches to the fragment that *follows* it, so marking the boundary
+    unverified leaves the fragment *before* it still carrying the previous
+    reason, still a ``STATEMENT``, and still offered to a resolver as something
+    a pronoun could refer to. Half a sentence presented as a proposition is
+    exactly the corruption this package exists to prevent.
+
+    So an unverified wrap produces no boundary at all. The proposition stays
+    whole, with its newline inside it, and the declined split is reported. Two
+    things count as evidence and do cut: a clause-final verb before the break,
+    and a list marker after it.
     """
 
     preceding = tokens.in_raw_range(sentence.raw_start, index)
     if preceding and preceding[-1].key in CLAUSE_FINAL_VERBS:
         return index + 1, "line_break_after_verb"
+    if _opens_list_item(raw, index + 1, sentence.raw_end):
+        return index + 1, "line_break_list_item"
     warnings.append("line_break_split_unverified")
-    return index + 1, "line_break_unverified"
+    return None
+
+
+def _opens_list_item(raw: str, start: int, end: int) -> bool:
+    """Whether the line beginning at ``start`` is a list item.
+
+    A bullet or an enumerator is explicit structure a writer typed on purpose,
+    which is the kind of evidence a soft wrap lacks.
+    """
+
+    cursor = start
+    while cursor < end and raw[cursor] in " \t":
+        cursor += 1
+    if cursor >= end:
+        return False
+    if raw[cursor] in LIST_BULLETS:
+        return cursor + 1 < end and raw[cursor + 1] in " \t"
+    digits = cursor
+    while digits < end and raw[digits].isdigit():
+        digits += 1
+    if digits == cursor:
+        return False
+    return digits + 1 < end and raw[digits] in ".)" and raw[digits + 1] in " \t"
 
 
 def _colon_explains(raw: str, index: int, end: int) -> bool:
@@ -574,11 +624,6 @@ def _classify(
     if reason == "colon_explanation":
         return ClauseKind.EXPLANATION
     if not slice_text.strip():
-        return ClauseKind.UNKNOWN
-    if reason == "line_break_unverified":
-        # A fragment carved out of a soft wrap is not a proposition until
-        # something confirms the boundary. Leaving it UNKNOWN keeps it out of
-        # SUBJECT_MATTER_KINDS, so it is never offered as an antecedent.
         return ClauseKind.UNKNOWN
     return ClauseKind.STATEMENT
 
