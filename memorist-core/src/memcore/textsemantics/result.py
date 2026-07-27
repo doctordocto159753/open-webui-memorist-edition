@@ -42,6 +42,7 @@ from memcore.textsemantics.segmentation import (
     SEGMENTATION_CONTRACT_VERSION,
     ClauseSpan,
     SentenceSpan,
+    TokenIndex,
     language_hints,
     segment_clauses,
     segment_sentences,
@@ -304,6 +305,8 @@ def _polarity_cues(
     claim in it. Clause scope is the smallest unit this contract can defend.
     """
 
+    # One tokenization for the whole text; see TokenIndex.
+    index = TokenIndex.build(tokenize(normalized))
     cues: list[PolarityCue] = []
     for clause in clauses:
         if clause.is_code or clause.normalized_start is None or clause.normalized_end is None:
@@ -326,7 +329,7 @@ def _polarity_cues(
         # -- which would silently assume normalizing normalized text never
         # moves a character -- the marker is located again in the real token
         # stream, so the persisted evidence span is exact by construction.
-        raw_start, raw_end = _marker_span(normalized, clause, result.marker)
+        raw_start, raw_end = _marker_span(index, clause, result.marker)
         cues.append(
             PolarityCue(
                 clause_id=clause.clause_id,
@@ -346,7 +349,7 @@ def _polarity_cues(
 
 
 def _marker_span(
-    normalized: NormalizedText,
+    index: TokenIndex,
     clause: ClauseSpan,
     marker: str | None,
 ) -> tuple[int | None, int | None]:
@@ -360,11 +363,7 @@ def _marker_span(
 
     if not marker:
         return None, None
-    tokens = [
-        token
-        for token in tokenize(normalized)
-        if token.raw_start >= clause.raw_start and token.raw_end <= clause.raw_end
-    ]
+    tokens = index.in_raw_range(clause.raw_start, clause.raw_end)
     needle = tuple(item.key for item in tokenize(marker))
     if not needle:
         return None, None

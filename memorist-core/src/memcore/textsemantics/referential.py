@@ -25,6 +25,7 @@ ambiguous and says so.
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -162,9 +163,10 @@ def detect_referential_markers(
     resolved = normalized if normalized is not None else normalize_with_mapping(raw, contract)
     warnings: list[str] = []
     spans = _candidate_spans(resolved)
+    clause_starts = tuple(clause.raw_start for clause in clauses)
     markers: list[ReferentialMarker] = []
     for raw_start, raw_end, text, marker_type in spans:
-        clause = _clause_for(clauses, raw_start, raw_end)
+        clause = _clause_for(clauses, clause_starts, raw_start, raw_end)
         if clause is None:
             warnings.append("referential_marker_outside_clause")
             continue
@@ -286,12 +288,22 @@ def _drop_overlaps(
 
 def _clause_for(
     clauses: tuple[ClauseSpan, ...],
+    starts: tuple[int, ...],
     raw_start: int,
     raw_end: int,
 ) -> ClauseSpan | None:
-    for clause in clauses:
-        if clause.raw_start <= raw_start and raw_end <= clause.raw_end:
-            return clause
+    """The clause fully containing a span, located by bisection.
+
+    Clauses are emitted in raw order and never overlap, so the only candidate is
+    the last one starting at or before the span.
+    """
+
+    position = bisect_right(starts, raw_start) - 1
+    if position < 0:
+        return None
+    clause = clauses[position]
+    if clause.raw_start <= raw_start and raw_end <= clause.raw_end:
+        return clause
     return None
 
 

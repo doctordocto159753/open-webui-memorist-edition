@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import random
+import time
 import unicodedata
 
 import pytest
@@ -474,3 +475,74 @@ def test_segment_helpers_agree_with_the_assembled_result() -> None:
     clauses, _ = segment_clauses(FIELD_TRACE, sentences)
     result = analyze_text(FIELD_TRACE)
     assert [clause.text for clause in clauses] == [clause.text for clause in result.clauses]
+
+
+# --------------------------------------------------------------------------
+# Offset-lookup correctness and scaling
+# --------------------------------------------------------------------------
+
+
+def test_bisected_reverse_mapping_matches_an_exhaustive_scan() -> None:
+    """The fast lookup must agree with the obvious slow one, always.
+
+    ``normalized_span`` bisects, which is only valid because span starts and
+    span ends are both non-decreasing. Both properties are asserted here against
+    generated text, alongside the result of a plain linear scan, so a future
+    change to the emitter that breaks monotonicity fails loudly instead of
+    returning quietly wrong offsets.
+    """
+
+    def scan(mapped: object, raw_start: int, raw_end: int) -> tuple[int, int] | None:
+        first: int | None = None
+        last: int | None = None
+        for index, (span_start, span_end) in enumerate(mapped.spans):  # type: ignore[attr-defined]
+            if span_start >= raw_end:
+                break
+            if span_end <= raw_start:
+                continue
+            if first is None:
+                first = index
+            last = index
+        return None if first is None or last is None else (first, last + 1)
+
+    alphabet = ["ی", "ي", "ک", "ك", "ا", "‌", "‏", " ", "\n", "a", "Z", "2", ".", "،", "ً", "-"]
+    generator = random.Random(19851027)
+    for _ in range(300):
+        raw = "".join(generator.choice(alphabet) for _ in range(generator.randint(1, 70)))
+        mapped = normalize_with_mapping(raw)
+        starts = [span[0] for span in mapped.spans]
+        ends = [span[1] for span in mapped.spans]
+        assert starts == sorted(starts), f"span starts not monotonic for {raw!r}"
+        assert ends == sorted(ends), f"span ends not monotonic for {raw!r}"
+        for _ in range(5):
+            start = generator.randint(0, max(0, len(raw) - 1))
+            end = generator.randint(start + 1, len(raw)) if start + 1 <= len(raw) else start + 1
+            if end > len(raw):
+                continue
+            assert mapped.normalized_span(start, end) == scan(mapped, start, end)
+
+
+def test_whole_text_analysis_does_not_scale_quadratically() -> None:
+    """Guards the offset and token lookups against reverting to linear scans.
+
+    Sentence, clause, and marker construction each ask for offset and token
+    ranges. When those lookups scan instead of bisecting, the whole analysis is
+    quadratic -- an early version of this contract took 4.6 seconds on 16 KB.
+    The bound is deliberately loose so only a genuine complexity regression
+    trips it, not a slow machine.
+    """
+
+    unit = "کوبونتو یه مزیت دارد: حذف لایه WSL2. الان Docker را روی WSL2 اجرا می کنیم.\n"
+    small, large = unit * 40, unit * 320  # 8x the input
+
+    def elapsed(text: str) -> float:
+        start = time.perf_counter()
+        analyze_text(text)
+        return time.perf_counter() - start
+
+    baseline = min(elapsed(small) for _ in range(3))
+    scaled = min(elapsed(large) for _ in range(3))
+
+    # Linear would be ~8x. Quadratic would be ~64x. Anything under 24x is not
+    # quadratic, whatever the machine is doing.
+    assert scaled < baseline * 24, f"8x the input took {scaled / baseline:.1f}x the time"

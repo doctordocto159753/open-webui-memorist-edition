@@ -9,7 +9,9 @@ persist the exact raw span an auditor can re-read.
 from __future__ import annotations
 
 import unicodedata
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
+from functools import cached_property
 
 from memcore.textsemantics.blocks import BlockKind, TextBlock, scan_blocks
 from memcore.textsemantics.contract import (
@@ -106,19 +108,22 @@ class NormalizedText:
 
         if raw_start < 0 or raw_end > len(self.raw) or raw_start >= raw_end:
             raise ValueError(f"invalid raw span: [{raw_start}, {raw_end})")
-        first: int | None = None
-        last: int | None = None
-        for index, (span_start, span_end) in enumerate(self.spans):
-            if span_start >= raw_end:
-                break
-            if span_end <= raw_start:
-                continue
-            if first is None:
-                first = index
-            last = index
-        if first is None or last is None:
+        # Bisected rather than scanned. A linear scan is correct but costs
+        # O(len(text)) per lookup, and callers ask once per sentence, clause,
+        # and marker -- which made whole-text analysis quadratic.
+        first = bisect_right(self._span_ends, raw_start)
+        last = bisect_left(self._span_starts, raw_end) - 1
+        if first > last:
             return None
         return first, last + 1
+
+    @cached_property
+    def _span_starts(self) -> list[int]:
+        return [span[0] for span in self.spans]
+
+    @cached_property
+    def _span_ends(self) -> list[int]:
+        return [span[1] for span in self.spans]
 
     def is_code(self, index: int) -> bool:
         return any(start <= index < end for start, end in self.code_spans)

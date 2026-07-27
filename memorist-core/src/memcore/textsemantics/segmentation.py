@@ -18,6 +18,7 @@ output instead of being silently invented.
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -27,7 +28,7 @@ from memcore.textsemantics.contract import (
     NormalizationContract,
 )
 from memcore.textsemantics.normalize import NormalizedText, normalize_with_mapping
-from memcore.textsemantics.tokens import find_any_phrase, tokenize
+from memcore.textsemantics.tokens import Token, find_any_phrase, tokenize
 
 SEGMENTATION_CONTRACT_VERSION = "memorist.text.segmentation.v1"
 
@@ -272,6 +273,10 @@ def segment_clauses(
     resolved = normalized if normalized is not None else normalize_with_mapping(raw, contract)
     warnings: list[str] = []
     clauses: list[ClauseSpan] = []
+    # Tokenized once for the whole text. Tokenizing per sentence would re-scan
+    # the entire string for every sentence, which is quadratic and shows up as
+    # seconds on a long document.
+    index = TokenIndex.build(tokenize(resolved))
     for sentence in sentences:
         if sentence.is_code:
             clauses.append(
@@ -286,10 +291,34 @@ def segment_clauses(
                 )
             )
             continue
-        for span, reason in _clause_ranges(raw, resolved, sentence, warnings):
+        for span, reason in _clause_ranges(raw, resolved, sentence, index, warnings):
             kind = _classify(raw, resolved, span, reason)
             clauses.append(_clause(raw, resolved, len(clauses), sentence, span, kind, reason))
     return tuple(clauses), tuple(warnings)
+
+
+@dataclass(frozen=True)
+class TokenIndex:
+    """Tokens plus a start-offset index, so a range lookup is a bisection.
+
+    Built once per text. Filtering the full stream on every clause instead is
+    what turns whole-text analysis quadratic, which is measurable in seconds on
+    a long document rather than being merely untidy.
+    """
+
+    tokens: tuple[Token, ...]
+    starts: tuple[int, ...]
+
+    @classmethod
+    def build(cls, tokens: tuple[Token, ...]) -> TokenIndex:
+        return cls(tokens=tokens, starts=tuple(token.raw_start for token in tokens))
+
+    def in_raw_range(self, raw_start: int, raw_end: int) -> list[Token]:
+        """Tokens lying entirely within ``[raw_start, raw_end)``."""
+
+        first = bisect_left(self.starts, raw_start)
+        last = bisect_right(self.starts, raw_end)
+        return [token for token in self.tokens[first:last] if token.raw_end <= raw_end]
 
 
 def language_hints(text: str) -> tuple[str, ...]:
@@ -397,6 +426,7 @@ def _clause_ranges(
     raw: str,
     resolved: NormalizedText,
     sentence: SentenceSpan,
+    index: TokenIndex,
     warnings: list[str],
 ) -> list[tuple[tuple[int, int], str]]:
     """Clause ranges inside one sentence, each with the reason it started."""
@@ -404,7 +434,7 @@ def _clause_ranges(
     cuts = sorted(
         [
             *_punctuation_cuts(raw, sentence),
-            *_conjunction_cuts(raw, resolved, sentence, warnings),
+            *_conjunction_cuts(raw, sentence, index, warnings),
         ],
         key=lambda cut: cut[0],
     )
@@ -456,8 +486,8 @@ def _colon_explains(raw: str, index: int, end: int) -> bool:
 
 def _conjunction_cuts(
     raw: str,
-    resolved: NormalizedText,
     sentence: SentenceSpan,
+    index: TokenIndex,
     warnings: list[str],
 ) -> list[tuple[int, str]]:
     """Guarded clause boundaries at conjunctions and contrastive connectives.
@@ -469,14 +499,7 @@ def _conjunction_cuts(
     the writer never made.
     """
 
-    normalized_span = resolved.normalized_span(sentence.raw_start, sentence.raw_end)
-    if normalized_span is None:
-        return []
-    tokens = [
-        token
-        for token in tokenize(resolved)
-        if token.raw_start >= sentence.raw_start and token.raw_end <= sentence.raw_end
-    ]
+    tokens = index.in_raw_range(sentence.raw_start, sentence.raw_end)
     cuts: list[tuple[int, str]] = []
     for position, token in enumerate(tokens):
         if token.key in CONTRASTIVE_CONNECTIVES:
