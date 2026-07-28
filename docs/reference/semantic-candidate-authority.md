@@ -1,7 +1,7 @@
 # Semantic candidate authority
 
-Status: **WP02 interface freeze**  
-Contract freeze date: 2026-07-28  
+Status: **WP02 interface freeze**
+Contract freeze date: 2026-07-28
 Verified base: `e5aac693a68a1176e61afaede6ae53d80a5a30fc`
 
 This note is the canonical interface and stage-order contract for PRD-02 WP02.
