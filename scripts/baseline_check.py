@@ -505,6 +505,16 @@ def run_command(command: dict[str, Any]) -> dict[str, Any]:
             command["argv"],
             cwd=command["cwd"],
             text=True,
+            # Pinned rather than left to the locale. `text=True` alone decodes
+            # captured output with `locale.getpreferredencoding()`, which is the
+            # ANSI/OEM code page on Windows, so Persian test output arrived as
+            # mojibake and was then written faithfully into a UTF-8 artifact.
+            # That is a transport bug at the diagnostic boundary and nothing to
+            # do with what the database holds -- the stored rows were fine. It
+            # is fixed here, at the decode, and never by guessing the text back
+            # into shape somewhere downstream.
+            encoding="utf-8",
+            errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             timeout=command.get("timeout_seconds", 300),

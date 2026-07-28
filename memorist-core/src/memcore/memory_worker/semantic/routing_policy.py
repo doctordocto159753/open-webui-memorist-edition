@@ -18,6 +18,7 @@ from memcore.models import (
     MemorySignalRouteStatus,
     MemorySignalRouteType,
 )
+from memcore.textsemantics import normalize_with_mapping
 
 PERSIAN_PROMPT_WORD = "پرامپت"
 
@@ -44,6 +45,9 @@ def decide_semantic_routes(
 
     dominant = _dominant_function(dominant_function)
     secondary = _secondary_function_values(secondary_functions)
+    # Normalized once and reused by the lexical checks below, rather than each
+    # `.search(text)` re-normalizing the same unit.
+    normalized = normalize_with_mapping(text)
     factors = resolve_semantic_factors(
         text,
         dominant_function=dominant,
@@ -67,7 +71,11 @@ def decide_semantic_routes(
             )
         ]
 
-    if context_kind == ContextKind.PRIVACY.value or PRIVACY_CONTEXT.search(text):
+    # include_code matches classify_sensitivity: a credential pasted into a
+    # fence must reach privacy review, not be treated as ordinary prose.
+    if context_kind == ContextKind.PRIVACY.value or PRIVACY_CONTEXT.search(
+        normalized, include_code=True
+    ):
         return [
             RouteDecision(
                 route_type=MemorySignalRouteType.PRIVACY_REVIEW,

@@ -4,6 +4,10 @@ from pydantic import Field, model_validator
 
 from memcore.models.domain import DomainModel, new_uuid, utc_now
 
+# Polarity is owned by the shared text-semantics service. Domain models import
+# it rather than declaring a second enum that could drift.
+from memcore.textsemantics import Polarity
+
 
 class ProcessingRunStatus(StrEnum):
     PENDING = "pending"
@@ -244,6 +248,10 @@ class MemoryCandidate(DomainModel):
     source_authority: SourceAuthority
     explicitness: Explicitness
     confidence: float = Field(ge=0.0, le=1.0)
+    # Claim polarity is first-class and independent of confidence. Rows written
+    # before this field existed read back as UNKNOWN rather than being assumed
+    # affirmed.
+    polarity: Polarity = Polarity.UNKNOWN
     importance: float = Field(ge=0.0, le=1.0)
     valid_from: str | None = None
     valid_until: str | None = None
@@ -422,6 +430,7 @@ class MemoryVersion(DomainModel):
     normalized_text: str
     value_ijson: str | None = None
     confidence: float = Field(ge=0.0, le=1.0)
+    polarity: Polarity = Polarity.UNKNOWN
     importance: float = Field(ge=0.0, le=1.0)
     valid_from: str | None = None
     valid_until: str | None = None

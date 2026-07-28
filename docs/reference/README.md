@@ -10,6 +10,7 @@ implementation-level detail.
 
 - [memory-engine-architecture.md](memory-engine-architecture.md) — full essay-form architecture of the memory engine
 - [memory-intelligence-core.md](memory-intelligence-core.md) — sentence-level Jakobson layer and data flow
+- [text-semantics.md](text-semantics.md) — shared normalization, token boundaries, and claim polarity
 - [concept-glossary.md](concept-glossary.md) — frozen baseline terminology
 - [prompt-pack.md](prompt-pack.md) / [memory-worker-prompts.md](memory-worker-prompts.md) — schema-bound prompt contracts
 - [prompt-safety.md](prompt-safety.md) — untrusted-content and injection defenses

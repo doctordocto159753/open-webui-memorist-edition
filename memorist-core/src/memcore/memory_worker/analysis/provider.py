@@ -1,5 +1,6 @@
 from typing import Any, Protocol
 
+from memcore.memory_worker.analysis.modality import modality_payload
 from memcore.memory_worker.analysis.schemas import AnalysisRequest, AnalysisResponse
 from memcore.memory_worker.analysis.temporal import resolve_temporal_expressions
 
@@ -53,14 +54,7 @@ class DeterministicStructuredAnalysisProvider:
             else [],
             entity_mentions=[],
             temporal_expressions=resolve_temporal_expressions(text, request.source_timestamp),
-            modality={
-                "negated": any(
-                    token in lowered for token in (" not ", "don't", "never", "نباید", "هرگز")
-                ),
-                "hypothetical": any(
-                    token in lowered for token in ("if ", "فرض کنیم", "hypothetically")
-                ),
-            },
+            modality=modality_payload(text),
             memory_signals=_memory_signals(lowered),
             abstention={"abstained": False, "reason": None},
         )

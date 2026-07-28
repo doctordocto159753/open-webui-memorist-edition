@@ -12,6 +12,7 @@ from memcore.memory_worker.semantic.candidate_service import (
     CandidateServiceInput,
     LinguisticCandidateComplements,
     build_candidate_draft,
+    read_modality_polarity,
 )
 from memcore.memory_worker.semantic.project_artifact import structured_project_artifact
 from memcore.models import (
@@ -19,6 +20,7 @@ from memcore.models import (
     GateDecisionValue,
     MemorySignalRouteStatus,
     MemorySignalRouteType,
+    Polarity,
     new_uuid,
     utc_now,
 )
@@ -37,11 +39,11 @@ _INSERT_CANDIDATE_SQL = """
       subject_key, predicate, object_jsonb, normalized_text, source_authority,
       explicitness, confidence, importance, sensitivity, status,
       rejection_reason, extraction_metadata_jsonb, created_at, schema_version,
-      prompt_execution_uuid
+      prompt_execution_uuid, polarity
     )
     VALUES (
       %s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,
-      %s,%s,%s,%s,%s,%s,%s::jsonb,%s,1,%s
+      %s,%s,%s,%s,%s,%s,%s::jsonb,%s,1,%s,%s
     )
 """
 _INSERT_EVIDENCE_SQL = """
@@ -156,6 +158,7 @@ def record_candidates(
                 json.dumps(draft.metadata, sort_keys=True),
                 utc_now(),
                 draft.prompt_execution_uuid,
+                draft.polarity.value,
             ),
         )
         self.connection.execute(
@@ -262,6 +265,7 @@ def _record_structured_project_artifact(
             json.dumps(artifact.metadata, ensure_ascii=False, sort_keys=True),
             utc_now(),
             prompt_execution_uuid,
+            Polarity.UNKNOWN.value,
         ),
     )
     self.connection.execute(
@@ -286,13 +290,21 @@ def _linguistic_complements(
 ) -> LinguisticCandidateComplements:
     if analysis is None:
         return LinguisticCandidateComplements(abstained=True)
-    modality = _mapping(_json_value(analysis.get("modality_jsonb")))
+    # The linguistic_analyses columns are named *_ijson in both stores. Reading
+    # "modality_jsonb" always returned None, so Full silently saw an empty
+    # modality and could never agree with Lite on polarity.
+    #
+    # The temporal and abstention reads below have the same defect. They are
+    # deliberately left alone: fixing them would start populating Full's
+    # valid_from, temporal_precision, and abstained for the first time, which is
+    # a data change outside this package's scope. Reported separately.
+    modality = _mapping(_json_value(analysis.get("modality_ijson")))
     temporal = _json_value(analysis.get("temporal_expressions_jsonb"))
     first_temporal = temporal[0] if isinstance(temporal, list) and temporal else {}
     abstention = _mapping(_json_value(analysis.get("abstention_jsonb")))
     return LinguisticCandidateComplements(
         analysis_uuid=_optional_string(analysis.get("analysis_uuid")),
-        negated=bool(modality.get("negated")),
+        polarity=read_modality_polarity(modality),
         valid_from=_optional_string(_mapping(first_temporal).get("normalized")),
         temporal_precision=_optional_string(_mapping(first_temporal).get("precision")),
         abstained=bool(abstention.get("abstained")),

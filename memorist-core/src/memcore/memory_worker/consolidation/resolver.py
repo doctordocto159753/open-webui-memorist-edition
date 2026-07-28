@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-from memcore.memory_worker.consolidation.conflicts import appears_contradictory
+from memcore.memory_worker.consolidation.conflicts import polarities_contradict
 from memcore.models import CandidateStatus, ConsolidationOperation, MemoryCandidate, MemoryVersion
 
 
@@ -37,7 +37,7 @@ class DeterministicResolver:
             return Resolution(
                 operation=ConsolidationOperation.REINFORCE, reason_codes=["same_value"]
             )
-        if appears_contradictory(current_version.normalized_text, candidate.normalized_text):
+        if polarities_contradict(current_version.polarity, candidate.polarity):
             return Resolution(
                 operation=ConsolidationOperation.CONTRADICT, reason_codes=["conflicting_value"]
             )

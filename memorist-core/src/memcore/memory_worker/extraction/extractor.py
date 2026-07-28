@@ -8,6 +8,7 @@ from memcore.memory_worker.semantic.candidate_service import (
     CandidateServiceInput,
     LinguisticCandidateComplements,
     build_candidate_draft,
+    read_modality_polarity,
 )
 from memcore.models import (
     CandidateEvidence,
@@ -68,6 +69,7 @@ class CandidateExtractor:
             explicitness=draft.explicitness,
             confidence=draft.confidence,
             importance=draft.importance,
+            polarity=draft.polarity,
             valid_from=draft.valid_from,
             valid_until=None,
             temporal_precision=draft.temporal_precision,
@@ -106,7 +108,7 @@ def _linguistic_complements(
     abstention = _mapping(load_ijson(analysis.abstention_ijson))
     return LinguisticCandidateComplements(
         analysis_uuid=analysis.analysis_uuid,
-        negated=bool(modality.get("negated")),
+        polarity=read_modality_polarity(modality),
         valid_from=_optional_string(_mapping(first_temporal).get("normalized")),
         temporal_precision=_optional_string(_mapping(first_temporal).get("precision")),
         abstained=bool(abstention.get("abstained")),

@@ -151,6 +151,7 @@ class MemoryConsolidator:
             normalized_text=candidate.normalized_text,
             value_ijson=candidate.object_ijson,
             confidence=candidate.confidence,
+            polarity=candidate.polarity,
             importance=candidate.importance,
             valid_from=candidate.valid_from,
             valid_until=candidate.valid_until,

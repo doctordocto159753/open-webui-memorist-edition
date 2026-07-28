@@ -11,6 +11,7 @@ from typing import Any, cast
 from fastapi import HTTPException
 
 from memcore.config import Settings
+from memcore.memory_worker.analysis.modality import modality_payload
 from memcore.memory_worker.attempt_audit import (
     FrozenProviderExecution,
     ProviderAttemptAuditRepository,
@@ -55,6 +56,7 @@ from memcore.model_control.stage_contracts import (
 from memcore.model_control.stage_invocation import StageInvocationRequest, StageInvoker
 from memcore.model_control.stage_status import stage_status_for_output
 from memcore.models import ModelRole, new_uuid, utc_now
+from memcore.textsemantics import coerce_polarity
 from memcore.validators.ijson import canonical_hash_ijson
 
 
@@ -1153,7 +1155,10 @@ class PostgresMemoryWorkerPipeline:
                     ),
                     json.dumps([]),
                     json.dumps([]),
-                    json.dumps({}),
+                    # Full previously stored an empty modality, so it could never
+                    # agree with Lite on polarity. Both runtimes now derive it
+                    # from the same shared extractor.
+                    json.dumps(modality_payload(str(unit.get("text") or ""))),
                     json.dumps({"memory_signal": "medium"}),
                     json.dumps({"abstained": False}),
                     raw,
@@ -1531,7 +1536,7 @@ class PostgresMemoryWorkerPipeline:
                 ),
             )
             self.connection.execute(
-                "INSERT INTO memory_versions (memory_version_uuid, memory_uuid, version_number, operation, value, normalized_text, confidence, importance, source_snapshot_hash, transaction_from, valid_from, status, created_at, schema_version, prompt_execution_uuid, source_candidate_uuid) VALUES (%s,%s,1,'create',%s,%s,%s,%s,%s,%s,%s,'current',%s,1,%s,%s)",
+                "INSERT INTO memory_versions (memory_version_uuid, memory_uuid, version_number, operation, value, normalized_text, confidence, importance, source_snapshot_hash, transaction_from, valid_from, status, created_at, schema_version, prompt_execution_uuid, source_candidate_uuid, polarity) VALUES (%s,%s,1,'create',%s,%s,%s,%s,%s,%s,%s,'current',%s,1,%s,%s,%s)",
                 (
                     version_uuid,
                     memory_uuid,
@@ -1545,6 +1550,10 @@ class PostgresMemoryWorkerPipeline:
                     utc_now(),
                     prompt_execution_uuid,
                     candidate["candidate_uuid"],
+                    # The durable record must carry the same polarity as the
+                    # candidate it was consolidated from; Lite does this in
+                    # consolidation/consolidator.py.
+                    coerce_polarity(candidate.get("polarity")).value,
                 ),
             )
             evidence = self.connection.execute(
