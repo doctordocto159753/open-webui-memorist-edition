@@ -64,6 +64,7 @@ def _profile(
             setup_idempotency_key=setup_idempotency_key,
         )
     )
+    _certify(repository, profile.model_profile_uuid)
     return profile.model_profile_uuid
 
 

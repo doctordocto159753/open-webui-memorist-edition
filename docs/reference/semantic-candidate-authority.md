@@ -653,3 +653,16 @@ UI redesign.
 
 Lite SQLite and Full PostgreSQL remain canonical. FalkorDB remains a rebuildable
 projection only.
+
+## Operations 1-3 implementation boundary
+
+The frozen semantic prompt/contract, ordered memory-extraction certification
+bundle, pure deterministic coverage planner, and content-free coverage replay
+stores are implemented. SQLite migration `0037_semantic_coverage_audit.sql`
+and PostgreSQL migration `0024_semantic_coverage_audit.sql` add only audit
+metadata, hashes, offsets, dispositions, and lineage IDs.
+
+These components remain deliberately disconnected from the Lite and Full
+pipelines. They do not create memories, write FalkorDB, perform retrieval, or
+change canonical route/gate authority. A later adapter operation must re-read
+persisted route and gate state before it calls the existing candidate service.

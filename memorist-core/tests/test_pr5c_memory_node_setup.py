@@ -73,6 +73,10 @@ def test_role_profile_can_be_configured_and_resolved_separately(
             "model_profile_uuid": profile_uuid,
         },
     )
+    if role == "memory_extraction":
+        assert selected.status_code == 400
+        assert "certification" in selected.json()["detail"]
+        return
     assert selected.status_code == 200, selected.text
 
     status = client.get(

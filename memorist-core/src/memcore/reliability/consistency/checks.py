@@ -65,6 +65,33 @@ CHECKS: tuple[tuple[str, str], ...] = (
         WHERE privacy_request_uuid NOT IN (SELECT privacy_request_uuid FROM privacy_requests)
         """,
     ),
+    (
+        "semantic_coverage_items_reference_runs",
+        """
+        SELECT coverage_item_uuid AS id
+        FROM semantic_coverage_items
+        WHERE coverage_run_uuid NOT IN (
+            SELECT coverage_run_uuid FROM semantic_coverage_runs
+        )
+        """,
+    ),
+    (
+        "semantic_candidate_links_are_consistent",
+        """
+        SELECT proposal_uuid AS id
+        FROM semantic_candidate_links
+        WHERE coverage_item_uuid NOT IN (
+                SELECT coverage_item_uuid FROM semantic_coverage_items
+              )
+           OR (state = 'candidate_linked' AND (
+                candidate_uuid IS NULL
+                OR candidate_uuid <> proposal_uuid
+                OR candidate_uuid NOT IN (
+                    SELECT candidate_uuid FROM memory_candidates
+                )
+              ))
+        """,
+    ),
 )
 
 

@@ -18,7 +18,9 @@ from memcore.memory_worker.service import (
     _job_payload,
     _record_failure_sqlite,
 )
+from memcore.model_control.providers.base import ProviderHealth
 from memcore.model_control.repository import ModelControlRepository
+from memcore.model_control.role_contracts import role_contract_manifest_hash
 from memcore.model_control.schemas import ModelProfileCreate, ProviderType
 from memcore.models import ModelRole
 from memcore.repositories import JobRepository, MessageRepository, SessionRepository
@@ -252,6 +254,20 @@ def test_role_default_change_during_provider_invalidates_lease_fence(
             supports_json_mode=True,
             privacy_acknowledged=True,
         )
+    )
+    repository.record_health_event(
+        profile.model_profile_uuid,
+        ProviderHealth(
+            status="ok",
+            provider_type=profile.provider_type,
+            model_name=profile.model_name,
+            latency_ms=1,
+            local_only_safe=True,
+            role_compatibility_status="compatible",
+            overall_status="ok",
+            role_manifest_hash=role_contract_manifest_hash(profile.role),
+            role_probe_status="compatible",
+        ),
     )
     repository.set_default(ModelRole.MEMORY_EXTRACTION, profile.model_profile_uuid)
     connection.commit()

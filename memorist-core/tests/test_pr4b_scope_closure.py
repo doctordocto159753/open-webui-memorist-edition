@@ -14,7 +14,9 @@ from memcore.imports.runtime import initialize_runtime_storage
 from memcore.main import create_app
 from memcore.memory_control import memory_control_connection
 from memcore.model_control.postgres_repository import PostgresModelControlRepository
+from memcore.model_control.providers.base import ProviderHealth
 from memcore.model_control.repository import ModelControlRepository
+from memcore.model_control.role_contracts import role_contract_manifest_hash
 from memcore.model_control.schemas import ModelProfileCreate, ProviderType
 from memcore.models import ModelRole, utc_now
 
@@ -179,13 +181,28 @@ def _model_control(
 
 
 def _profile(connection: Any, name: str) -> str:
-    profile = _model_control(connection).create_profile(
+    repository = _model_control(connection)
+    profile = repository.create_profile(
         ModelProfileCreate(
             provider_type=ProviderType.DETERMINISTIC,
             model_name=name,
             role=ModelRole.MEMORY_EXTRACTION,
             endpoint_is_local=True,
         )
+    )
+    repository.record_health_event(
+        profile.model_profile_uuid,
+        ProviderHealth(
+            status="ok",
+            provider_type=profile.provider_type,
+            model_name=profile.model_name,
+            latency_ms=1,
+            local_only_safe=True,
+            role_compatibility_status="compatible",
+            overall_status="ok",
+            role_manifest_hash=role_contract_manifest_hash(profile.role),
+            role_probe_status="compatible",
+        ),
     )
     return profile.model_profile_uuid
 

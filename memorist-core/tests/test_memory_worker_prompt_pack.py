@@ -45,19 +45,29 @@ def test_prompt_registry_v2_lists_all_prompts() -> None:
     prompt_ids = {prompt.prompt_id for prompt in prompts}
 
     assert prompt_ids >= REQUIRED_V2_PROMPTS
-    # Every prompt is registered at the v2 pack version except the canonical
-    # Jakobson v3 contract, which is an additive immutable version used for new
-    # executions (v2 remains registered for historical replay).
+    # The pack remains v2.0 while its contract-first runtime prompts have their
+    # own immutable versions: Jakobson v3 and semantic-candidate v1.
     assert all(
         prompt.prompt_version == PROMPT_VERSION
         for prompt in prompts
         if not (
-            prompt.prompt_id == "memorist.jakobson_sentence_analysis"
-            and prompt.prompt_version == "3.0"
+            (
+                prompt.prompt_id == "memorist.jakobson_sentence_analysis"
+                and prompt.prompt_version == "3.0"
+            )
+            or (
+                prompt.prompt_id == "memorist.semantic_candidate_analysis"
+                and prompt.prompt_version == "1.0"
+            )
         )
     )
     assert any(
         prompt.prompt_id == "memorist.jakobson_sentence_analysis" and prompt.prompt_version == "3.0"
+        for prompt in prompts
+    )
+    assert any(
+        prompt.prompt_id == "memorist.semantic_candidate_analysis"
+        and prompt.prompt_version == "1.0"
         for prompt in prompts
     )
     assert all(prompt.public_dict()["prompt_pack_id"] == PROMPT_PACK_ID for prompt in prompts)

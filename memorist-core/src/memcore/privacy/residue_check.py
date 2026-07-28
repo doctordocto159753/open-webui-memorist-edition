@@ -3,7 +3,14 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-AUDIT_TABLES = {"privacy_requests", "privacy_request_items", "erasure_receipts"}
+AUDIT_TABLES = {
+    "privacy_requests",
+    "privacy_request_items",
+    "erasure_receipts",
+    "semantic_coverage_runs",
+    "semantic_coverage_items",
+    "semantic_candidate_links",
+}
 TEXT_COLUMNS = {
     "messages": ("raw_text", "raw_payload_ijson", "snapshot_ijson"),
     "message_versions": ("raw_text", "raw_payload_ijson", "snapshot_ijson"),

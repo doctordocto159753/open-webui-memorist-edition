@@ -26,11 +26,16 @@ MIGRATION_TABLES = [
     "message_versions",
     "memory_processing_runs",
     "text_units",
+    "memory_gate_decisions",
     "jakobson_analysis_runs",
     "jakobson_sentence_annotations",
     "memory_signal_routes",
+    "prompt_execution_runs",
+    "semantic_coverage_runs",
     "memory_candidates",
     "candidate_evidence",
+    "semantic_coverage_items",
+    "semantic_candidate_links",
     "memories",
     "memory_versions",
     "memory_evidence_links",
@@ -210,7 +215,7 @@ def _map_value(row: sqlite3.Row, source_column: str, target_column: str) -> Any:
             return created_at
     if value is None:
         return None
-    if target_column in {"is_deleted"}:
+    if target_column in {"is_deleted", "requires_high_confidence_pass"}:
         if isinstance(value, bool):
             return value
         if isinstance(value, int):

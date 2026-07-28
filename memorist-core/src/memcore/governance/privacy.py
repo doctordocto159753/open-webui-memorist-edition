@@ -129,6 +129,7 @@ class SQLiteCanonicalAdapter:
 
     def erase(self, records: list[PrivacyRecord], request_uuid: str) -> ErasureResult:
         counts: Counter[str] = Counter()
+        retained: Counter[str] = Counter()
         with self.connection:
             for record in records:
                 if record.record_type == "memory" and record.record_uuid:
@@ -180,6 +181,9 @@ class SQLiteCanonicalAdapter:
                     )
                     counts["memory_version"] += 1
                 elif record.record_type == "message" and record.record_uuid:
+                    retained.update(
+                        _retained_semantic_audit_counts(self.connection, record.record_uuid)
+                    )
                     self.connection.execute(
                         """
                         UPDATE messages
@@ -237,7 +241,11 @@ class SQLiteCanonicalAdapter:
                         (utc_now(), record.record_uuid),
                     )
                     counts["session"] += 1
-        return ErasureResult(erased_counts=dict(counts), retained_counts={}, exceptions=[])
+        return ErasureResult(
+            erased_counts=dict(counts),
+            retained_counts=dict(retained),
+            exceptions=[],
+        )
 
     def verify(self, records: list[PrivacyRecord]) -> VerificationResult:
         checks: dict[str, object] = {}
@@ -965,6 +973,53 @@ def _erase_jakobson_for_message(
         (redacted_payload, redacted_payload, message_uuid),
     )
     counts["jakobson_analysis_run"] += cursor.rowcount
+    return counts
+
+
+def _retained_semantic_audit_counts(
+    connection: sqlite3.Connection, message_uuid: str
+) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    if not _table_exists(connection, "semantic_coverage_runs"):
+        return counts
+    run_count = int(
+        connection.execute(
+            "SELECT COUNT(*) FROM semantic_coverage_runs WHERE message_uuid = ?",
+            (message_uuid,),
+        ).fetchone()[0]
+    )
+    item_count = int(
+        connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM semantic_coverage_items AS item
+            JOIN semantic_coverage_runs AS run
+              ON run.coverage_run_uuid = item.coverage_run_uuid
+            WHERE run.message_uuid = ?
+            """,
+            (message_uuid,),
+        ).fetchone()[0]
+    )
+    link_count = int(
+        connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM semantic_candidate_links AS link
+            JOIN semantic_coverage_items AS item
+              ON item.coverage_item_uuid = link.coverage_item_uuid
+            JOIN semantic_coverage_runs AS run
+              ON run.coverage_run_uuid = item.coverage_run_uuid
+            WHERE run.message_uuid = ?
+            """,
+            (message_uuid,),
+        ).fetchone()[0]
+    )
+    if run_count:
+        counts["semantic_coverage_run_audit"] = run_count
+    if item_count:
+        counts["semantic_coverage_item_audit"] = item_count
+    if link_count:
+        counts["semantic_candidate_link_audit"] = link_count
     return counts
 
 
