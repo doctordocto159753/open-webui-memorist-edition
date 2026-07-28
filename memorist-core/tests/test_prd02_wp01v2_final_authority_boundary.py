@@ -57,8 +57,7 @@ def test_legacy_unstamped_rows_require_an_explicit_audit_path() -> None:
         is Polarity.AFFIRMED
     )
     assert (
-        read_modality_polarity({"negated": True}, allow_legacy_unstamped=True)
-        is Polarity.NEGATED
+        read_modality_polarity({"negated": True}, allow_legacy_unstamped=True) is Polarity.NEGATED
     )
 
 
@@ -168,9 +167,9 @@ def test_resolver_uses_stored_polarity_not_text_diagnostics() -> None:
 
 def test_structured_project_artifact_insert_binds_unknown_polarity() -> None:
     root = Path(__file__).resolve().parents[1] / "src" / "memcore"
-    adapter = (
-        root / "memory_worker" / "postgres" / "gated_candidate_adapter.py"
-    ).read_text(encoding="utf-8")
+    adapter = (root / "memory_worker" / "postgres" / "gated_candidate_adapter.py").read_text(
+        encoding="utf-8"
+    )
     artifact_block = adapter.split("def _record_structured_project_artifact", 1)[1].split(
         "def _linguistic_complements", 1
     )[0]

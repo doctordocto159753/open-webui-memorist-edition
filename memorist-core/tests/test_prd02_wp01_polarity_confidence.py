@@ -180,9 +180,7 @@ def test_complements_expose_a_boolean_view_without_owning_it() -> None:
 def test_historical_modality_payloads_read_back_truthfully(
     modality: dict[str, object], expected: Polarity
 ) -> None:
-    assert (
-        read_modality_polarity(modality, allow_legacy_unstamped=True) is expected
-    )
+    assert read_modality_polarity(modality, allow_legacy_unstamped=True) is expected
 
 
 def test_domain_models_default_polarity_to_unknown() -> None:
