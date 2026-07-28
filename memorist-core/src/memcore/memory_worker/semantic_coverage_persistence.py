@@ -27,6 +27,20 @@ class CoveragePersistenceBindings:
     annotation_uuids: Mapping[str, str | None]
 
 
+@dataclass(frozen=True)
+class CandidateAuthorityBinding:
+    """Persisted authority that must still hold inside the final transaction."""
+
+    processing_run_uuid: str
+    text_unit_uuid: str
+    gate_decision_uuid: str
+    gate_decision: str
+    annotation_uuid: str
+    route_uuid: str
+    route_type: str
+    route_status: str
+
+
 class SemanticCoveragePersistence(Protocol):
     def persist_plan(
         self, plan: CoveragePlan, bindings: CoveragePersistenceBindings
@@ -41,6 +55,7 @@ class SemanticCoveragePersistence(Protocol):
         proposal: CandidateProposal,
         candidate: MemoryCandidate,
         evidence_items: Sequence[CandidateEvidence],
+        authority: CandidateAuthorityBinding | None = None,
     ) -> dict[str, Any]: ...
 
 

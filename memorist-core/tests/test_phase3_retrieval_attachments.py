@@ -34,6 +34,8 @@ from memcore.retrieval.semantic import SemanticGenerator, compare_embeddings
 from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
 
+pytestmark = pytest.mark.usefixtures("wp02_downstream_semantic_model")
+
 
 @pytest.fixture()
 def connection(tmp_path: Path) -> Generator[sqlite3.Connection, None, None]:

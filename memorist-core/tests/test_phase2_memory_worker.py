@@ -20,6 +20,8 @@ from memcore.repositories.memory_worker import MemoryStoreRepository
 from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
 
+pytestmark = pytest.mark.usefixtures("wp02_downstream_semantic_model")
+
 
 @pytest.fixture()
 def connection(tmp_path: Path) -> Generator[sqlite3.Connection, None, None]:
@@ -243,7 +245,9 @@ def test_assistant_speculation_and_forget_request_do_not_create_memory(
     ).fetchone()
     assert forget_gate is not None
     assert forget_gate["decision"] == GateDecisionValue.MANUAL_REVIEW.value
-    assert operations == {"REJECT"}
+    # WP02 does not manufacture a rejected legacy candidate for material that
+    # cannot pass its semantic/gate authority boundary.
+    assert operations == set()
 
 
 class FailingClassifier:

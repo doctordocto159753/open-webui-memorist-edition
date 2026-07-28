@@ -874,21 +874,28 @@ def test_midflight_lost_lease_discards_late_attempt_artifacts(
             "outbox": [
                 dict(row) for row in connection.execute("SELECT * FROM graph_projection_outbox")
             ],
+            "coverage": [
+                dict(row) for row in connection.execute("SELECT * FROM semantic_coverage_runs")
+            ],
         }
     rendered = repr(tables)
     assert status["status"] == "succeeded"
     assert status["lease_owner"] is None
     assert status["processing_attempt_uuid"] != claimed_a["processing_attempt_uuid"]
     assert len(tables["runs"]) == 1
-    assert len(tables["prompts"]) == 1
+    assert {row["prompt_id"] for row in tables["prompts"]} == {
+        "memorist.jakobson_sentence_analysis",
+        "memorist.semantic_candidate_analysis",
+    }
     jakobson_usage = [
         row for row in tables["usage"] if row["stage"] == "jakobson_sentence_analysis"
     ]
     assert len(jakobson_usage) == 1
     assert len(tables["jakobson"]) == 1
-    assert tables["candidates"]
-    assert tables["versions"]
-    assert tables["outbox"]
+    assert tables["coverage"]
+    assert tables["candidates"] == []
+    assert tables["versions"] == []
+    assert {row["aggregate_type"] for row in tables["outbox"]} == {"jakobson_analysis_run"}
     assert "attempt-a" not in rendered
     assert "attempt-b" in rendered
 

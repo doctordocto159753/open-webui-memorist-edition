@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 from typing import Any
 
 from memcore.memory_worker.semantic.coverage import CandidateProposal, CoveragePlan
 from memcore.memory_worker.semantic_coverage_persistence import (
+    CandidateAuthorityBinding,
     CoveragePersistenceBindings,
     SemanticCoverageIdentityConflict,
     candidate_payload_hash,
@@ -25,7 +27,7 @@ class PostgresSemanticCoverageRepository:
         self, plan: CoveragePlan, bindings: CoveragePersistenceBindings
     ) -> dict[str, Any]:
         run_uuid = coverage_run_uuid(plan.coverage_hash)
-        with self.connection.transaction():
+        with _transaction(self.connection):
             inserted = self.connection.execute(
                 """
                 INSERT INTO semantic_coverage_runs (
@@ -104,7 +106,7 @@ class PostgresSemanticCoverageRepository:
     def reserve_candidate(
         self, proposal_id: str, coverage_item_id: str, payload_hash: str
     ) -> dict[str, Any]:
-        with self.connection.transaction():
+        with _transaction(self.connection):
             self.connection.execute(
                 """
                 INSERT INTO semantic_candidate_links (
@@ -147,10 +149,11 @@ class PostgresSemanticCoverageRepository:
         proposal: CandidateProposal,
         candidate: MemoryCandidate,
         evidence_items: Sequence[CandidateEvidence],
+        authority: CandidateAuthorityBinding | None = None,
     ) -> dict[str, Any]:
         evidence = validate_candidate_binding(proposal, candidate, evidence_items)
         payload_hash = candidate_payload_hash(candidate, evidence)
-        with self.connection.transaction():
+        with _transaction(self.connection):
             link = _fetch_one(
                 self.connection,
                 """
@@ -165,46 +168,61 @@ class PostgresSemanticCoverageRepository:
             if link is None:
                 raise SemanticCoverageIdentityConflict("candidate must be reserved before creation")
             _assert_link_row(link, str(link["coverage_item_uuid"]), payload_hash)
+            if authority is not None:
+                self._assert_candidate_authority(authority)
             if link["state"] == "candidate_linked":
                 return {"target_uuid": proposal.proposal_id, "state": "existing"}
-            self.connection.execute(
-                """
-                INSERT INTO memory_candidates (
-                  candidate_uuid, processing_run_uuid, text_unit_uuid, candidate_type,
-                  subject_key, predicate, object_jsonb, normalized_text,
-                  source_authority, explicitness, confidence, importance,
-                  sensitivity, status, rejection_reason, extraction_metadata_jsonb,
-                  created_at, schema_version, prompt_execution_uuid, polarity
-                )
-                VALUES (
-                  %s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s,%s,
-                  %s::jsonb,%s,1,%s,%s
-                )
-                """,
-                _postgres_candidate_values(candidate),
+            existing_candidate = _fetch_one(
+                self.connection,
+                "SELECT * FROM memory_candidates WHERE candidate_uuid = %s FOR UPDATE",
+                (proposal.proposal_id,),
             )
-            for item in evidence:
+            if existing_candidate is None:
                 self.connection.execute(
                     """
-                    INSERT INTO candidate_evidence (
-                      evidence_uuid, candidate_uuid, message_uuid, text_unit_uuid,
-                      annotation_uuid, route_uuid, evidence_text, start_char,
-                      end_char, created_at, schema_version
+                    INSERT INTO memory_candidates (
+                      candidate_uuid, processing_run_uuid, text_unit_uuid, candidate_type,
+                      subject_key, predicate, object_jsonb, normalized_text,
+                      source_authority, explicitness, confidence, importance,
+                      sensitivity, status, rejection_reason, extraction_metadata_jsonb,
+                      created_at, schema_version, prompt_execution_uuid, polarity
                     )
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1)
+                    VALUES (
+                      %s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s,%s,
+                      %s::jsonb,%s,1,%s,%s
+                    )
                     """,
-                    (
-                        item.evidence_uuid,
-                        item.candidate_uuid,
-                        item.message_uuid,
-                        item.text_unit_uuid,
-                        item.annotation_uuid,
-                        item.route_uuid,
-                        item.evidence_text,
-                        item.start_char,
-                        item.end_char,
-                        item.created_at,
-                    ),
+                    _postgres_candidate_values(candidate),
+                )
+                for item in evidence:
+                    self.connection.execute(
+                        """
+                        INSERT INTO candidate_evidence (
+                          evidence_uuid, candidate_uuid, message_uuid, text_unit_uuid,
+                          annotation_uuid, route_uuid, evidence_text, start_char,
+                          end_char, created_at, schema_version
+                        )
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1)
+                        """,
+                        (
+                            item.evidence_uuid,
+                            item.candidate_uuid,
+                            item.message_uuid,
+                            item.text_unit_uuid,
+                            item.annotation_uuid,
+                            item.route_uuid,
+                            item.evidence_text,
+                            item.start_char,
+                            item.end_char,
+                            item.created_at,
+                        ),
+                    )
+            else:
+                _assert_existing_postgres_candidate(
+                    self.connection,
+                    existing_candidate,
+                    candidate,
+                    evidence,
                 )
             self.connection.execute(
                 """
@@ -218,6 +236,40 @@ class PostgresSemanticCoverageRepository:
                 (proposal.proposal_id,),
             )
         return {"target_uuid": proposal.proposal_id, "state": "created"}
+
+    def _assert_candidate_authority(self, authority: CandidateAuthorityBinding) -> None:
+        row = _fetch_one(
+            self.connection,
+            """
+            SELECT g.gate_decision_uuid, g.decision,
+                   r.route_uuid, r.route_type, r.status, r.annotation_uuid
+            FROM memory_gate_decisions g
+            JOIN memory_signal_routes r
+              ON r.route_uuid = %s
+             AND r.unit_uuid = g.text_unit_uuid
+            WHERE g.processing_run_uuid = %s
+              AND g.text_unit_uuid = %s
+            FOR UPDATE OF g, r
+            """,
+            (
+                authority.route_uuid,
+                authority.processing_run_uuid,
+                authority.text_unit_uuid,
+            ),
+        )
+        if row is None or any(
+            (
+                row["gate_decision_uuid"] != authority.gate_decision_uuid,
+                row["decision"] != authority.gate_decision,
+                row["route_uuid"] != authority.route_uuid,
+                row["route_type"] != authority.route_type,
+                row["status"] != authority.route_status,
+                row["annotation_uuid"] != authority.annotation_uuid,
+            )
+        ):
+            raise SemanticCoverageIdentityConflict(
+                "persisted gate/route authority changed before candidate creation"
+            )
 
     def _assert_plan_replay(
         self, plan: CoveragePlan, bindings: CoveragePersistenceBindings
@@ -326,6 +378,79 @@ def _postgres_candidate_values(candidate: MemoryCandidate) -> tuple[Any, ...]:
     )
 
 
+def _assert_existing_postgres_candidate(
+    connection: Any,
+    row: Mapping[str, Any],
+    candidate: MemoryCandidate,
+    evidence: Sequence[CandidateEvidence],
+) -> None:
+    expected_values = _postgres_candidate_values(candidate)
+    expected = dict(
+        zip(
+            (
+                "candidate_uuid",
+                "processing_run_uuid",
+                "text_unit_uuid",
+                "candidate_type",
+                "subject_key",
+                "predicate",
+                "object_jsonb",
+                "normalized_text",
+                "source_authority",
+                "explicitness",
+                "confidence",
+                "importance",
+                "sensitivity",
+                "status",
+                "rejection_reason",
+                "extraction_metadata_jsonb",
+                "created_at",
+                "prompt_execution_uuid",
+                "polarity",
+            ),
+            expected_values,
+            strict=True,
+        )
+    )
+    for column, value in expected.items():
+        if column == "created_at":
+            continue
+        stored = row[column]
+        if column in {"object_jsonb", "extraction_metadata_jsonb"}:
+            stored = json.loads(stored) if isinstance(stored, str) else stored
+            value = json.loads(str(value))
+        if stored != value:
+            raise SemanticCoverageIdentityConflict(f"existing candidate differs at {column}")
+    stored_evidence = {
+        str(item["evidence_uuid"]): item
+        for item in _fetch_all(
+            connection,
+            "SELECT * FROM candidate_evidence WHERE candidate_uuid = %s",
+            (candidate.candidate_uuid,),
+        )
+    }
+    if set(stored_evidence) != {item.evidence_uuid for item in evidence}:
+        raise SemanticCoverageIdentityConflict(
+            "existing candidate evidence set differs from proposal"
+        )
+    for item in evidence:
+        stored = stored_evidence[item.evidence_uuid]
+        expected_item = {
+            "candidate_uuid": item.candidate_uuid,
+            "message_uuid": item.message_uuid,
+            "text_unit_uuid": item.text_unit_uuid,
+            "annotation_uuid": item.annotation_uuid,
+            "route_uuid": item.route_uuid,
+            "evidence_text": item.evidence_text,
+            "start_char": item.start_char,
+            "end_char": item.end_char,
+        }
+        if any(stored[column] != value for column, value in expected_item.items()):
+            raise SemanticCoverageIdentityConflict(
+                "existing candidate evidence differs from proposal"
+            )
+
+
 def _assert_link_row(row: Mapping[str, Any], coverage_item_id: str, payload_hash: str) -> None:
     if row["coverage_item_uuid"] != coverage_item_id or row["payload_hash"] != payload_hash:
         raise SemanticCoverageIdentityConflict(
@@ -339,6 +464,8 @@ def _fetch_one(connection: Any, sql: str, params: tuple[Any, ...]) -> dict[str, 
 
 
 def _fetch_all(connection: Any, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
+    if not hasattr(connection, "cursor"):
+        return [dict(row) for row in connection.execute(sql, params).fetchall()]
     with connection.cursor() as cursor:
         cursor.execute(sql, params)
         columns = [item.name for item in cursor.description or ()]
@@ -346,3 +473,11 @@ def _fetch_all(connection: Any, sql: str, params: tuple[Any, ...]) -> list[dict[
             dict(row) if isinstance(row, Mapping) else dict(zip(columns, row, strict=True))
             for row in cursor.fetchall()
         ]
+
+
+@contextmanager
+def _transaction(connection: Any) -> Any:
+    raw = getattr(connection, "raw", connection)
+    connection.commit()
+    with raw.transaction():
+        yield

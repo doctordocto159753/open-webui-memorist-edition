@@ -44,6 +44,13 @@ from memcore.memory_worker.providers.openai_compatible import (
     OpenAICompatibleMemoryExtractionProvider,
 )
 from memcore.memory_worker.segmentation.sentence_segmenter import SentenceSegmenter
+from memcore.memory_worker.semantic.orchestration import (
+    SemanticCandidatePlanningRequest,
+    SemanticCandidatePlanningService,
+)
+from memcore.memory_worker.semantic.runtime_adapters import (
+    PostgresSemanticCandidateRuntimeAdapter,
+)
 from memcore.model_control.postgres_repository import PostgresModelControlRepository
 from memcore.model_control.resolution import RoleResolutionService
 from memcore.model_control.security import sanitize_error_message
@@ -66,6 +73,9 @@ class PostgresMemoryWorkerPipeline:
         self.settings = settings
         self.segmenter = SentenceSegmenter()
         self.gate = DeterministicGate()
+        self.semantic_candidate_planning = SemanticCandidatePlanningService(
+            PostgresSemanticCandidateRuntimeAdapter(connection)
+        )
         self.provider_job_uuid: str | None = None
         self.provider_lease_fence: Callable[[], None] | None = None
 
@@ -479,18 +489,17 @@ class PostgresMemoryWorkerPipeline:
                 analyses = self._record_linguistic_analyses(
                     str(run["processing_run_uuid"]), units, output
                 )
-                candidates = self._record_candidates(
-                    str(run["processing_run_uuid"]),
-                    message,
-                    units,
-                    annotations,
-                    routes,
-                    prompt_execution_uuid,
-                    provider_type,
-                    import_run_uuid,
-                    model_name,
-                    analyses=analyses,
+            semantic_result = self.semantic_candidate_planning.execute(
+                SemanticCandidatePlanningRequest(
+                    message_uuid=message_uuid,
+                    processing_run_uuid=str(run["processing_run_uuid"]),
+                    profile=dict(profile or {}),
+                    import_run_uuid=import_run_uuid,
+                    job_uuid=job_uuid,
+                    lease_fence=lease_fence,
                 )
+            )
+            candidates = self._semantic_candidate_rows(list(semantic_result.candidate_uuids))
             candidate_stage_results = self._run_candidate_stages(
                 str(run["processing_run_uuid"]),
                 message,
@@ -499,7 +508,10 @@ class PostgresMemoryWorkerPipeline:
             )
             with fenced_write(self.connection, lease_fence, postgres=True):
                 memories = self._record_memories(
-                    message, candidates, content_hash, prompt_execution_uuid
+                    message,
+                    candidates,
+                    content_hash,
+                    semantic_result.semantic_prompt_execution_uuid or prompt_execution_uuid,
                 )
             embedding_results = self._run_embedding_stages(
                 str(run["processing_run_uuid"]),
@@ -526,6 +538,15 @@ class PostgresMemoryWorkerPipeline:
                 "memory_signal_routes": len(routes),
                 "gate_decisions": len(decisions),
                 "analyses": len(analyses),
+                "semantic_coverage_hash": semantic_result.plan.coverage_hash,
+                "semantic_coverage_status": semantic_result.plan.status,
+                "semantic_proposals": semantic_result.proposal_count,
+                "semantic_prompt_execution_uuid": (semantic_result.semantic_prompt_execution_uuid),
+                "semantic_stage_execution_uuid": (semantic_result.semantic_stage_execution_uuid),
+                "semantic_context_items": semantic_result.context_item_count,
+                "semantic_terminal_gate_short_circuit": (
+                    semantic_result.terminal_gate_short_circuit
+                ),
                 "latency_ms": int((perf_counter() - started) * 1000),
                 "memories_created": memories,
                 "candidate_stage_results": candidate_stage_results,
@@ -1199,6 +1220,18 @@ class PostgresMemoryWorkerPipeline:
             model_name,
             analyses,
         )
+
+    def _semantic_candidate_rows(self, candidate_uuids: list[str]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for candidate_uuid in candidate_uuids:
+            row = self.connection.execute(
+                "SELECT * FROM memory_candidates WHERE candidate_uuid = %s",
+                (candidate_uuid,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("semantic candidate link did not persist its candidate")
+            rows.append(dict(row))
+        return rows
 
     def _run_candidate_stages(
         self,

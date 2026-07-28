@@ -22,6 +22,8 @@ from memcore.imports.worker import ImportReconstructionWorkerService
 from memcore.memory_worker.postgres.pipeline import PostgresMemoryWorkerPipeline
 from memcore.memory_worker.prepared import PreparedJakobsonInference
 
+pytestmark = pytest.mark.usefixtures("wp02_downstream_semantic_model")
+
 
 def _pg_settings(tmp_path: Path) -> Settings:
     return Settings(
@@ -570,7 +572,10 @@ def test_full_postgres_midflight_lease_loss_fences_all_attempt_artifacts(
     assert status["lease_owner"] is None
     assert status["processing_attempt_uuid"] != claimed_a["processing_attempt_uuid"]
     assert len(tables["runs"]) == 1
-    assert len(tables["prompts"]) == 1
+    assert {row["prompt_id"] for row in tables["prompts"]} == {
+        "memorist.jakobson_sentence_analysis",
+        "memorist.semantic_candidate_analysis",
+    }
     assert (
         len([row for row in tables["usage"] if row["stage"] == "jakobson_sentence_analysis"]) == 1
     )

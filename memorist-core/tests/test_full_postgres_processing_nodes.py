@@ -30,10 +30,13 @@ from memcore.model_control.stage_invocation import (
 from memcore.models import ModelRole, utc_now
 from memcore.validators.ijson import canonical_hash_ijson
 
-pytestmark = pytest.mark.skipif(
-    not os.getenv("MEMORIST_POSTGRES_DSN"),
-    reason="requires real PostgreSQL",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not os.getenv("MEMORIST_POSTGRES_DSN"),
+        reason="requires real PostgreSQL",
+    ),
+    pytest.mark.usefixtures("wp02_downstream_semantic_model"),
+]
 
 MODEL_TARGET: dict[str, Any] = {
     "model_role": ModelRole.MEMORY_EXTRACTION.value,
@@ -402,10 +405,7 @@ def test_full_postgres_candidate_stage_replay_keeps_status_and_memory_stable(
         ]
         assert first_candidates
         assert first_memories > 0
-        assert {row[1] for row in first_stages} >= {
-            "privacy_sensitivity",
-            "high_confidence_extraction",
-        }
+        assert {row[1] for row in first_stages} >= {"privacy_sensitivity"}
 
     monkeypatch.setattr(
         PostgresMemoryWorkerPipeline,

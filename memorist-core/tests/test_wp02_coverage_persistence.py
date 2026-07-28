@@ -32,9 +32,11 @@ from memcore.memory_worker.semantic.coverage import (
 )
 from memcore.memory_worker.semantic.provenance_policy import PROVENANCE_POLICY_VERSION
 from memcore.memory_worker.semantic_coverage_persistence import (
+    CandidateAuthorityBinding,
     CoveragePersistenceBindings,
     SemanticCoverageIdentityConflict,
     candidate_payload_hash,
+    deterministic_evidence,
 )
 from memcore.migrate.sqlite_to_postgres import commit as migrate_sqlite_to_postgres
 from memcore.models import (
@@ -57,6 +59,7 @@ from memcore.repositories.semantic_coverage import (
     ReserveSemanticCandidateCommand,
     SQLiteSemanticCoverageRepository,
 )
+from memcore.repositories.sqlite import SQLiteRepository
 from memcore.storage.migrations import (
     apply_migrations,
     default_migrations_dir,
@@ -336,6 +339,19 @@ def _candidate(
     return candidate, evidence
 
 
+def _authority_binding() -> CandidateAuthorityBinding:
+    return CandidateAuthorityBinding(
+        processing_run_uuid="00000000-0000-4000-8000-000000000003",
+        text_unit_uuid="00000000-0000-4000-8000-000000000004",
+        gate_decision_uuid="00000000-0000-4000-8000-000000000005",
+        gate_decision="analyze",
+        annotation_uuid="00000000-0000-4000-8000-000000000007",
+        route_uuid="00000000-0000-4000-8000-000000000008",
+        route_type="project_context",
+        route_status="ready",
+    )
+
+
 def test_sqlite_fresh_upgrade_repeated_and_content_free_schema(tmp_path: Path) -> None:
     migrations = default_migrations_dir()
     old = tmp_path / "old-migrations"
@@ -448,6 +464,82 @@ def test_sqlite_failed_final_transaction_leaves_reservation(tmp_path: Path) -> N
     link = connection.execute("SELECT * FROM semantic_candidate_links").fetchone()
     assert link["state"] == "candidate_creation_attempted"
     assert link["candidate_uuid"] is None
+
+
+def test_sqlite_final_transaction_rereads_gate_and_route_authority(
+    tmp_path: Path,
+) -> None:
+    connection = connect(tmp_path / "authority-mutation.sqlite")
+    apply_migrations(connection)
+    _seed_authority(connection)
+    plan, proposal, bindings = _plan()
+    repository = SQLiteSemanticCoverageRepository(connection)
+    repository.persist_plan(plan, bindings)
+    candidate, evidence = _candidate(proposal)
+    repository.reserve_candidate(
+        proposal.proposal_id,
+        plan.items[0].coverage_item_id,
+        candidate_payload_hash(candidate, (evidence,)),
+    )
+    connection.execute(
+        """
+        UPDATE memory_gate_decisions
+        SET decision = 'retain_raw_only'
+        WHERE gate_decision_uuid = '00000000-0000-4000-8000-000000000005'
+        """
+    )
+    connection.commit()
+
+    with pytest.raises(
+        SemanticCoverageIdentityConflict,
+        match="authority changed",
+    ):
+        repository.create_and_link_candidate(
+            proposal,
+            candidate,
+            (evidence,),
+            _authority_binding(),
+        )
+
+    assert connection.execute("SELECT COUNT(*) FROM memory_candidates").fetchone()[0] == 0
+    link = connection.execute("SELECT * FROM semantic_candidate_links").fetchone()
+    assert link["state"] == "candidate_creation_attempted"
+
+
+def test_sqlite_crash_c_reconciles_existing_candidate_without_duplicate(
+    tmp_path: Path,
+) -> None:
+    connection = connect(tmp_path / "crash-c.sqlite")
+    apply_migrations(connection)
+    _seed_authority(connection)
+    plan, proposal, bindings = _plan()
+    repository = SQLiteSemanticCoverageRepository(connection)
+    repository.persist_plan(plan, bindings)
+    candidate, evidence = _candidate(proposal)
+    repository.reserve_candidate(
+        proposal.proposal_id,
+        plan.items[0].coverage_item_id,
+        candidate_payload_hash(candidate, (evidence,)),
+    )
+    canonical_evidence = deterministic_evidence(proposal.proposal_id, evidence)
+    sqlite = SQLiteRepository(connection)
+    sqlite.insert("memory_candidates", candidate.model_dump(mode="json"))
+    sqlite.insert("candidate_evidence", canonical_evidence.model_dump(mode="json"))
+    connection.commit()
+
+    result = repository.create_and_link_candidate(
+        proposal,
+        candidate,
+        (evidence,),
+        _authority_binding(),
+    )
+
+    assert result["state"] == "created"
+    assert connection.execute("SELECT COUNT(*) FROM memory_candidates").fetchone()[0] == 1
+    assert connection.execute("SELECT COUNT(*) FROM candidate_evidence").fetchone()[0] == 1
+    link = connection.execute("SELECT * FROM semantic_candidate_links").fetchone()
+    assert link["state"] == "candidate_linked"
+    assert link["candidate_uuid"] == proposal.proposal_id
 
 
 def test_heritage_forget_and_residue_treat_coverage_as_audit_only(

@@ -9,6 +9,7 @@ from typing import Any
 
 from memcore.memory_worker.semantic.coverage import CandidateProposal, CoveragePlan
 from memcore.memory_worker.semantic_coverage_persistence import (
+    CandidateAuthorityBinding,
     CoveragePersistenceBindings,
     SemanticCoverageIdentityConflict,
     candidate_payload_hash,
@@ -46,9 +47,15 @@ class SQLiteSemanticCoverageRepository:
         proposal: CandidateProposal,
         candidate: MemoryCandidate,
         evidence_items: Sequence[CandidateEvidence],
+        authority: CandidateAuthorityBinding | None = None,
     ) -> dict[str, Any]:
         return (
-            CreateAndLinkSemanticCandidateCommand(proposal, candidate, tuple(evidence_items))
+            CreateAndLinkSemanticCandidateCommand(
+                proposal,
+                candidate,
+                tuple(evidence_items),
+                authority,
+            )
             .execute(self.connection)
             .result
         )
@@ -171,6 +178,7 @@ class CreateAndLinkSemanticCandidateCommand:
     proposal: CandidateProposal
     candidate: MemoryCandidate
     evidence_items: tuple[CandidateEvidence, ...]
+    authority: CandidateAuthorityBinding | None = None
     command_type: str = "create_and_link_semantic_candidate"
 
     @property
@@ -202,6 +210,8 @@ class CreateAndLinkSemanticCandidateCommand:
             if link is None:
                 raise SemanticCoverageIdentityConflict("candidate must be reserved before creation")
             _assert_link_row(link, link["coverage_item_uuid"], payload_hash)
+            if self.authority is not None:
+                _assert_candidate_authority(connection, self.authority)
             if link["state"] == "candidate_linked":
                 connection.commit()
                 return _write_result(
@@ -211,9 +221,21 @@ class CreateAndLinkSemanticCandidateCommand:
                     replay=True,
                 )
             repository = SQLiteRepository(connection)
-            repository.insert("memory_candidates", self.candidate.model_dump(mode="json"))
-            for item in evidence:
-                repository.insert("candidate_evidence", item.model_dump(mode="json"))
+            existing_candidate = connection.execute(
+                "SELECT * FROM memory_candidates WHERE candidate_uuid = ?",
+                (self.proposal.proposal_id,),
+            ).fetchone()
+            if existing_candidate is None:
+                repository.insert("memory_candidates", self.candidate.model_dump(mode="json"))
+                for item in evidence:
+                    repository.insert("candidate_evidence", item.model_dump(mode="json"))
+            else:
+                _assert_existing_sqlite_candidate(
+                    connection,
+                    existing_candidate,
+                    self.candidate,
+                    evidence,
+                )
             now = utc_now()
             connection.execute(
                 """
@@ -234,6 +256,106 @@ class CreateAndLinkSemanticCandidateCommand:
         except Exception:
             connection.rollback()
             raise
+
+
+def _assert_candidate_authority(
+    connection: sqlite3.Connection,
+    authority: CandidateAuthorityBinding,
+) -> None:
+    row = connection.execute(
+        """
+        SELECT g.gate_decision_uuid, g.decision,
+               r.route_uuid, r.route_type, r.status, r.annotation_uuid
+        FROM memory_gate_decisions g
+        JOIN memory_signal_routes r
+          ON r.route_uuid = ?
+         AND r.unit_uuid = g.text_unit_uuid
+        WHERE g.processing_run_uuid = ?
+          AND g.text_unit_uuid = ?
+        """,
+        (
+            authority.route_uuid,
+            authority.processing_run_uuid,
+            authority.text_unit_uuid,
+        ),
+    ).fetchone()
+    if row is None or any(
+        (
+            row["gate_decision_uuid"] != authority.gate_decision_uuid,
+            row["decision"] != authority.gate_decision,
+            row["route_uuid"] != authority.route_uuid,
+            row["route_type"] != authority.route_type,
+            row["status"] != authority.route_status,
+            row["annotation_uuid"] != authority.annotation_uuid,
+        )
+    ):
+        raise SemanticCoverageIdentityConflict(
+            "persisted gate/route authority changed before candidate creation"
+        )
+
+
+def _assert_existing_sqlite_candidate(
+    connection: sqlite3.Connection,
+    row: Mapping[str, Any],
+    candidate: MemoryCandidate,
+    evidence: Sequence[CandidateEvidence],
+) -> None:
+    expected = candidate.model_dump(mode="json")
+    for column in (
+        "candidate_uuid",
+        "processing_run_uuid",
+        "text_unit_uuid",
+        "prompt_execution_uuid",
+        "candidate_type",
+        "subject_key",
+        "predicate",
+        "object_ijson",
+        "normalized_text",
+        "source_authority",
+        "explicitness",
+        "confidence",
+        "polarity",
+        "importance",
+        "valid_from",
+        "valid_until",
+        "temporal_precision",
+        "status",
+        "sensitivity_class",
+        "extraction_metadata_ijson",
+        "rejection_reason_codes_ijson",
+    ):
+        if row[column] != expected[column]:
+            raise SemanticCoverageIdentityConflict(f"existing candidate differs at {column}")
+    stored_evidence = {
+        str(item["evidence_uuid"]): item
+        for item in connection.execute(
+            "SELECT * FROM candidate_evidence WHERE candidate_uuid = ?",
+            (candidate.candidate_uuid,),
+        )
+    }
+    if set(stored_evidence) != {item.evidence_uuid for item in evidence}:
+        raise SemanticCoverageIdentityConflict(
+            "existing candidate evidence set differs from proposal"
+        )
+    for item in evidence:
+        stored = stored_evidence[item.evidence_uuid]
+        expected_item = item.model_dump(mode="json")
+        for column in (
+            "candidate_uuid",
+            "message_uuid",
+            "text_unit_uuid",
+            "annotation_uuid",
+            "route_uuid",
+            "evidence_text",
+            "start_char",
+            "end_char",
+            "evidence_role",
+            "support_type",
+        ):
+            if stored[column] != expected_item[column]:
+                raise SemanticCoverageIdentityConflict(
+                    f"existing candidate evidence differs at {column}"
+                )
 
 
 def _run_values(

@@ -249,16 +249,29 @@ def _uncovered_items(value: CoveragePlannerInput, units: Sequence[Any]) -> list[
         )
     ]
     groups: list[list[dict[str, Any]]] = []
+    group_authority_keys: list[str | None] = []
     for token in tokens:
+        token_start = int(token["raw_start"])
+        token_end = int(token["raw_end"])
+        token_authorities = _containing_authorities(
+            value.authorities,
+            token_start,
+            token_end,
+        )
+        authority_key = token_authorities[0].text_unit_uuid if len(token_authorities) == 1 else None
         if not groups:
             groups.append([token])
+            group_authority_keys.append(authority_key)
             continue
         previous = groups[-1][-1]
         gap = value.current_raw_text[int(previous["raw_end"]) : int(token["raw_start"])]
-        if not any(character.isalnum() for character in gap):
+        if authority_key == group_authority_keys[-1] and not any(
+            character.isalnum() for character in gap
+        ):
             groups[-1].append(token)
         else:
             groups.append([token])
+            group_authority_keys.append(authority_key)
 
     items: list[CoverageItem] = []
     for group in groups:

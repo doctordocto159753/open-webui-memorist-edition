@@ -32,6 +32,8 @@ from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
 from memcore.validators.ijson import canonical_hash_ijson, dump_ijson, load_ijson
 
+pytestmark = pytest.mark.usefixtures("wp02_downstream_semantic_model")
+
 
 @pytest.fixture
 def orchestration_connection(tmp_path: Path) -> Iterator[sqlite3.Connection]:
@@ -689,18 +691,11 @@ def test_candidate_stage_results_survive_processing_retry(tmp_path: Path) -> Non
         creator_type="user",
         raw_text="یک طرح فنی یازده‌مرحله‌ای برای این پروژه تهیه کن.",
     )
-    plan = "\n".join(
-        ["طرح فنی یازده‌مرحله‌ای پروژه:"]
-        + [
-            f"{index}. مرحله شماره {index} برای پروژه با جزئیات کافی و توضیح کامل."
-            for index in range(1, 12)
-        ]
-    )
     source = messages.create_message(
         session.session_uuid,
-        role="assistant",
-        creator_type="model",
-        raw_text=plan,
+        role="user",
+        creator_type="user",
+        raw_text="I prefer concise answers.",
     )
 
     result = MemoryWorkerPipeline(connection, settings).process_message(source.message_uuid)

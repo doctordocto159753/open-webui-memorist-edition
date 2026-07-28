@@ -27,6 +27,8 @@ from memcore.repositories import JobRepository, MessageRepository, SessionReposi
 from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
 
+pytestmark = pytest.mark.usefixtures("wp02_downstream_semantic_model")
+
 
 def test_memory_worker_is_enabled_for_lite_sqlite() -> None:
     service = MemoryJobWorkerService(Settings(enable_memory_worker=True))

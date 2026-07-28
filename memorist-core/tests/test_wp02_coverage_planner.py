@@ -138,6 +138,63 @@ def test_gate_precedence_is_fail_closed(gate: str | None, expected: CoverageDisp
     assert proposals == ()
 
 
+def test_uncovered_material_splits_at_terminal_authority_boundaries() -> None:
+    raw = "Alpha Beta"
+    abstention = SemanticAnalysisV1Output.model_validate(
+        {
+            "schema_version": "1.0",
+            "prompt_id": "memorist.semantic_candidate_analysis",
+            "prompt_version": "1.0",
+            "status": "abstain",
+            "warnings": ["terminal_gate"],
+            "semantic_units": [],
+            "references": [],
+            "relations": [],
+        }
+    )
+    authorities = (
+        PersistedUnitAuthority(
+            text_unit_uuid="text-alpha",
+            raw_start=0,
+            raw_end=5,
+            annotation_uuid="annotation-alpha",
+            gate_decision_uuid="gate-alpha",
+            gate_decision="retain_raw_only",
+            route_uuid="route-alpha",
+            route_type="ignore",
+            route_status="ignored",
+            privacy_ceiling="normal",
+            privacy_storage_allowed=True,
+        ),
+        PersistedUnitAuthority(
+            text_unit_uuid="text-beta",
+            raw_start=6,
+            raw_end=10,
+            annotation_uuid="annotation-beta",
+            gate_decision_uuid="gate-beta",
+            gate_decision="discard",
+            route_uuid="route-beta",
+            route_type="ignore",
+            route_status="ignored",
+            privacy_ceiling="normal",
+            privacy_storage_allowed=True,
+        ),
+    )
+
+    plan, proposals = plan_candidate_coverage(
+        _planner_input(
+            raw,
+            analysis=abstention,
+            authorities=authorities,
+            prompt_execution_uuid=None,
+        )
+    )
+
+    assert proposals == ()
+    assert [(item.raw_start, item.raw_end) for item in plan.items] == [(0, 5), (6, 10)]
+    assert {item.disposition for item in plan.items} == {CoverageDisposition.REJECTED_BY_GATE}
+
+
 @pytest.mark.parametrize(
     ("unit_type", "durability", "epistemic", "expected"),
     [

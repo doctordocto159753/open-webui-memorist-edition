@@ -39,6 +39,8 @@ from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
 from memcore.validators.ijson import load_ijson
 
+pytestmark = pytest.mark.usefixtures("wp02_downstream_semantic_model")
+
 
 @pytest.fixture()
 def connection(tmp_path: Path) -> Generator[sqlite3.Connection, None, None]:

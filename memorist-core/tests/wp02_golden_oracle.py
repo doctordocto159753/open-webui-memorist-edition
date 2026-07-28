@@ -11,7 +11,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 CORPUS_PATH = Path(__file__).parent / "fixtures" / "wp02" / "golden-corpus-v1.ijson"
 CORPUS_VERSION = "memorist.wp02.golden_corpus.v1"
@@ -23,9 +23,11 @@ class GoldenOracleMismatch(AssertionError):
 
 def load_golden_corpus() -> dict[str, Any]:
     value = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise GoldenOracleMismatch("WP02 corpus root must be an object")
     if value.get("corpus_version") != CORPUS_VERSION:
         raise GoldenOracleMismatch("unexpected WP02 corpus version")
-    return value
+    return cast(dict[str, Any], value)
 
 
 def case_by_id(case_id: str) -> dict[str, Any]:
