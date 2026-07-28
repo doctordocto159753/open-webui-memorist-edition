@@ -6,7 +6,10 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
 
-from memcore.memory_worker.prompts.contracts import JAKOBSON_V3_CONTRACT
+from memcore.memory_worker.prompts.contracts import (
+    JAKOBSON_V3_CONTRACT,
+    SEMANTIC_CANDIDATE_V1_CONTRACT,
+)
 
 
 def _load_stub_module() -> ModuleType:
@@ -55,3 +58,15 @@ def test_e2e_model_stub_emits_the_certified_jakobson_v3_contract() -> None:
     }
     assert "sentences" not in output
     assert JAKOBSON_V3_CONTRACT.validate(output) == []
+
+
+def test_e2e_model_stub_emits_the_certified_semantic_v1_contract() -> None:
+    module = _load_stub_module()
+    build_output = cast(
+        Callable[[dict[str, Any]], dict[str, Any]],
+        module.__dict__["_semantic_output"],
+    )
+    output = build_output({"current_raw_text": "Keep backups enabled."})
+    assert output["status"] == "ok"
+    assert output["semantic_units"][0]["evidence"] == "Keep backups enabled."
+    assert SEMANTIC_CANDIDATE_V1_CONTRACT.validate(output) == []

@@ -25,6 +25,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from memcore.memory_worker.prompts.versions import (
     JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
     JAKOBSON_SENTENCE_ANALYSIS_V3_VERSION,
+    SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID,
+    SEMANTIC_CANDIDATE_ANALYSIS_VERSION,
 )
 
 JakobsonFunctionName = Literal[
@@ -43,6 +45,12 @@ class _Strict(BaseModel):
     """Base model that forbids extra keys so JSON Schema stays strict."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class _SemanticStrict(BaseModel):
+    """WP02 model output is closed and rejects type coercion."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
 
 
 class JakobsonFactor(_Strict):
@@ -105,6 +113,60 @@ class JakobsonV3Output(_Strict):
         if self.sentence_count != len(self.items):
             raise ValueError("sentence_count must match items length")
         return self
+
+
+SemanticUnitType = Literal["statement", "instruction", "question", "explanation"]
+SemanticDurability = Literal["durable", "transient", "context_only", "unknown"]
+SemanticPolarity = Literal["affirmed", "negated", "unknown"]
+SemanticEpistemicStatus = Literal["asserted", "hedged", "hypothetical", "questioned", "unknown"]
+SemanticReferenceStatus = Literal["resolved", "unresolved", "ambiguous"]
+SemanticRelationType = Literal["ratifies", "corrects", "supersedes", "contradicts", "elaborates"]
+
+
+class SemanticUnit(_SemanticStrict):
+    id: Annotated[str, Field(min_length=1)]
+    raw_start: Annotated[int, Field(ge=0)]
+    raw_end: Annotated[int, Field(gt=0)]
+    evidence: Annotated[str, Field(min_length=1)]
+    proposition: Annotated[str, Field(min_length=1)]
+    unit_type: SemanticUnitType
+    durability: SemanticDurability
+    polarity: SemanticPolarity
+    epistemic_status: SemanticEpistemicStatus
+
+
+class SemanticReference(_SemanticStrict):
+    id: Annotated[str, Field(min_length=1)]
+    source_unit_id: Annotated[str, Field(min_length=1)]
+    marker_start: Annotated[int, Field(ge=0)]
+    marker_end: Annotated[int, Field(gt=0)]
+    marker_evidence: Annotated[str, Field(min_length=1)]
+    status: SemanticReferenceStatus
+    candidate_referent_ids: list[str]
+    selected_referent_id: str | None
+
+
+class SemanticRelation(_SemanticStrict):
+    id: Annotated[str, Field(min_length=1)]
+    relation_type: SemanticRelationType
+    source_unit_id: Annotated[str, Field(min_length=1)]
+    target_referent_id: Annotated[str, Field(min_length=1)]
+    evidence_start: Annotated[int, Field(ge=0)]
+    evidence_end: Annotated[int, Field(gt=0)]
+    evidence: Annotated[str, Field(min_length=1)]
+
+
+class SemanticAnalysisV1Output(_SemanticStrict):
+    """Frozen model-returned WP02 semantic-analysis contract."""
+
+    schema_version: Literal["1.0"]
+    prompt_id: Literal["memorist.semantic_candidate_analysis"]
+    prompt_version: Literal["1.0"]
+    status: Literal["ok", "abstain"]
+    warnings: list[str]
+    semantic_units: list[SemanticUnit]
+    references: list[SemanticReference]
+    relations: list[SemanticRelation]
 
 
 @dataclass(frozen=True)
@@ -197,8 +259,19 @@ JAKOBSON_V3_CONTRACT = PromptContract(
     model=JakobsonV3Output,
 )
 
+SEMANTIC_CANDIDATE_V1_CONTRACT = PromptContract(
+    prompt_id=SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID,
+    prompt_version=SEMANTIC_CANDIDATE_ANALYSIS_VERSION,
+    json_schema_name="memorist_semantic_candidate_analysis_v1",
+    model=SemanticAnalysisV1Output,
+)
+
 _CONTRACTS: dict[tuple[str, str], PromptContract] = {
     (JAKOBSON_V3_CONTRACT.prompt_id, JAKOBSON_V3_CONTRACT.prompt_version): JAKOBSON_V3_CONTRACT,
+    (
+        SEMANTIC_CANDIDATE_V1_CONTRACT.prompt_id,
+        SEMANTIC_CANDIDATE_V1_CONTRACT.prompt_version,
+    ): SEMANTIC_CANDIDATE_V1_CONTRACT,
 }
 
 
@@ -278,3 +351,31 @@ def canonical_jakobson_v3_example() -> dict[str, Any]:
             "main_contact_channel": "chat",
         },
     }
+
+
+def canonical_semantic_candidate_v1_example() -> dict[str, Any]:
+    """Return an example by round-tripping the frozen typed contract."""
+
+    output = SemanticAnalysisV1Output(
+        schema_version="1.0",
+        prompt_id="memorist.semantic_candidate_analysis",
+        prompt_version="1.0",
+        status="ok",
+        warnings=[],
+        semantic_units=[
+            SemanticUnit(
+                id="unit-1",
+                raw_start=0,
+                raw_end=21,
+                evidence="Keep backups enabled.",
+                proposition="Backups must remain enabled.",
+                unit_type="instruction",
+                durability="durable",
+                polarity="affirmed",
+                epistemic_status="asserted",
+            )
+        ],
+        references=[],
+        relations=[],
+    )
+    return output.model_dump(mode="json")

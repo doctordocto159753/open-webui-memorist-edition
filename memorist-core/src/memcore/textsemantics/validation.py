@@ -71,6 +71,7 @@ class ValidationReport:
 
     accepted_unit_ids: tuple[str, ...] = ()
     accepted_reference_indexes: tuple[int, ...] = ()
+    accepted_relation_indexes: tuple[int, ...] = ()
     rejections: tuple[Rejection, ...] = field(default_factory=tuple)
     contract_version: str = EVIDENCE_VALIDATION_CONTRACT_VERSION
 
@@ -91,7 +92,12 @@ class ValidationReport:
 EvidenceValidationReport = ValidationReport
 
 
-def validate_semantic_evidence(raw: str, payload: Mapping[str, Any]) -> ValidationReport:
+def validate_semantic_evidence(
+    raw: str,
+    payload: Mapping[str, Any],
+    *,
+    allowed_referent_ids: set[str] | None = None,
+) -> ValidationReport:
     """Check model evidence and references against ``raw``.
 
     This does **not** validate semantic enum values such as ``unit_type``,
@@ -104,6 +110,7 @@ def validate_semantic_evidence(raw: str, payload: Mapping[str, Any]) -> Validati
     rejections: list[Rejection] = []
     units = _sequence(payload.get("semantic_units"))
     references = _sequence(payload.get("references"))
+    relations = _sequence(payload.get("relations"))
 
     accepted: dict[str, tuple[int, int]] = {}
     for position, unit in enumerate(units):
@@ -116,15 +123,36 @@ def validate_semantic_evidence(raw: str, payload: Mapping[str, Any]) -> Validati
 
     accepted_references: list[int] = []
     for position, reference in enumerate(references):
-        rejection = _validate_reference(raw, reference, position, accepted)
+        rejection = _validate_reference(
+            raw,
+            reference,
+            position,
+            accepted,
+            allowed_referent_ids=allowed_referent_ids,
+        )
         if rejection is not None:
             rejections.append(rejection)
             continue
         accepted_references.append(position)
 
+    accepted_relations: list[int] = []
+    for position, relation in enumerate(relations):
+        rejection = _validate_relation(
+            raw,
+            relation,
+            position,
+            accepted,
+            allowed_referent_ids=allowed_referent_ids,
+        )
+        if rejection is not None:
+            rejections.append(rejection)
+            continue
+        accepted_relations.append(position)
+
     return ValidationReport(
         accepted_unit_ids=tuple(accepted),
         accepted_reference_indexes=tuple(accepted_references),
+        accepted_relation_indexes=tuple(accepted_relations),
         rejections=tuple(rejections),
     )
 
@@ -192,6 +220,8 @@ def _validate_reference(
     reference: Any,
     position: int,
     accepted: dict[str, tuple[int, int]],
+    *,
+    allowed_referent_ids: set[str] | None,
 ) -> Rejection | None:
     if not isinstance(reference, Mapping):
         return Rejection(Violation.MALFORMED_RECORD, "reference", None, f"index {position}")
@@ -220,12 +250,23 @@ def _validate_reference(
         return rejection
 
     status = reference.get("status")
-    target = reference.get("target_unit_id")
-    offered_raw = reference.get("candidate_unit_ids")
+    canonical_shape = "selected_referent_id" in reference or "candidate_referent_ids" in reference
+    target = (
+        reference.get("selected_referent_id")
+        if canonical_shape
+        else reference.get("target_unit_id")
+    )
+    offered_raw = (
+        reference.get("candidate_referent_ids")
+        if canonical_shape
+        else reference.get("candidate_unit_ids")
+    )
     offered = _sequence(offered_raw)
 
     for candidate in offered:
-        if not isinstance(candidate, str) or candidate not in accepted:
+        if not isinstance(candidate, str) or not _known_referent(
+            candidate, accepted, allowed_referent_ids
+        ):
             return Rejection(
                 Violation.UNKNOWN_CANDIDATE_UNIT_ID,
                 "reference",
@@ -238,7 +279,7 @@ def _validate_reference(
             return Rejection(
                 Violation.RESOLVED_WITHOUT_TARGET, "reference", label, "status=resolved, no target"
             )
-        if target not in accepted:
+        if not _known_referent(target, accepted, allowed_referent_ids):
             return Rejection(
                 Violation.UNKNOWN_UNIT_ID, "reference", label, f"target {target!r} is not a unit"
             )
@@ -257,6 +298,64 @@ def _validate_reference(
                 f"target {target!r} not in its own candidates",
             )
     return None
+
+
+def _validate_relation(
+    raw: str,
+    relation: Any,
+    position: int,
+    accepted: dict[str, tuple[int, int]],
+    *,
+    allowed_referent_ids: set[str] | None,
+) -> Rejection | None:
+    if not isinstance(relation, Mapping):
+        return Rejection(Violation.MALFORMED_RECORD, "relation", None, f"index {position}")
+    label = str(relation.get("id") or position)
+    source = relation.get("source_unit_id")
+    target = relation.get("target_referent_id")
+    if not isinstance(source, str) or source not in accepted:
+        return Rejection(
+            Violation.UNKNOWN_UNIT_ID,
+            "relation",
+            label,
+            f"source {source!r} is not an accepted semantic unit",
+        )
+    if not isinstance(target, str) or not _known_referent(target, accepted, allowed_referent_ids):
+        return Rejection(
+            Violation.UNKNOWN_UNIT_ID,
+            "relation",
+            label,
+            f"target {target!r} is not an allowed referent",
+        )
+    span = _span(relation.get("evidence_start"), relation.get("evidence_end"))
+    if span is None:
+        return Rejection(
+            Violation.MALFORMED_RECORD,
+            "relation",
+            label,
+            "evidence_start/evidence_end not integers",
+        )
+    start, end = span
+    if start >= end:
+        return Rejection(Violation.SPAN_INVERTED, "relation", label, f"[{start}, {end})")
+    if start < 0 or end > len(raw):
+        return Rejection(
+            Violation.SPAN_OUT_OF_RANGE,
+            "relation",
+            label,
+            f"[{start}, {end}) outside [0, {len(raw)})",
+        )
+    return _check_evidence(raw, relation, label, start, end, "relation")
+
+
+def _known_referent(
+    referent_id: str,
+    accepted: dict[str, tuple[int, int]],
+    allowed_referent_ids: set[str] | None,
+) -> bool:
+    if referent_id in accepted or referent_id.removeprefix("current_unit:") in accepted:
+        return True
+    return allowed_referent_ids is not None and referent_id in allowed_referent_ids
 
 
 def _check_evidence(

@@ -18,7 +18,10 @@ from memcore.main import create_app
 from memcore.memory_control.policy import normalize_turn_policy
 from memcore.memory_control.repository import MemoryControlRepository, ResolvedTurnPolicy
 from memcore.memory_worker.pipeline import MemoryWorkerPipeline
-from memcore.memory_worker.prompts.contracts import canonical_jakobson_v3_example
+from memcore.memory_worker.prompts.contracts import (
+    canonical_jakobson_v3_example,
+    canonical_semantic_candidate_v1_example,
+)
 from memcore.model_control.providers.openai_compatible import (
     OpenAICompatibleEmbeddingProvider,
     OpenAICompatibleLLMProvider,
@@ -63,8 +66,15 @@ def test_model_control_roles(client_and_db: tuple[TestClient, Path]) -> None:
 def test_role_contract_manifest_uses_each_roles_actual_contract() -> None:
     extraction = role_contract_manifest("memory_extraction")
     reconstruction = role_contract_manifest("import_reconstruction")
-    assert extraction["prompt"]["metadata"]["prompt_id"] == "memorist.jakobson_sentence_analysis"
-    assert extraction["prompt"]["metadata"]["prompt_version"] == "3.0"
+    bundle = extraction["bundle"]
+    assert bundle["bundle_id"] == "memory-extraction-contract-bundle-v1"
+    assert [
+        (entry["prompt"]["prompt_id"], entry["prompt"]["prompt_version"])
+        for entry in bundle["prompts"]
+    ] == [
+        ("memorist.jakobson_sentence_analysis", "3.0"),
+        ("memorist.semantic_candidate_analysis", "1.0"),
+    ]
     assert reconstruction["prompt"]["metadata"]["prompt_id"] == "memorist.import_reconstruction"
     assert reconstruction["prompt"]["metadata"]["prompt_version"] == "2.0"
     assert extraction != reconstruction
@@ -658,6 +668,7 @@ def test_preflight_model_lifecycle_records_before_attachment(
 
 def test_extraction_uses_memory_model_not_chat_model(
     client_and_db: tuple[TestClient, Path],
+    openai_compatible_server: str,
 ) -> None:
     client, db_path = client_and_db
     session = _assert_ok(
@@ -671,7 +682,9 @@ def test_extraction_uses_memory_model_not_chat_model(
         )
     )
     chat_profile = _create_profile(client, "main_chat_observed", "openwebui-chat-model")
-    extraction_profile = _create_profile(client, "memory_extraction", "memory-extractor")
+    extraction_profile = _create_certified_extraction_profile(
+        client, openai_compatible_server, "memory-extractor"
+    )
     _assert_ok(
         client.post(
             "/memcore/model-control/defaults",
@@ -730,10 +743,13 @@ def test_extraction_uses_memory_model_not_chat_model(
 
 def test_memory_worker_process_uses_memory_extraction_profile(
     client_and_db: tuple[TestClient, Path],
+    openai_compatible_server: str,
     tmp_path: Path,
 ) -> None:
     client, db_path = client_and_db
-    extraction_profile = _create_profile(client, "memory_extraction", "worker-extractor")
+    extraction_profile = _create_certified_extraction_profile(
+        client, openai_compatible_server, "worker-extractor"
+    )
     _assert_ok(
         client.post(
             "/memcore/model-control/defaults",
@@ -800,6 +816,7 @@ def test_memory_worker_uses_tested_memory_extraction_profile(
 
     assert health["health"]["status"] == "ok"
     assert _OpenAICompatibleHandler.post_paths == [
+        "/v1/chat/completions",
         "/v1/chat/completions",
         "/v1/chat/completions",
     ]
@@ -1619,6 +1636,11 @@ class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
                 output = canonical_jakobson_v3_example()
                 output["items"][0]["text"] = "Keep backups enabled."
                 response_content = json.dumps(output)
+            elif (
+                schema.get("name") == "memorist_semantic_candidate_analysis_v1"
+                or "memorist.semantic_candidate_analysis" in prompt_text
+            ) and response_content == json.dumps({"memorist_provider_test": "ok"}):
+                response_content = json.dumps(canonical_semantic_candidate_v1_example())
             body = json.dumps({"choices": [{"message": {"content": response_content}}]}).encode(
                 "utf-8"
             )
@@ -1888,6 +1910,29 @@ def _create_profile(
     return str(response["model_profile_uuid"])
 
 
+def _create_certified_extraction_profile(
+    client: TestClient, endpoint_url: str, model_name: str
+) -> str:
+    _OpenAICompatibleHandler.reset()
+    _OpenAICompatibleHandler.expected_chat_model = model_name
+    profile = _assert_ok(
+        client.post(
+            "/memcore/model-control/profiles",
+            json={
+                "provider_type": "openai_compatible_llm",
+                "provider_name": "test-memory-model",
+                "model_name": model_name,
+                "role": "memory_extraction",
+                "endpoint_url": endpoint_url,
+                "supports_json_mode": True,
+            },
+        )
+    )
+    profile_uuid = str(profile["model_profile_uuid"])
+    _assert_ok(client.post(f"/memcore/model-control/profiles/{profile_uuid}/test", json={}))
+    return profile_uuid
+
+
 @contextmanager
 def _db(db_path: Path) -> Iterator[sqlite3.Connection]:
     connection = connect(db_path)
@@ -1951,7 +1996,7 @@ def test_profile_health_routes_roles_and_provider_types(openai_compatible_server
         )
         assert health.status == "ok", (role, health.model_dump(mode="json"))
         assert health.provider_type == "openai_compatible_llm"
-        expected_calls = 2
+        expected_calls = 3 if role == "memory_extraction" else 2
         assert _OpenAICompatibleHandler.post_paths == ["/v1/chat/completions"] * expected_calls
         assert _OpenAICompatibleHandler.get_paths == []
 
@@ -1979,7 +2024,8 @@ def test_profile_health_routes_roles_and_provider_types(openai_compatible_server
             "embedding_dimension": 3,
         }
     )
-    assert explicit_embedding_health.status == "ok"
+    assert explicit_embedding_health.status == "error"
+    assert explicit_embedding_health.role_probe_status == "incompatible"
     assert explicit_embedding_health.provider_type == "openai_compatible_embedding"
     assert _OpenAICompatibleHandler.post_paths == ["/v1/embeddings"]
 

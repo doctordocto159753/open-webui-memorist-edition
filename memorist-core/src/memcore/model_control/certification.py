@@ -74,7 +74,10 @@ def certification_status(
         "certification_current": False,
         "certified_at": None,
     }
-    if profile.provider_type in _SELF_CERTIFYING_PROVIDERS:
+    if (
+        profile.provider_type in _SELF_CERTIFYING_PROVIDERS
+        and profile.role.value != "memory_extraction"
+    ):
         return {
             **base,
             "authentication_status": "not_required",
