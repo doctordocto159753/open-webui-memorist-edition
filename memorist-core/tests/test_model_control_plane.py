@@ -821,11 +821,22 @@ def test_memory_worker_uses_tested_memory_extraction_profile(
         "/v1/chat/completions",
     ]
     assert _OpenAICompatibleHandler.last_payload["model"] == "mock-chat"
+    raw_text = "The user prefers local OpenAI-compatible memory extraction tests."
     provider_output = canonical_jakobson_v3_example()
-    provider_output["items"][0]["text"] = (
-        "The user prefers local OpenAI-compatible memory extraction tests."
+    provider_output["items"][0]["text"] = raw_text
+    semantic_output = canonical_semantic_candidate_v1_example()
+    semantic_output["semantic_units"][0].update(
+        {
+            "raw_end": len(raw_text),
+            "evidence": raw_text,
+            "proposition": raw_text,
+            "unit_type": "statement",
+        }
     )
-    _OpenAICompatibleHandler.response_content = json.dumps(provider_output)
+    _OpenAICompatibleHandler.response_content_by_prompt_id = {
+        "memorist.jakobson_sentence_analysis": json.dumps(provider_output),
+        "memorist.semantic_candidate_analysis": json.dumps(semantic_output),
+    }
 
     _assert_ok(
         client.post(
@@ -841,7 +852,7 @@ def test_memory_worker_uses_tested_memory_extraction_profile(
                 "session_uuid": session["session_uuid"],
                 "role": "assistant",
                 "creator_type": "model",
-                "raw_text": "The user prefers local OpenAI-compatible memory extraction tests.",
+                "raw_text": raw_text,
             },
         )
     )
@@ -868,20 +879,29 @@ def test_memory_worker_uses_tested_memory_extraction_profile(
         assert usage["model_name"] == "mock-chat"
         assert usage["status"] == "ok"
 
-        prompt_run = connection.execute(
+        prompt_runs = connection.execute(
             """
-            SELECT model_profile_uuid, provider_type, model_name, status
+            SELECT prompt_id, model_profile_uuid, provider_type, model_name, status
             FROM prompt_execution_runs
-            WHERE model_role = 'memory_extraction'
-            ORDER BY created_at DESC
-            LIMIT 1
-            """
-        ).fetchone()
-        assert prompt_run is not None
-        assert prompt_run["model_profile_uuid"] == profile_uuid
-        assert prompt_run["provider_type"] == "openai_compatible_llm"
-        assert prompt_run["model_name"] == "mock-chat"
-        assert prompt_run["status"] == "ok"
+            WHERE model_role = 'memory_extraction' AND message_uuid = ?
+            ORDER BY prompt_id
+            """,
+            (message["message_uuid"],),
+        ).fetchall()
+        runs_by_prompt = {row["prompt_id"]: row for row in prompt_runs}
+        assert set(runs_by_prompt) == {
+            "memorist.jakobson_sentence_analysis",
+            "memorist.semantic_candidate_analysis",
+        }
+        for prompt_id, expected_status in {
+            "memorist.jakobson_sentence_analysis": "ok",
+            "memorist.semantic_candidate_analysis": "ok",
+        }.items():
+            prompt_run = runs_by_prompt[prompt_id]
+            assert prompt_run["model_profile_uuid"] == profile_uuid
+            assert prompt_run["provider_type"] == "openai_compatible_llm"
+            assert prompt_run["model_name"] == "mock-chat"
+            assert prompt_run["status"] == expected_status
 
 
 def test_deterministic_fallback_still_works_without_profile(
@@ -929,9 +949,10 @@ def test_deterministic_fallback_still_works_without_profile(
             SELECT model_profile_uuid, provider_type, model_name, status
             FROM prompt_execution_runs
             WHERE model_role = 'memory_extraction'
-            ORDER BY created_at DESC
-            LIMIT 1
-            """
+              AND prompt_id = 'memorist.jakobson_sentence_analysis'
+              AND message_uuid = ?
+            """,
+            (message["message_uuid"],),
         ).fetchone()
         assert prompt_run is not None
         assert prompt_run["model_profile_uuid"] is None
@@ -1553,6 +1574,7 @@ class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
     auth_failure_body: str | None = None
     response_delay_seconds = 0.0
     embedding_vector: list[float] = [0.1, 0.2, 0.3]
+    response_content_by_prompt_id: dict[str, str] = {}
 
     @classmethod
     def reset(cls) -> None:
@@ -1568,6 +1590,7 @@ class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
         cls.auth_failure_body = None
         cls.response_delay_seconds = 0.0
         cls.embedding_vector = [0.1, 0.2, 0.3]
+        cls.response_content_by_prompt_id = {}
 
     def do_GET(self) -> None:  # noqa: N802
         self.__class__.get_paths.append(self.path)
@@ -1625,7 +1648,21 @@ class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
             messages = payload.get("messages", [])
             prompt_text = json.dumps(messages, ensure_ascii=False)
             role_output = _role_contract_probe_output(prompt_text)
-            if role_output is not None and response_content == json.dumps(
+            prompt_id = None
+            if (
+                schema.get("name") == "memorist_jakobson_sentence_analysis_v3"
+                or "memorist.jakobson_sentence_analysis" in prompt_text
+            ):
+                prompt_id = "memorist.jakobson_sentence_analysis"
+            elif (
+                schema.get("name") == "memorist_semantic_candidate_analysis_v1"
+                or "memorist.semantic_candidate_analysis" in prompt_text
+            ):
+                prompt_id = "memorist.semantic_candidate_analysis"
+            contract_response = self.__class__.response_content_by_prompt_id.get(prompt_id or "")
+            if contract_response is not None:
+                response_content = contract_response
+            elif role_output is not None and response_content == json.dumps(
                 {"memorist_provider_test": "ok"}
             ):
                 response_content = json.dumps(role_output)
