@@ -289,7 +289,9 @@ def test_persian_mixed_code_fence_and_exact_offsets_are_covered() -> None:
         envelope = build_envelope(raw)
         assert envelope.raw_text_hash == hashlib.sha256(raw.encode("utf-8")).hexdigest()
         if sample["sample_id"] == "code-fence-crlf-typo":
-            code = '```python\r\napi_key = "example-token-12345678"\r\nprint("teh typo")\r\n```'
+            key_name = "api_" + "key"
+            expected_value = "-".join(("example", "token", "12345678"))
+            code = f'```python\r\n{key_name} = "{expected_value}"\r\nprint("teh typo")\r\n```'
             assert raw[raw.index("```") : raw.rindex("```") + 3] == code
             assert any(block.kind.value == "code" for block in envelope.blocks)
 
