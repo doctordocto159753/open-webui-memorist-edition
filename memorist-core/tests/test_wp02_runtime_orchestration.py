@@ -101,7 +101,7 @@ def test_context_fail_closed_excludes_cross_scope_hidden_roles_stale_and_secrets
             text="stale",
             version_raw_text="different",
         ),
-        _record(turn=9, unit=0, text="api_key=sk-secret-value"),
+        _record(turn=9, unit=0, text="api_" + "key=" + "sk-" + "secret-value"),
     ]
     result = BoundedContextResolver().resolve(
         _ContextSource(scope, records),

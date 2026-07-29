@@ -96,11 +96,12 @@ fallback = abstain | retain_raw_only | needs_review
 
 No absence-of-negation rule may silently mean `affirmed` in canonical memory.
 
-## Strict typed output belongs to WP02
+## Strict typed output: semantic candidate analysis v1
 
-WP01 does not pretend that evidence validation is full schema validation. WP02
-must introduce one closed, versioned, strict structured-output contract aligned
-with the PR #51/#52 runtime/certification pattern.
+WP02 implements the closed `memorist.semantic_candidate_analysis` contract,
+version `1.0`, schema name `memorist_semantic_candidate_analysis_v1`. Pydantic
+strict mode rejects extra, missing, mistyped, and out-of-enum fields before the
+WP01 evidence validator runs.
 
 At minimum a semantic unit declares:
 
@@ -111,15 +112,18 @@ At minimum a semantic unit declares:
   "raw_end": 110,
   "evidence": "حذف لایه WSL2.",
   "proposition": "Kubuntu's advantage is removing the WSL2 layer.",
-  "unit_type": "preference",
+  "unit_type": "statement",
   "polarity": "affirmed",
   "epistemic_status": "asserted",
   "durability": "durable"
 }
 ```
 
-The strict schema must reject missing fields, extra fields, invalid enum values,
-wrong types, and schema-version mismatch before evidence validation runs.
+`unit_type` is exactly `statement | instruction | question | explanation`.
+Durability is `durable | transient | context_only | unknown`; polarity and
+epistemic status are separate axes. The runtime sequence is parse → strict
+contract → semantic binding → WP01 evidence validation → at most one repair →
+content-free `abstain` fallback. Fallback creates no proposal or memory.
 
 ## Evidence-integrity validation
 

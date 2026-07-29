@@ -16,8 +16,23 @@ Hot Open WebUI writes use the `SQLiteWriteActor` through `WriteGateway`. The act
 - Open WebUI session resolution writes;
 - Open WebUI message capture writes;
 - idempotency record writes.
+- WP02 coverage plans, proposal reservations, and candidate/evidence links.
 
 Read-heavy routes open short-lived local SQLite connections.
+
+## WP02 audit and replay
+
+Migration `0037_semantic_coverage_audit.sql` adds
+`semantic_coverage_runs`, `semantic_coverage_items`, and
+`semantic_candidate_links`. These rows contain hashes, versions, dispositions,
+lineage UUIDs, and reason codes—not raw evidence, propositions, or bounded
+context text. Plan insertion uses `BEGIN IMMEDIATE`; migration SQL and its
+`schema_migrations` record commit atomically.
+
+A linked replay verifies the stored candidate and deterministic evidence, then
+revalidates the current processing run's gate, route, and privacy authority.
+The eventual candidate UUID equals the proposal UUID. A payload mismatch or
+same-text new message version fails closed instead of producing a duplicate.
 
 ## Diagnostics
 

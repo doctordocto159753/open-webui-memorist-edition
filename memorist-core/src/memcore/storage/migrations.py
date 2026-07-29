@@ -61,13 +61,24 @@ def apply_migrations(connection: sqlite3.Connection, migrations_dir: Path | None
                 raise RuntimeError(f"Migration checksum mismatch: {migration_id}")
             continue
 
-        connection.executescript(migration_sql)
-        connection.execute(
-            """
-            INSERT INTO schema_migrations (migration_id, applied_at, checksum, description)
-            VALUES (?, CURRENT_TIMESTAMP, ?, ?)
-            """,
-            (migration_id, checksum, migration_path.stem),
+        connection.commit()
+        atomic_script = (
+            "BEGIN IMMEDIATE;\n"
+            f"{migration_sql.rstrip()}\n"
+            "INSERT INTO schema_migrations "
+            "(migration_id, applied_at, checksum, description) VALUES "
+            f"({_sql_literal(migration_id)}, CURRENT_TIMESTAMP, "
+            f"{_sql_literal(checksum)}, {_sql_literal(migration_path.stem)});\n"
+            "COMMIT;\n"
         )
+        try:
+            connection.executescript(atomic_script)
+        except Exception:
+            connection.rollback()
+            raise
 
     connection.commit()
+
+
+def _sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"

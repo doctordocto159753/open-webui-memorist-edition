@@ -190,7 +190,7 @@ class CreateAndLinkSemanticCandidateCommand:
         return evidence, candidate_payload_hash(self.candidate, evidence)
 
     def validate_idempotent_replay(self, connection: sqlite3.Connection) -> None:
-        _evidence, payload_hash = self._payload()
+        evidence, payload_hash = self._payload()
         row = connection.execute(
             "SELECT * FROM semantic_candidate_links WHERE proposal_uuid = ?",
             (self.proposal.proposal_id,),
@@ -198,6 +198,18 @@ class CreateAndLinkSemanticCandidateCommand:
         if row is None or row["state"] != "candidate_linked":
             raise SemanticCoverageIdentityConflict("candidate replay is not linked")
         _assert_link_row(row, row["coverage_item_uuid"], payload_hash)
+        existing_candidate = connection.execute(
+            "SELECT * FROM memory_candidates WHERE candidate_uuid = ?",
+            (self.proposal.proposal_id,),
+        ).fetchone()
+        if existing_candidate is None:
+            raise SemanticCoverageIdentityConflict("linked candidate row is missing")
+        _assert_existing_sqlite_candidate(
+            connection,
+            existing_candidate,
+            self.candidate,
+            evidence,
+        )
 
     def execute(self, connection: sqlite3.Connection) -> WriteResult:
         evidence, payload_hash = self._payload()
@@ -213,6 +225,18 @@ class CreateAndLinkSemanticCandidateCommand:
             if self.authority is not None:
                 _assert_candidate_authority(connection, self.authority)
             if link["state"] == "candidate_linked":
+                existing_candidate = connection.execute(
+                    "SELECT * FROM memory_candidates WHERE candidate_uuid = ?",
+                    (self.proposal.proposal_id,),
+                ).fetchone()
+                if existing_candidate is None:
+                    raise SemanticCoverageIdentityConflict("linked candidate row is missing")
+                _assert_existing_sqlite_candidate(
+                    connection,
+                    existing_candidate,
+                    self.candidate,
+                    evidence,
+                )
                 connection.commit()
                 return _write_result(
                     self.command_type,
@@ -372,6 +396,9 @@ def _run_values(
         "raw_text_hash": plan.raw_text_hash,
         "text_envelope_contract_version": bindings.text_envelope_contract_version,
         "semantic_contract_hash": plan.semantic_contract_hash,
+        "route_mapping_version": bindings.route_mapping_version,
+        "provenance_policy_version": bindings.provenance_policy_version,
+        "privacy_policy_version": bindings.privacy_policy_version,
         "status": plan.status,
         "plan_ijson": dump_ijson(plan.model_dump(mode="json")),
         "warnings_ijson": dump_ijson(list(plan.warnings)),

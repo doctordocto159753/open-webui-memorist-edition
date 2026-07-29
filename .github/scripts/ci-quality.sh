@@ -21,7 +21,15 @@ npm run lint
 for file in \
   README.md LICENSE SECURITY.md CONTRIBUTING.md RELEASE_NOTES.md \
   docs/ARCHITECTURE.md docs/INSTALLATION.md docs/MEMORY_MACHINE.md \
-  docs/DEVELOPMENT.md docs/TROUBLESHOOTING.md docs/reference/README.md; do
+  docs/DEVELOPMENT.md docs/TROUBLESHOOTING.md docs/reference/README.md \
+  docs/reference/semantic-candidate-authority.md \
+  docs/reference/semantic-analysis-contract.md \
+  docs/reference/memory-worker-prompts.md \
+  docs/reference/model-control-plane.md \
+  docs/reference/runtime-role-contracts.md \
+  docs/reference/text-semantics.md \
+  docs/reference/sqlite-runtime.md docs/reference/postgres.md \
+  docs/reference/sqlite-to-postgres.md; do
   test -f "$file" || { echo "MISSING $file"; exit 1; }
 done
 

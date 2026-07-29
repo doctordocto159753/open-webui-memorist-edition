@@ -13,7 +13,8 @@ from memcore.validators.ijson import canonical_hash_ijson
 
 PROPOSAL_IDENTITY_VERSION = "memorist.semantic_candidate.proposal_identity.v1"
 COVERAGE_ITEM_IDENTITY_VERSION = "memorist.semantic_candidate.coverage_item_identity.v1"
-PROPOSAL_NAMESPACE = uuid.UUID("d4d20b4f-d8f6-5f3d-9f3e-89564d09985f")
+PROPOSAL_NAMESPACE = uuid.NAMESPACE_URL
+PROPOSAL_NAME_PREFIX = "memorist:semantic-candidate-proposal:v1:"
 COVERAGE_ITEM_NAMESPACE = uuid.UUID("0e4f3e9a-c687-53a0-a948-bc544393f77d")
 
 
@@ -103,7 +104,7 @@ def proposal_identity(
         "coverage_disposition": coverage_disposition,
     }
     digest = canonical_hash_ijson(material)
-    return str(uuid.uuid5(PROPOSAL_NAMESPACE, digest)), digest
+    return str(uuid.uuid5(PROPOSAL_NAMESPACE, f"{PROPOSAL_NAME_PREFIX}{digest}")), digest
 
 
 def coverage_item_identity(material: Mapping[str, Any]) -> str:

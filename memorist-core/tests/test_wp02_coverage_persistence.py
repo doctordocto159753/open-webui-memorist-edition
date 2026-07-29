@@ -790,6 +790,11 @@ def _cleanup_postgres(connection: Any, proposal_id: str) -> None:
             "00000000-0000-4000-8000-000000000003",
         ),
         (
+            "message_versions",
+            "message_uuid",
+            "00000000-0000-4000-8000-000000000002",
+        ),
+        (
             "messages",
             "message_uuid",
             "00000000-0000-4000-8000-000000000002",

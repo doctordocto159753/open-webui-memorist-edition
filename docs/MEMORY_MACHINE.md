@@ -18,17 +18,18 @@ through gate, route, trust, and consolidation before it can be recalled.
 1. capture           raw user/assistant message, unchanged, as evidence
 2. unitization       deterministic sentence units with exact offsets
 3. Jakobson analysis six-factor communication annotation per sentence
-4. receiver/context  who is addressed, what is referred to
-5. canonical route   which extraction path this signal belongs to
-6. gate decision     should a candidate exist at all (gate before candidate)
-7. candidate         route-specific, evidence-linked memory candidate
-8. trust/provenance  who said it, in what role, how trustworthy
-9. persistence       candidate stored with lineage, never as instant truth
-10. review paths     privacy/forget/manual-review handled outside ordinary memory
-11. consolidation    candidates become versioned canonical memories
-12. retrieval        scoped, budget-aware, rank-fused candidate selection
-13. attachment       bounded Memory Context Attachment, provenance-tagged
-14. display          read-only, redacted "Memory used" panel in chat
+4. canonical route   persisted server-owned route
+5. gate decision     persisted server-owned gate (always before candidate)
+6. bounded context   2 prior units, or 6 only for dependency hints
+7. semantic v1       one whole-message model call with strict local validation
+8. coverage plan     one deterministic disposition for every accepted unit
+9. proposal          deterministic UUIDv5, privacy/provenance bounded
+10. persistence      crash-safe proposal/candidate link in SQLite or PostgreSQL
+11. review paths     privacy/forget/manual-review handled outside ordinary memory
+12. consolidation    candidates become versioned canonical memories
+13. retrieval        scoped, budget-aware, rank-fused candidate selection
+14. attachment       bounded Memory Context Attachment, provenance-tagged
+15. display          read-only, redacted "Memory used" panel in chat
 ```
 
 Consent wraps the whole machine: the per-chat **Memory On / Memory Off**
@@ -88,11 +89,26 @@ here:
   their own workflows, never to ordinary memory;
 - weak or out-of-scope signals are dropped with a recorded reason.
 
-## 7–9. Candidate construction, trust, and persistence
+## 6–10. Semantic coverage, candidate construction, and persistence
 
-Approved signals become **memory candidates** through route-specific
-extractors (a shared candidate service, so every route constructs candidates
-under the same policy). A candidate carries:
+Only `analyze` and `analyze_high_confidence` gates enter the shared
+`SemanticCandidatePlanningService`; terminal gates skip the semantic provider.
+Lite and Full send the same whole-message prompt and a bounded same-user,
+same-session, same-workspace/project context manifest. Memory attachments,
+system prompts, hidden/deleted versions, tool output, and cross-session text are
+never semantic context.
+
+The model proposes units, references, relations, durability, polarity, and
+epistemic status. Local code retains authority over exact evidence, gate/route,
+privacy, provenance, disposition, UUID identity, and persistence. Every accepted
+unit receives exactly one of `durable_candidate`, `context_only`,
+`transient_instruction`, `unresolved_reference`, `rejected_by_gate`,
+`needs_review`, or `unsupported`; omitted material is explicit rather than
+silently dropped.
+
+Only `durable_candidate` produces a proposal. The shared candidate adapter
+mechanically maps that proposal through the already-persisted route. A candidate
+carries:
 
 - the claim text and memory type;
 - evidence links back to exact sentence units and messages;
@@ -102,8 +118,12 @@ under the same policy). A candidate carries:
   provenance and different default trust. Assistant/tool/system-derived text
   never silently gains user-level authority.
 
-Candidates are persisted with full lineage. A candidate is a routed
-interpretation, not truth.
+Proposal UUIDs are deterministic and become candidate UUIDs. Coverage,
+reservation, candidate, and evidence linking are replay-safe; a linked replay
+verifies stored content instead of trusting the link alone. Assistant context
+remains `assistant_claim` unless the current user explicitly ratifies or
+corrects one uniquely resolved assistant item. Candidates remain routed
+interpretations, not truth.
 
 ## 10–11. Review paths and consolidation
 

@@ -220,6 +220,8 @@ def validate_semantic_binding(
                 or reference.selected_referent_id not in reference.candidate_referent_ids
             ):
                 raise ValueError("resolved reference must select one supplied candidate")
+            if reference.selected_referent_id == f"current_unit:{reference.source_unit_id}":
+                raise ValueError("resolved reference cannot target its own source unit")
         elif reference.selected_referent_id is not None:
             raise ValueError("ambiguous or unresolved reference cannot select a target")
 

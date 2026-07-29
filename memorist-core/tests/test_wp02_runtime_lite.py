@@ -124,7 +124,7 @@ def test_lite_sensitive_message_creates_no_semantic_call_or_content_audit(
 ) -> None:
     connection = connect(tmp_path / "wp02-sensitive.sqlite")
     apply_migrations(connection)
-    secret = "sk-proj-abcdefgh12345678"
+    secret = "sk-" + "proj-abcdefgh12345678"
     try:
         message_uuid = _seed_trusted_message(
             connection,

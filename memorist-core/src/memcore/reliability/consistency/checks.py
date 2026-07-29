@@ -3,6 +3,9 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+from memcore.memory_worker.semantic_coverage_persistence import candidate_payload_hash
+from memcore.models import CandidateEvidence, MemoryCandidate
+
 CHECKS: tuple[tuple[str, str], ...] = (
     (
         "messages_reference_sessions",
@@ -104,6 +107,56 @@ def structural_issues(connection: sqlite3.Connection) -> list[dict[str, Any]]:
         except sqlite3.OperationalError as exc:
             issues.append(
                 {"check": check_name, "id": "schema", "severity": "warning", "message": str(exc)}
+            )
+    return issues
+
+
+def semantic_candidate_payload_issues(
+    connection: sqlite3.Connection,
+) -> list[dict[str, Any]]:
+    """Recompute linked candidate payload hashes without exposing their content."""
+
+    if not all(
+        table_exists(connection, table)
+        for table in (
+            "semantic_candidate_links",
+            "memory_candidates",
+            "candidate_evidence",
+        )
+    ):
+        return []
+    issues: list[dict[str, Any]] = []
+    links = connection.execute(
+        """
+        SELECT proposal_uuid, candidate_uuid, payload_hash
+        FROM semantic_candidate_links
+        WHERE state = 'candidate_linked'
+        """
+    ).fetchall()
+    for link in links:
+        candidate_row = connection.execute(
+            "SELECT * FROM memory_candidates WHERE candidate_uuid = ?",
+            (link["candidate_uuid"],),
+        ).fetchone()
+        evidence_rows = connection.execute(
+            "SELECT * FROM candidate_evidence WHERE candidate_uuid = ? ORDER BY evidence_uuid",
+            (link["candidate_uuid"],),
+        ).fetchall()
+        try:
+            if candidate_row is None or not evidence_rows:
+                raise ValueError("linked payload rows are incomplete")
+            candidate = MemoryCandidate.model_validate(dict(candidate_row))
+            evidence = tuple(CandidateEvidence.model_validate(dict(row)) for row in evidence_rows)
+            actual_hash = candidate_payload_hash(candidate, evidence)
+        except (TypeError, ValueError):
+            actual_hash = None
+        if actual_hash != link["payload_hash"]:
+            issues.append(
+                {
+                    "check": "semantic_candidate_payload_hash",
+                    "id": link["proposal_uuid"],
+                    "severity": "error",
+                }
             )
     return issues
 

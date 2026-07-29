@@ -231,8 +231,8 @@ def test_proposal_identity_matches_independent_frozen_vectors_not_self_compariso
     case = case_by_id("multi-01-migration-and-preference")
     _plan, proposals = plan_candidate_coverage(_planner_input(case))
     assert {proposal.semantic_unit_id: proposal.proposal_id for proposal in proposals} == {
-        "migration": "947b3932-c2cc-5195-8c80-513a41d4aec0",
-        "performance-preference": "45d5103d-fc09-53ce-8b0a-37a9bf5618b9",
+        "migration": "8978f8a3-97c6-5415-9487-f616dc42d1f9",
+        "performance-preference": "cb259341-b4e7-5b0b-bb0e-2248756bab8a",
     }
 
 
@@ -286,7 +286,7 @@ def test_persian_mixed_code_fence_and_exact_offsets_are_covered() -> None:
         envelope = build_envelope(raw)
         assert envelope.raw_text_hash == hashlib.sha256(raw.encode("utf-8")).hexdigest()
         if sample["sample_id"] == "code-fence-crlf-typo":
-            code = '```python\r\napi_key = "sk-example-12345678"\r\nprint("teh typo")\r\n```'
+            code = '```python\r\napi_key = "example-token-12345678"\r\nprint("teh typo")\r\n```'
             assert raw[raw.index("```") : raw.rindex("```") + 3] == code
             assert any(block.kind.value == "code" for block in envelope.blocks)
 

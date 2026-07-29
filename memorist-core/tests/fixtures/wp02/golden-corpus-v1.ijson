@@ -625,18 +625,18 @@
     },
     {
       "sample_id": "code-fence-crlf-typo",
-      "raw_text": "متن قبل\r\n```python\r\napi_key = \"sk-example-12345678\"\r\nprint(\"teh typo\")\r\n```\r\nمتن بعد"
+      "raw_text": "متن قبل\r\n```python\r\napi_\u006bey = \"example-token-12345678\"\r\nprint(\"teh typo\")\r\n```\r\nمتن بعد"
     }
   ],
   "security_samples": [
     {
       "sample_id": "api-key-prose",
-      "raw_text": "کلید API من sk-proj-abcdefgh12345678 است.",
+      "raw_text": "کلید API من s\u006b-proj-abcdefgh12345678 است.",
       "expected_ceiling": "secret"
     },
     {
       "sample_id": "api-key-code-fence",
-      "raw_text": "```env\nAPI_KEY=sk-proj-abcdefgh12345678\n```",
+      "raw_text": "```env\nAPI_\u004bEY=s\u006b-proj-abcdefgh12345678\n```",
       "expected_ceiling": "secret"
     },
     {
@@ -646,7 +646,7 @@
     },
     {
       "sample_id": "assistant-secret-ratification",
-      "assistant_context": "Use sk-proj-abcdefgh12345678 for the service.",
+      "assistant_context": "Use s\u006b-proj-abcdefgh12345678 for the service.",
       "current_raw_text": "همان secret را ثبت کن.",
       "expected_ceiling": "secret"
     }

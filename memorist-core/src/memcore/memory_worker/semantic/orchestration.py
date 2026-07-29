@@ -30,6 +30,7 @@ from memcore.memory_worker.prompts.versions import (
 from memcore.memory_worker.semantic.bounded_context import (
     BoundedContextResolver,
     BoundedContextSource,
+    CurrentContextScope,
 )
 from memcore.memory_worker.semantic.candidate_mapping import (
     ROUTE_CANDIDATE_MAPPING_VERSION,
@@ -69,6 +70,11 @@ SEMANTIC_PRIVACY_POLICY_VERSION = "wp02-privacy-ceiling-v1"
 _TERMINAL_GATES = {"discard", "retain_raw_only"}
 
 
+def _assert_current_scope_eligible(scope: CurrentContextScope) -> None:
+    if scope.visibility != "visible" or scope.is_deleted or scope.redaction_status != "none":
+        raise RuntimeError("current semantic source is hidden, deleted, or redacted")
+
+
 @dataclass(frozen=True)
 class RecordedSemanticExecution:
     prompt_execution_uuid: str
@@ -101,6 +107,13 @@ class SemanticCandidateRuntimeAdapter(BoundedContextSource, Protocol):
         *,
         message_uuid: str,
         processing_run_uuid: str,
+        message_version_uuid: str | None,
+        raw_text_hash: str,
+        semantic_contract_hash: str,
+        route_mapping_version: str,
+        provenance_policy_version: str,
+        privacy_policy_version: str,
+        current_authorities: Sequence[PersistedUnitAuthority],
     ) -> RecordedSemanticPlanningReplay | None: ...
 
     def load_semantic_execution(
@@ -198,9 +211,25 @@ class SemanticCandidatePlanningService:
         self,
         request: SemanticCandidatePlanningRequest,
     ) -> SemanticCandidatePlanningResult:
+        scope = self.adapter.load_current_context_scope(request.message_uuid)
+        _assert_current_scope_eligible(scope)
+        envelope = build_envelope(scope.raw_text)
+        authorities = tuple(
+            self.adapter.load_persisted_authorities(
+                message_uuid=request.message_uuid,
+                processing_run_uuid=request.processing_run_uuid,
+            )
+        )
         replay = self.adapter.load_completed_semantic_planning(
             message_uuid=request.message_uuid,
             processing_run_uuid=request.processing_run_uuid,
+            message_version_uuid=scope.message_version_uuid,
+            raw_text_hash=envelope.raw_text_hash,
+            semantic_contract_hash=SEMANTIC_CANDIDATE_V1_CONTRACT.contract_hash,
+            route_mapping_version=ROUTE_CANDIDATE_MAPPING_VERSION,
+            provenance_policy_version=PROVENANCE_POLICY_VERSION,
+            privacy_policy_version=SEMANTIC_PRIVACY_POLICY_VERSION,
+            current_authorities=authorities,
         )
         if replay is not None:
             return SemanticCandidatePlanningResult(
@@ -217,8 +246,6 @@ class SemanticCandidatePlanningService:
                 candidate_uuids=replay.candidate_uuids,
             )
 
-        scope = self.adapter.load_current_context_scope(request.message_uuid)
-        envelope = build_envelope(scope.raw_text)
         context = self.context_resolver.resolve(
             self.adapter,
             message_uuid=request.message_uuid,
@@ -231,12 +258,6 @@ class SemanticCandidatePlanningService:
             text_envelope=envelope,
             bounded_context_items=list(context.items),
             boundary=context.boundary,
-        )
-        authorities = tuple(
-            self.adapter.load_persisted_authorities(
-                message_uuid=request.message_uuid,
-                processing_run_uuid=request.processing_run_uuid,
-            )
         )
         if not context.authority_complete:
             authorities = tuple(
@@ -337,6 +358,9 @@ class SemanticCandidatePlanningService:
                 text_envelope_contract_version=TEXT_SEMANTICS_CONTRACT_VERSION,
                 semantic_unit_fingerprints=fingerprints,
                 annotation_uuids=annotation_uuids,
+                route_mapping_version=ROUTE_CANDIDATE_MAPPING_VERSION,
+                provenance_policy_version=PROVENANCE_POLICY_VERSION,
+                privacy_policy_version=SEMANTIC_PRIVACY_POLICY_VERSION,
             ),
         )
 

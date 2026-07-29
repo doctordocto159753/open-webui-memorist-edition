@@ -1,5 +1,13 @@
 -- PRD-02 WP02: content-free semantic coverage and candidate replay audit.
 
+ALTER TABLE candidate_evidence
+    ADD COLUMN IF NOT EXISTS evidence_role TEXT NOT NULL DEFAULT 'primary'
+        CHECK(evidence_role IN ('primary', 'secondary'));
+
+ALTER TABLE candidate_evidence
+    ADD COLUMN IF NOT EXISTS support_type TEXT NOT NULL DEFAULT 'supporting'
+        CHECK(support_type IN ('supporting', 'contradicting'));
+
 CREATE TABLE IF NOT EXISTS semantic_coverage_runs (
     coverage_run_uuid TEXT PRIMARY KEY,
     coverage_plan_version TEXT NOT NULL,
@@ -12,6 +20,12 @@ CREATE TABLE IF NOT EXISTS semantic_coverage_runs (
     raw_text_hash TEXT NOT NULL,
     text_envelope_contract_version TEXT NOT NULL,
     semantic_contract_hash TEXT NOT NULL,
+    route_mapping_version TEXT NOT NULL
+        DEFAULT 'pr4d-route-candidate-mapper-v1',
+    provenance_policy_version TEXT NOT NULL
+        DEFAULT 'pr4d-provenance-policy-v1',
+    privacy_policy_version TEXT NOT NULL
+        DEFAULT 'wp02-privacy-ceiling-v1',
     status TEXT NOT NULL
         CHECK(status IN ('complete', 'abstain', 'retain_raw_only', 'needs_review')),
     plan_jsonb JSONB NOT NULL CHECK(jsonb_typeof(plan_jsonb) = 'object'),

@@ -7,6 +7,7 @@ from memcore.models import utc_now
 from memcore.reliability.consistency.checks import (
     fts_issues,
     import_mapping_issues,
+    semantic_candidate_payload_issues,
     sqlite_integrity_issues,
     stale_job_issues,
     structural_issues,
@@ -18,6 +19,7 @@ def run_consistency_check(connection: sqlite3.Connection) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
     issues.extend(sqlite_integrity_issues(connection))
     issues.extend(structural_issues(connection))
+    issues.extend(semantic_candidate_payload_issues(connection))
     issues.extend(import_mapping_issues(connection))
     issues.extend(fts_issues(connection))
     issues.extend(stale_job_issues(connection))

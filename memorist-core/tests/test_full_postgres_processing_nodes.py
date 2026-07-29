@@ -543,7 +543,7 @@ def test_full_postgres_embedding_projection_recovers_after_stage_persisted_crash
         )
         message_uuid = _create_message(
             connection,
-            "Remember this: I prefer deterministic PostgreSQL embedding recovery.",
+            "I prefer deterministic PostgreSQL embedding recovery.",
         )
         original_invoke = StageInvoker.invoke_embedding
         crashed = False

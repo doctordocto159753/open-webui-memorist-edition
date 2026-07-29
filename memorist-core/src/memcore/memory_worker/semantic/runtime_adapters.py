@@ -69,6 +69,7 @@ class SQLiteSemanticCandidateRuntimeAdapter:
               FROM message_versions
             )
             SELECT m.message_uuid, m.session_uuid, m.role, m.turn_index, m.raw_text,
+                   m.visibility, m.is_deleted, m.redaction_status,
                    s.workspace_uuid, s.project_uuid,
                    actor.user_uuid, actor.workspace_uuid AS actor_workspace_uuid,
                    version.message_version_uuid,
@@ -104,6 +105,9 @@ class SQLiteSemanticCandidateRuntimeAdapter:
             role=str(row["role"]),
             turn_index=int(row["turn_index"]) if row["turn_index"] is not None else None,
             raw_text=raw_text,
+            visibility=str(row["visibility"]),
+            is_deleted=bool(row["is_deleted"]),
+            redaction_status=str(row["redaction_status"]),
         )
 
     def list_prior_context_records(
@@ -197,58 +201,114 @@ class SQLiteSemanticCandidateRuntimeAdapter:
         *,
         message_uuid: str,
         processing_run_uuid: str,
+        message_version_uuid: str | None,
+        raw_text_hash: str,
+        semantic_contract_hash: str,
+        route_mapping_version: str,
+        provenance_policy_version: str,
+        privacy_policy_version: str,
+        current_authorities: Sequence[PersistedUnitAuthority],
     ) -> RecordedSemanticPlanningReplay | None:
         row = self.connection.execute(
             """
-            SELECT coverage.coverage_run_uuid, coverage.plan_ijson, coverage.raw_text_hash,
-                   coverage.semantic_prompt_execution_uuid, message.raw_text
+            SELECT coverage.coverage_run_uuid, coverage.plan_ijson,
+                   coverage.processing_run_uuid
             FROM semantic_coverage_runs coverage
-            JOIN messages message ON message.message_uuid = coverage.message_uuid
             WHERE coverage.message_uuid = ?
-              AND coverage.processing_run_uuid = ?
-            ORDER BY coverage.created_at DESC, coverage.coverage_run_uuid DESC
+              AND coverage.raw_text_hash = ?
+              AND coverage.semantic_contract_hash = ?
+              AND coverage.route_mapping_version = ?
+              AND coverage.provenance_policy_version = ?
+              AND coverage.privacy_policy_version = ?
+              AND (
+                coverage.message_version_uuid = ?
+                OR (coverage.message_version_uuid IS NULL AND ? IS NULL)
+              )
+              AND (? IS NOT NULL OR coverage.processing_run_uuid = ?)
+            ORDER BY CASE WHEN coverage.processing_run_uuid = ? THEN 0 ELSE 1 END,
+                     coverage.created_at DESC, coverage.coverage_run_uuid DESC
             LIMIT 1
             """,
-            (message_uuid, processing_run_uuid),
+            (
+                message_uuid,
+                raw_text_hash,
+                semantic_contract_hash,
+                route_mapping_version,
+                provenance_policy_version,
+                privacy_policy_version,
+                message_version_uuid,
+                message_version_uuid,
+                message_version_uuid,
+                processing_run_uuid,
+                processing_run_uuid,
+            ),
         ).fetchone()
         if row is None:
+            same_identity = self.connection.execute(
+                """
+                SELECT message_version_uuid, route_mapping_version,
+                       provenance_policy_version, privacy_policy_version
+                FROM semantic_coverage_runs
+                WHERE message_uuid = ?
+                  AND raw_text_hash = ?
+                  AND semantic_contract_hash = ?
+                LIMIT 1
+                """,
+                (
+                    message_uuid,
+                    raw_text_hash,
+                    semantic_contract_hash,
+                ),
+            ).fetchone()
+            if same_identity is not None:
+                if _optional_string(
+                    same_identity["message_version_uuid"]
+                ) == message_version_uuid and (
+                    same_identity["route_mapping_version"] != route_mapping_version
+                    or same_identity["provenance_policy_version"] != provenance_policy_version
+                    or same_identity["privacy_policy_version"] != privacy_policy_version
+                ):
+                    raise RuntimeError(
+                        "semantic replay policy version changed for frozen proposal identity"
+                    )
+                raise RuntimeError(
+                    "same-text message version conflicts with frozen proposal identity"
+                )
             return None
-        if hashlib.sha256(str(row["raw_text"] or "").encode("utf-8")).hexdigest() != str(
-            row["raw_text_hash"]
-        ):
-            raise RuntimeError("persisted semantic plan source snapshot changed")
         plan = CoveragePlan.model_validate_json(str(row["plan_ijson"]))
         links = self.connection.execute(
             """
-            SELECT item.proposal_uuid, link.candidate_uuid, link.state,
-                   gate.decision AS gate_decision, route.status AS route_status
+            SELECT item.coverage_item_uuid, item.raw_start, item.raw_end, item.disposition,
+                   item.proposal_uuid, link.candidate_uuid, link.state,
+                   gate.decision AS gate_decision,
+                   route.route_type, route.status AS route_status,
+                   candidate.sensitivity_class
             FROM semantic_coverage_items item
             LEFT JOIN semantic_candidate_links link
               ON link.coverage_item_uuid = item.coverage_item_uuid
+            LEFT JOIN memory_candidates candidate
+              ON candidate.candidate_uuid = link.candidate_uuid
             LEFT JOIN memory_gate_decisions gate
               ON gate.gate_decision_uuid = item.gate_decision_uuid
             LEFT JOIN memory_signal_routes route
               ON route.route_uuid = item.route_uuid
             WHERE item.coverage_run_uuid = ?
-              AND item.disposition = 'durable_candidate'
-            ORDER BY item.coverage_item_uuid
+            ORDER BY item.raw_start, item.raw_end, item.coverage_item_uuid
             """,
             (str(row["coverage_run_uuid"]),),
         ).fetchall()
-        if any(
-            link["state"] != "candidate_linked" or link["candidate_uuid"] != link["proposal_uuid"]
-            for link in links
-        ):
+        complete = _validate_completed_replay(
+            plan,
+            links,
+            current_authorities,
+        )
+        if complete is None:
+            if str(row["processing_run_uuid"]) != processing_run_uuid:
+                raise RuntimeError("canonical cross-run semantic replay is incomplete")
             return None
-        if any(
-            link["gate_decision"] not in {"analyze", "analyze_high_confidence"}
-            or link["route_status"] != "ready"
-            for link in links
-        ):
-            raise RuntimeError("persisted semantic replay authority changed")
         return RecordedSemanticPlanningReplay(
             plan=plan,
-            candidate_uuids=tuple(str(link["candidate_uuid"]) for link in links),
+            candidate_uuids=complete,
             semantic_stage_execution_uuid=None,
         )
 
@@ -504,6 +564,8 @@ class PostgresSemanticCandidateRuntimeAdapter:
               FROM message_versions
             )
             SELECT m.message_uuid, m.session_uuid, m.role, m.turn_index, m.raw_text,
+                   m.visibility, m.is_deleted,
+                   COALESCE(m.redaction_status, 'none') AS redaction_status,
                    s.workspace_uuid, s.project_uuid,
                    actor.user_uuid, actor.workspace_uuid AS actor_workspace_uuid,
                    version.message_version_uuid,
@@ -539,6 +601,9 @@ class PostgresSemanticCandidateRuntimeAdapter:
             role=str(row["role"]),
             turn_index=int(row["turn_index"]) if row.get("turn_index") is not None else None,
             raw_text=raw_text,
+            visibility=str(row["visibility"]),
+            is_deleted=bool(row["is_deleted"]),
+            redaction_status=str(row["redaction_status"]),
         )
 
     def list_prior_context_records(
@@ -633,27 +698,76 @@ class PostgresSemanticCandidateRuntimeAdapter:
         *,
         message_uuid: str,
         processing_run_uuid: str,
+        message_version_uuid: str | None,
+        raw_text_hash: str,
+        semantic_contract_hash: str,
+        route_mapping_version: str,
+        provenance_policy_version: str,
+        privacy_policy_version: str,
+        current_authorities: Sequence[PersistedUnitAuthority],
     ) -> RecordedSemanticPlanningReplay | None:
         row = self.connection.execute(
             """
             SELECT coverage.coverage_run_uuid, coverage.plan_jsonb,
-                   coverage.raw_text_hash, coverage.semantic_prompt_execution_uuid,
-                   message.raw_text
+                   coverage.processing_run_uuid
             FROM semantic_coverage_runs coverage
-            JOIN messages message ON message.message_uuid = coverage.message_uuid
             WHERE coverage.message_uuid = %s
-              AND coverage.processing_run_uuid = %s
-            ORDER BY coverage.created_at DESC, coverage.coverage_run_uuid DESC
+              AND coverage.raw_text_hash = %s
+              AND coverage.semantic_contract_hash = %s
+              AND coverage.route_mapping_version = %s
+              AND coverage.provenance_policy_version = %s
+              AND coverage.privacy_policy_version = %s
+              AND coverage.message_version_uuid IS NOT DISTINCT FROM %s
+              AND (CAST(%s AS TEXT) IS NOT NULL OR coverage.processing_run_uuid = %s)
+            ORDER BY CASE WHEN coverage.processing_run_uuid = %s THEN 0 ELSE 1 END,
+                     coverage.created_at DESC, coverage.coverage_run_uuid DESC
             LIMIT 1
             """,
-            (message_uuid, processing_run_uuid),
+            (
+                message_uuid,
+                raw_text_hash,
+                semantic_contract_hash,
+                route_mapping_version,
+                provenance_policy_version,
+                privacy_policy_version,
+                message_version_uuid,
+                message_version_uuid,
+                processing_run_uuid,
+                processing_run_uuid,
+            ),
         ).fetchone()
         if row is None:
+            same_identity = self.connection.execute(
+                """
+                SELECT message_version_uuid, route_mapping_version,
+                       provenance_policy_version, privacy_policy_version
+                FROM semantic_coverage_runs
+                WHERE message_uuid = %s
+                  AND raw_text_hash = %s
+                  AND semantic_contract_hash = %s
+                LIMIT 1
+                """,
+                (
+                    message_uuid,
+                    raw_text_hash,
+                    semantic_contract_hash,
+                ),
+            ).fetchone()
+            if same_identity is not None:
+                if _optional_string(
+                    same_identity["message_version_uuid"]
+                ) == message_version_uuid and (
+                    same_identity["route_mapping_version"] != route_mapping_version
+                    or same_identity["provenance_policy_version"] != provenance_policy_version
+                    or same_identity["privacy_policy_version"] != privacy_policy_version
+                ):
+                    raise RuntimeError(
+                        "semantic replay policy version changed for frozen proposal identity"
+                    )
+                raise RuntimeError(
+                    "same-text message version conflicts with frozen proposal identity"
+                )
             return None
-        if hashlib.sha256(str(row.get("raw_text") or "").encode("utf-8")).hexdigest() != str(
-            row["raw_text_hash"]
-        ):
-            raise RuntimeError("persisted semantic plan source snapshot changed")
         raw_plan = row["plan_jsonb"]
         if isinstance(raw_plan, str):
             plan = CoveragePlan.model_validate_json(raw_plan)
@@ -661,36 +775,33 @@ class PostgresSemanticCandidateRuntimeAdapter:
             plan = CoveragePlan.model_validate_json(json.dumps(raw_plan))
         links = self.connection.execute(
             """
-            SELECT item.proposal_uuid, link.candidate_uuid, link.state,
-                   gate.decision AS gate_decision, route.status AS route_status
+            SELECT item.coverage_item_uuid, item.raw_start, item.raw_end, item.disposition,
+                   item.proposal_uuid, link.candidate_uuid, link.state,
+                   gate.decision AS gate_decision,
+                   route.route_type, route.status AS route_status,
+                   candidate.sensitivity AS sensitivity_class
             FROM semantic_coverage_items item
             LEFT JOIN semantic_candidate_links link
               ON link.coverage_item_uuid = item.coverage_item_uuid
+            LEFT JOIN memory_candidates candidate
+              ON candidate.candidate_uuid = link.candidate_uuid
             LEFT JOIN memory_gate_decisions gate
               ON gate.gate_decision_uuid = item.gate_decision_uuid
             LEFT JOIN memory_signal_routes route
               ON route.route_uuid = item.route_uuid
             WHERE item.coverage_run_uuid = %s
-              AND item.disposition = 'durable_candidate'
-            ORDER BY item.coverage_item_uuid
+            ORDER BY item.raw_start, item.raw_end, item.coverage_item_uuid
             """,
             (str(row["coverage_run_uuid"]),),
         ).fetchall()
-        if any(
-            link.get("state") != "candidate_linked"
-            or link.get("candidate_uuid") != link.get("proposal_uuid")
-            for link in links
-        ):
+        complete = _validate_completed_replay(plan, links, current_authorities)
+        if complete is None:
+            if str(row["processing_run_uuid"]) != processing_run_uuid:
+                raise RuntimeError("canonical cross-run semantic replay is incomplete")
             return None
-        if any(
-            link.get("gate_decision") not in {"analyze", "analyze_high_confidence"}
-            or link.get("route_status") != "ready"
-            for link in links
-        ):
-            raise RuntimeError("persisted semantic replay authority changed")
         return RecordedSemanticPlanningReplay(
             plan=plan,
-            candidate_uuids=tuple(str(link["candidate_uuid"]) for link in links),
+            candidate_uuids=complete,
             semantic_stage_execution_uuid=None,
         )
 
@@ -1000,6 +1111,60 @@ def _authorities_from_rows(
         )
     authorities.sort(key=lambda item: (item.raw_start, item.raw_end, item.text_unit_uuid))
     return tuple(authorities)
+
+
+def _validate_completed_replay(
+    plan: CoveragePlan,
+    rows: Sequence[Mapping[str, Any]],
+    current_authorities: Sequence[PersistedUnitAuthority],
+) -> tuple[str, ...] | None:
+    """Validate immutable plan content against current-run server authority."""
+
+    by_id = {str(row["coverage_item_uuid"]): row for row in rows}
+    if set(by_id) != {item.coverage_item_id for item in plan.items}:
+        raise RuntimeError("persisted semantic replay item set changed")
+    candidates: list[str] = []
+    for item in plan.items:
+        row = by_id[item.coverage_item_id]
+        if (
+            int(row["raw_start"]) != item.raw_start
+            or int(row["raw_end"]) != item.raw_end
+            or str(row["disposition"]) != item.disposition.value
+            or _optional_string(row["proposal_uuid"]) != item.proposal_id
+        ):
+            raise RuntimeError("persisted semantic replay item content changed")
+        containing = [
+            authority
+            for authority in current_authorities
+            if authority.raw_start <= item.raw_start and item.raw_end <= authority.raw_end
+        ]
+        current = containing[0] if len(containing) == 1 else None
+        old_gate = _optional_string(row["gate_decision"])
+        old_route_type = _optional_string(row["route_type"])
+        old_route_status = _optional_string(row["route_status"])
+        if current is None:
+            if old_gate is not None or old_route_type is not None or item.proposal_id is not None:
+                raise RuntimeError("current-run semantic replay authority is incomplete")
+        elif (
+            current.gate_decision != old_gate
+            or current.route_type != old_route_type
+            or current.route_status != old_route_status
+        ):
+            raise RuntimeError("semantic replay authority changed: current-run gate or route")
+        if item.proposal_id is None:
+            continue
+        if row["state"] != "candidate_linked" or row["candidate_uuid"] != row["proposal_uuid"]:
+            return None
+        if (
+            current is None
+            or current.gate_decision not in {"analyze", "analyze_high_confidence"}
+            or current.route_status != "ready"
+            or not current.privacy_storage_allowed
+            or current.privacy_ceiling != str(row["sensitivity_class"])
+        ):
+            raise RuntimeError("semantic replay authority changed: durable candidate")
+        candidates.append(str(row["candidate_uuid"]))
+    return tuple(candidates)
 
 
 def _route_order(row: Mapping[str, Any]) -> tuple[bool, bool, int, str]:

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+import re
+from bisect import bisect_right
+from collections.abc import Iterable, Sequence
 from typing import Any, Literal
 
 from memcore.memory_worker.semantic.candidate_mapping import candidate_mapping_for_route
@@ -39,20 +41,46 @@ def plan_candidate_coverage(
         raise ValueError("TextEnvelope does not bind the current raw message")
 
     analysis = planner_input.semantic_analysis
+    if planner_input.accepted_unit_ids != tuple(unit.id for unit in analysis.semantic_units):
+        raise ValueError("accepted unit IDs must cover every semantic output unit in order")
+    if planner_input.accepted_reference_indexes != tuple(range(len(analysis.references))):
+        raise ValueError("accepted reference indexes must cover every semantic reference in order")
+    if planner_input.accepted_relation_indexes != tuple(range(len(analysis.relations))):
+        raise ValueError("accepted relation indexes must cover every semantic relation in order")
     accepted = set(planner_input.accepted_unit_ids)
     units = [unit for unit in analysis.semantic_units if unit.id in accepted]
     if len(units) != len(accepted):
         raise ValueError("accepted unit IDs must name semantic output units")
+    reference_indexes = _indexes_by_source(
+        analysis.references,
+        planner_input.accepted_reference_indexes,
+    )
+    relation_indexes = _indexes_by_source(
+        analysis.relations,
+        planner_input.accepted_relation_indexes,
+    )
+    authority_index = _AuthorityIndex(planner_input.authorities)
     proposals: list[CandidateProposal] = []
     items: list[CoverageItem] = []
     for unit in units:
-        containing = _containing_authorities(
-            planner_input.authorities, unit.raw_start, unit.raw_end
-        )
+        unit_reference_indexes = reference_indexes.get(unit.id, ())
+        unit_relation_indexes = relation_indexes.get(unit.id, ())
+        containing = authority_index.containing(unit.raw_start, unit.raw_end)
         authority = containing[0] if len(containing) == 1 else None
         if authority is not None and (
             planner_input.semantic_prompt_execution_uuid is None
-            or _assistant_reference_is_not_ratified(planner_input, unit.id)
+            or _assistant_reference_is_not_ratified(
+                planner_input,
+                unit.id,
+                unit_reference_indexes,
+                unit_relation_indexes,
+            )
+            or _assistant_proposition_injection(
+                planner_input,
+                unit,
+                unit_reference_indexes,
+                unit_relation_indexes,
+            )
         ):
             authority = authority.model_copy(update={"conflicting_authority": True})
         mapping = (
@@ -65,9 +93,12 @@ def plan_candidate_coverage(
             else None
         )
         unresolved = any(
-            analysis.references[index].source_unit_id == unit.id
-            and analysis.references[index].status != "resolved"
-            for index in planner_input.accepted_reference_indexes
+            analysis.references[index].status != "resolved" for index in unit_reference_indexes
+        ) or _dependency_hint_without_reference(
+            planner_input,
+            unit.raw_start,
+            unit.raw_end,
+            unit_reference_indexes,
         )
         decision = disposition_for_unit(
             unit,
@@ -79,8 +110,8 @@ def plan_candidate_coverage(
         fingerprint = semantic_unit_fingerprint(
             unit=unit,
             analysis=analysis,
-            accepted_reference_indexes=planner_input.accepted_reference_indexes,
-            accepted_relation_indexes=planner_input.accepted_relation_indexes,
+            accepted_reference_indexes=unit_reference_indexes,
+            accepted_relation_indexes=unit_relation_indexes,
             context_items=planner_input.bounded_context_items,
         )
         proposal: CandidateProposal | None = None
@@ -145,7 +176,11 @@ def plan_candidate_coverage(
                     route_uuid=str(authority.route_uuid),
                     annotation_uuid=str(authority.annotation_uuid),
                     prompt_execution_uuid=str(planner_input.semantic_prompt_execution_uuid),
-                    context_lineage=_context_lineage(planner_input, unit.id),
+                    context_lineage=_context_lineage(
+                        planner_input,
+                        unit.id,
+                        unit_reference_indexes,
+                    ),
                     reason_codes=tuple(dict.fromkeys([*reasons, *provenance.reason_codes])),
                     automatic_candidate_creation_allowed=True,
                     semantic_unit_fingerprint=fingerprint,
@@ -166,7 +201,7 @@ def plan_candidate_coverage(
             )
         )
 
-    items.extend(_uncovered_items(planner_input, units))
+    items.extend(_uncovered_items(planner_input, units, authority_index))
     items.sort(key=lambda item: (item.raw_start, item.raw_end, item.semantic_unit_id or ""))
     _assert_complete(planner_input, items, proposals)
     status = _plan_status(planner_input, items)
@@ -238,26 +273,19 @@ def _coverage_item(
     )
 
 
-def _uncovered_items(value: CoveragePlannerInput, units: Sequence[Any]) -> list[CoverageItem]:
-    covered = [(unit.raw_start, unit.raw_end) for unit in units]
-    tokens = [
-        token
-        for token in value.text_envelope.get("tokens", [])
-        if not any(
-            int(token["raw_start"]) < end and start < int(token["raw_end"])
-            for start, end in covered
-        )
-    ]
+def _uncovered_items(
+    value: CoveragePlannerInput,
+    units: Sequence[Any],
+    authority_index: _AuthorityIndex,
+) -> list[CoverageItem]:
+    covered = _merge_intervals((unit.raw_start, unit.raw_end) for unit in units)
+    tokens = _tokens_outside_intervals(value.text_envelope.get("tokens", []), covered)
     groups: list[list[dict[str, Any]]] = []
     group_authority_keys: list[str | None] = []
     for token in tokens:
         token_start = int(token["raw_start"])
         token_end = int(token["raw_end"])
-        token_authorities = _containing_authorities(
-            value.authorities,
-            token_start,
-            token_end,
-        )
+        token_authorities = authority_index.containing(token_start, token_end)
         authority_key = token_authorities[0].text_unit_uuid if len(token_authorities) == 1 else None
         if not groups:
             groups.append([token])
@@ -276,7 +304,7 @@ def _uncovered_items(value: CoveragePlannerInput, units: Sequence[Any]) -> list[
     items: list[CoverageItem] = []
     for group in groups:
         start, end = int(group[0]["raw_start"]), int(group[-1]["raw_end"])
-        authorities = _containing_authorities(value.authorities, start, end)
+        authorities = authority_index.containing(start, end)
         authority = authorities[0] if len(authorities) == 1 else None
         rejected = authority is not None and authority.gate_decision in {
             "discard",
@@ -306,22 +334,121 @@ def _uncovered_items(value: CoveragePlannerInput, units: Sequence[Any]) -> list[
     return items
 
 
-def _containing_authorities(
-    authorities: Sequence[PersistedUnitAuthority], start: int, end: int
-) -> list[PersistedUnitAuthority]:
-    return [
-        authority
-        for authority in authorities
-        if authority.raw_start <= start and end <= authority.raw_end
+class _AuthorityIndex:
+    """Index canonical non-overlapping text-unit authority spans.
+
+    Text units emitted by the canonical segmenter are non-overlapping. If a
+    corrupted or synthetic authority set overlaps, retain the old exhaustive
+    query so the planner still observes every conflicting authority and fails
+    closed instead of selecting one.
+    """
+
+    def __init__(self, authorities: Sequence[PersistedUnitAuthority]) -> None:
+        self._authorities = tuple(
+            sorted(
+                authorities,
+                key=lambda item: (item.raw_start, item.raw_end, item.text_unit_uuid),
+            )
+        )
+        self._starts = tuple(item.raw_start for item in self._authorities)
+        self._overlapping = any(
+            previous.raw_end > current.raw_start
+            for previous, current in zip(
+                self._authorities,
+                self._authorities[1:],
+                strict=False,
+            )
+        )
+
+    def containing(self, start: int, end: int) -> list[PersistedUnitAuthority]:
+        if self._overlapping:
+            return [
+                authority
+                for authority in self._authorities
+                if authority.raw_start <= start and end <= authority.raw_end
+            ]
+        index = bisect_right(self._starts, start) - 1
+        if index < 0:
+            return []
+        authority = self._authorities[index]
+        return [authority] if end <= authority.raw_end else []
+
+
+def _indexes_by_source(
+    values: Sequence[Any],
+    accepted_indexes: Sequence[int],
+) -> dict[str, tuple[int, ...]]:
+    grouped: dict[str, list[int]] = {}
+    for index in accepted_indexes:
+        source = str(values[index].source_unit_id)
+        grouped.setdefault(source, []).append(index)
+    return {source: tuple(indexes) for source, indexes in grouped.items()}
+
+
+def _dependency_hint_without_reference(
+    value: CoveragePlannerInput,
+    raw_start: int,
+    raw_end: int,
+    reference_indexes: Sequence[int],
+) -> bool:
+    unit_hints = [
+        hint
+        for hint in value.text_envelope.get("context_dependency_hints", [])
+        if raw_start <= int(hint["raw_start"]) and int(hint["raw_end"]) <= raw_end
     ]
+    for hint in unit_hints:
+        hint_start = int(hint["raw_start"])
+        hint_end = int(hint["raw_end"])
+        if not any(
+            value.semantic_analysis.references[index].marker_start <= hint_start
+            and hint_end <= value.semantic_analysis.references[index].marker_end
+            for index in reference_indexes
+        ):
+            return True
+    return False
+
+
+def _merge_intervals(intervals: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
+    ordered = sorted(intervals)
+    merged: list[tuple[int, int]] = []
+    for start, end in ordered:
+        if not merged or merged[-1][1] < start:
+            merged.append((start, end))
+            continue
+        previous_start, previous_end = merged[-1]
+        merged[-1] = (previous_start, max(previous_end, end))
+    return merged
+
+
+def _tokens_outside_intervals(
+    tokens: Sequence[dict[str, Any]],
+    covered: Sequence[tuple[int, int]],
+) -> list[dict[str, Any]]:
+    uncovered: list[dict[str, Any]] = []
+    interval_index = 0
+    for token in tokens:
+        token_start = int(token["raw_start"])
+        token_end = int(token["raw_end"])
+        while interval_index < len(covered) and covered[interval_index][1] <= token_start:
+            interval_index += 1
+        overlaps = (
+            interval_index < len(covered)
+            and token_start < covered[interval_index][1]
+            and covered[interval_index][0] < token_end
+        )
+        if not overlaps:
+            uncovered.append(token)
+    return uncovered
 
 
 def _context_lineage(
-    value: CoveragePlannerInput, semantic_unit_id: str
+    value: CoveragePlannerInput,
+    semantic_unit_id: str,
+    reference_indexes: Sequence[int],
 ) -> tuple[dict[str, Any], ...]:
     contexts = {item.context_item_id: item for item in value.bounded_context_items}
     lineage: list[dict[str, Any]] = []
-    for index in value.accepted_reference_indexes:
+    for index in reference_indexes:
         reference = value.semantic_analysis.references[index]
         if (
             reference.source_unit_id != semantic_unit_id
@@ -352,11 +479,19 @@ def _context_lineage(
 
 
 def _assistant_reference_is_not_ratified(
-    value: CoveragePlannerInput, semantic_unit_id: str
+    value: CoveragePlannerInput,
+    semantic_unit_id: str,
+    reference_indexes: Sequence[int],
+    relation_indexes: Sequence[int],
 ) -> bool:
     contexts = {item.context_item_id: item for item in value.bounded_context_items}
+    assistant_context_ids = {
+        f"prior_context:{item.context_item_id}"
+        for item in value.bounded_context_items
+        if item.role == "assistant"
+    }
     targets: set[str] = set()
-    for index in value.accepted_reference_indexes:
+    for index in reference_indexes:
         reference = value.semantic_analysis.references[index]
         if (
             reference.source_unit_id != semantic_unit_id
@@ -367,6 +502,12 @@ def _assistant_reference_is_not_ratified(
             continue
         item = contexts.get(reference.selected_referent_id.removeprefix("prior_context:"))
         if item is not None and item.role == "assistant":
+            if (
+                len(reference.candidate_referent_ids) != 1
+                or len(assistant_context_ids) != 1
+                or reference.selected_referent_id not in assistant_context_ids
+            ):
+                return True
             targets.add(reference.selected_referent_id)
     if not targets:
         return False
@@ -376,8 +517,98 @@ def _assistant_reference_is_not_ratified(
         value.semantic_analysis.relations[index].source_unit_id == semantic_unit_id
         and value.semantic_analysis.relations[index].relation_type in {"ratifies", "corrects"}
         and value.semantic_analysis.relations[index].target_referent_id in targets
-        for index in value.accepted_relation_indexes
+        for index in relation_indexes
     )
+
+
+_MEANINGFUL_TOKEN_PATTERN = re.compile(r"\w{2,}", flags=re.UNICODE)
+_NON_MEANINGFUL_TOKENS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "for",
+        "from",
+        "in",
+        "is",
+        "it",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "this",
+        "to",
+        "was",
+        "were",
+        "with",
+        "از",
+        "است",
+        "این",
+        "آن",
+        "با",
+        "برای",
+        "به",
+        "در",
+        "را",
+        "که",
+        "و",
+    }
+)
+
+
+def _meaningful_tokens(text: str) -> set[str]:
+    return {
+        folded
+        for token in _MEANINGFUL_TOKEN_PATTERN.findall(text)
+        if (folded := token.casefold()) not in _NON_MEANINGFUL_TOKENS
+    }
+
+
+def _assistant_proposition_injection(
+    value: CoveragePlannerInput,
+    unit: Any,
+    reference_indexes: Sequence[int],
+    relation_indexes: Sequence[int],
+) -> bool:
+    """Fail closed when a model proposition imports unratified assistant text.
+
+    This is deliberately lexical rather than semantic: the assistant context,
+    proposition and exact current-message evidence are tokenized with one
+    Unicode-aware rule. A copied phrase already present in current evidence is
+    current-user material and therefore does not trigger this guard.
+    """
+
+    proposition_only = _meaningful_tokens(unit.proposition) - _meaningful_tokens(unit.evidence)
+    if len(proposition_only) < 2:
+        return False
+    for item in value.bounded_context_items:
+        if item.role != "assistant":
+            continue
+        imported = proposition_only & _meaningful_tokens(item.text)
+        if len(imported) < 2:
+            continue
+        target = f"prior_context:{item.context_item_id}"
+        referenced = any(
+            value.semantic_analysis.references[index].source_unit_id == unit.id
+            and value.semantic_analysis.references[index].status == "resolved"
+            and value.semantic_analysis.references[index].selected_referent_id == target
+            for index in reference_indexes
+        )
+        ratified = any(
+            value.semantic_analysis.relations[index].source_unit_id == unit.id
+            and value.semantic_analysis.relations[index].relation_type in {"ratifies", "corrects"}
+            and value.semantic_analysis.relations[index].target_referent_id == target
+            for index in relation_indexes
+        )
+        if not (referenced and ratified):
+            return True
+    return False
 
 
 def _assert_complete(

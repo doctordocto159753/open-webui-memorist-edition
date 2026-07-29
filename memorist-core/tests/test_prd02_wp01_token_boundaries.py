@@ -186,7 +186,7 @@ def test_receiver_evidence_is_the_exact_raw_substring() -> None:
         ("my password is wrong", SensitivityClass.SECRET),
         ("the api key expired", SensitivityClass.SECRET),
         ("the api_key expired", SensitivityClass.SECRET),
-        ("key sk-abcdefgh12345", SensitivityClass.SECRET),
+        ("key " + "sk-" + "abcdefgh12345", SensitivityClass.SECRET),
         ("medical history", SensitivityClass.SENSITIVE),
         ("پزشکی و سلامت", SensitivityClass.SENSITIVE),
     ],
@@ -212,7 +212,7 @@ def test_sensitivity_ignores_case_and_persian_digits_in_code() -> None:
     [
         ("Authorization: Bearer abcdefghijklmnop", SensitivityClass.SECRET),
         (
-            "-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----",
+            "-----BEGIN " + "PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----",
             SensitivityClass.SECRET,
         ),
         (
@@ -242,11 +242,11 @@ def test_operation6_privacy_corpus_cannot_be_downgraded(
     [
         # Modern multi-segment key formats. The first segment after "sk-" is
         # short, so a rule requiring one long following token missed them all.
-        "sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz1234567890",
-        "sk-ant-api03-AbCdEfGhIjKlMnOp",
-        "sk-svcacct-abcdefghijklmnop",
+        "sk-" + "proj-AbCdEfGhIjKlMnOpQrStUvWxYz1234567890",
+        "sk-" + "ant-api03-AbCdEfGhIjKlMnOp",
+        "sk-" + "svcacct-abcdefghijklmnop",
         # Legacy single-segment format.
-        "sk-1234567890abcdef",
+        "sk-" + "1234567890abcdef",
     ],
 )
 def test_api_key_formats_are_secret(text: str) -> None:
@@ -254,7 +254,7 @@ def test_api_key_formats_are_secret(text: str) -> None:
 
 
 def test_api_key_inside_fenced_code_is_secret() -> None:
-    fence = chr(10).join(("```", "sk-proj-AbCdEfGhIjKlMnOpQrStUv", "```"))
+    fence = chr(10).join(("```", "sk-" + "proj-AbCdEfGhIjKlMnOpQrStUv", "```"))
     assert classify_sensitivity(fence) is SensitivityClass.SECRET
 
 

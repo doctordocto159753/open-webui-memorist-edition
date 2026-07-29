@@ -5,11 +5,15 @@
     Optional explicit override. Otherwise reads MEMORIST_MODE from .env.
 .PARAMETER NoBrowser
     Do not open the browser after services are healthy.
+.PARAMETER NoBuild
+    Start only from existing images. Intended for controlled CI after one
+    explicit package image build; local starts continue to build by default.
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('lite', 'full')][string]$Mode,
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    [switch]$NoBuild
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -40,7 +44,10 @@ foreach ($dir in @('data', 'objects', 'imports', 'exports', 'logs')) {
 }
 $composeFile = Get-MemoristComposeFile -Root $root
 Write-MemoristLog 'Starting services...' 'STEP'
-$rc = Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments @('up', '-d', '--build', '--remove-orphans')
+$startArguments = @('up', '-d')
+if (-not $NoBuild) { $startArguments += '--build' }
+$startArguments += '--remove-orphans'
+$rc = Invoke-MemoristCompose -Compose $docker.Compose -ComposeFile $composeFile -Profile $Mode -Arguments $startArguments
 if ($rc -ne 0) { Write-MemoristLog 'Failed to start. See Show-Memorist-Logs.ps1.' 'FAIL'; exit 1 }
 
 $webPortValue = Get-MemoristEnvValue -Path (Join-Path $root '.env') -Key 'OPEN_WEBUI_PORT'

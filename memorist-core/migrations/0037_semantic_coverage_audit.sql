@@ -11,6 +11,12 @@ CREATE TABLE semantic_coverage_runs (
     raw_text_hash TEXT NOT NULL,
     text_envelope_contract_version TEXT NOT NULL,
     semantic_contract_hash TEXT NOT NULL,
+    route_mapping_version TEXT NOT NULL
+        DEFAULT 'pr4d-route-candidate-mapper-v1',
+    provenance_policy_version TEXT NOT NULL
+        DEFAULT 'pr4d-provenance-policy-v1',
+    privacy_policy_version TEXT NOT NULL
+        DEFAULT 'wp02-privacy-ceiling-v1',
     status TEXT NOT NULL
         CHECK(status IN ('complete', 'abstain', 'retain_raw_only', 'needs_review')),
     plan_ijson TEXT NOT NULL CHECK(json_valid(plan_ijson)),
@@ -93,4 +99,3 @@ CREATE TABLE semantic_candidate_links (
         REFERENCES semantic_coverage_items(coverage_item_uuid) ON DELETE CASCADE,
     FOREIGN KEY(candidate_uuid) REFERENCES memory_candidates(candidate_uuid)
 );
-

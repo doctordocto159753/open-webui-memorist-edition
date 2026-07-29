@@ -25,6 +25,9 @@ class CoveragePersistenceBindings:
     text_envelope_contract_version: str
     semantic_unit_fingerprints: Mapping[str, str]
     annotation_uuids: Mapping[str, str | None]
+    route_mapping_version: str = "pr4d-route-candidate-mapper-v1"
+    provenance_policy_version: str = "pr4d-provenance-policy-v1"
+    privacy_policy_version: str = "wp02-privacy-ceiling-v1"
 
 
 @dataclass(frozen=True)

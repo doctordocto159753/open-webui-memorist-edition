@@ -16,6 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "release" / "memorist-openwebui"
+CORE = ROOT / "memorist-core"
 
 REQUIRED_VOLUMES = [
     "openwebui-data",
@@ -65,6 +66,29 @@ def run() -> dict[str, object]:
     common = (PACKAGE / "scripts" / "MemoristCommon.psm1").read_text(encoding="utf-8")
     if "MEMORIST_MODE" not in common:
         issues.append("MEMORIST_MODE is no longer the installed-mode authority in the scripts")
+
+    sqlite_wp02 = (CORE / "migrations" / "0037_semantic_coverage_audit.sql")
+    postgres_wp02 = (
+        CORE
+        / "src"
+        / "memcore"
+        / "storage"
+        / "postgres"
+        / "migrations"
+        / "0024_semantic_coverage_audit.sql"
+    )
+    for migration in (sqlite_wp02, postgres_wp02):
+        if not migration.is_file():
+            issues.append(f"WP02 migration missing: {migration.relative_to(ROOT)}")
+            continue
+        sql = migration.read_text(encoding="utf-8")
+        for table in (
+            "semantic_coverage_runs",
+            "semantic_coverage_items",
+            "semantic_candidate_links",
+        ):
+            if table not in sql:
+                issues.append(f"{migration.name} omits {table}")
 
     # The one-click contract: entry points at the extracted root.
     for entry in (

@@ -23,10 +23,18 @@ Each role contract owns:
 - a synthetic, non-sensitive certification input;
 - a contract hash included in the role-manifest fingerprint.
 
-The existing prompt registry remains authoritative for registry-driven roles such
-as preflight and import reconstruction. Jakobson v3 remains the authority for
-`memory_extraction`. Embedding uses the vector contract rather than structured
-chat output.
+The existing prompt registry remains authoritative for registry-driven roles
+such as preflight and import reconstruction. `memory_extraction` uses the
+ordered `memory-extraction-contract-bundle-v1`:
+
+1. `memorist.jakobson_sentence_analysis@3.0`;
+2. `memorist.semantic_candidate_analysis@1.0`.
+
+The role manifest is `role-contract-manifest-v3`. Its hash includes both typed
+contract hashes and full prompt texts, so editing either member stales
+certification. One provider profile must pass both probes; generic connectivity
+or semantic abstention cannot certify a remote model profile. Embedding uses
+the vector contract rather than structured chat output.
 
 ## Provider dispatch
 
@@ -40,8 +48,8 @@ For an OpenAI-compatible StageInvoker role:
    the exact contract ID, version, and JSON Schema.
 5. The returned object is validated against the same model used to generate the
    schema, then against the role's semantic validator.
-6. Invalid output remains a visible provider failure and may use only the
-   role-authorized deterministic fail-open path.
+6. Invalid output remains visible and may use only the role-authorized
+   deterministic fail-closed path.
 
 Certification uses the same prompt renderer, provider path, schema, validator,
 and fixture as runtime. Changing the runtime contract or its prompt identity

@@ -40,6 +40,9 @@ class CurrentContextScope:
     role: str
     turn_index: int | None
     raw_text: str
+    visibility: str = "visible"
+    is_deleted: bool = False
+    redaction_status: str = "none"
 
 
 @dataclass(frozen=True)

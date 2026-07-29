@@ -18,6 +18,21 @@ After sentence annotation and deterministic routing, specialized prompts can ass
 
 Each accepted candidate item must carry evidence with `annotation_uuid`, `route_uuid`, `unit_uuid`, `message_uuid`, quote, and span offsets. No evidence means abstain or reject.
 
+## Semantic candidate analysis v1
+
+`memorist.semantic_candidate_analysis@1.0` is a separate whole-message prompt;
+it does not modify Prompt Pack `2.0` or historical Jakobson contracts. It sees
+the current raw message, `TextEnvelope` v3, and at most two prior eligible text
+units (six only when non-authoritative dependency hints request expansion).
+Context is same-user/session/workspace/project and excludes memory attachments,
+system prompts, deleted/redacted/hidden content, and unrelated tool output.
+
+The model returns only semantic units, references, and relations. Gate, route,
+privacy, provenance, coverage disposition, proposal UUID, and persistence are
+local deterministic authority. Assistant context is role-labelled and cannot
+become user authority without explicit current-user evidence, one unique
+in-window target, and a `ratifies` or `corrects` relation.
+
 ## Runtime Role Rules
 
 Prompt execution resolves the configured role default through the Model Control Plane. Memory prompts do not implicitly use `main_chat_observed`. Optional background roles may fall back to `memory_extraction` only where the prompt metadata explicitly allows it.
@@ -74,7 +89,7 @@ contract/schema change invalidates existing certification and forces
 re-certification. See `docs/reference/full-mode-memory-extraction.md`.
 # Attempt-level audit
 
-For remote Jakobson execution, attempt 1 and the optional repair attempt 2 are
+For remote Jakobson and semantic-v1 execution, attempt 1 and the optional repair attempt 2 are
 separate append-only audit rows. Reservations precede HTTP and completion updates
 store hashes and sanitized error paths, never raw output. The final
 `processing_stage_runs` row records the frozen role/scope/profile/contract

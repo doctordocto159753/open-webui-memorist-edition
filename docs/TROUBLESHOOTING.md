@@ -23,6 +23,9 @@ Common failures, in the order people usually hit them.
 | `memorist-core` unreachable | `Show-Memorist-Logs.ps1 memorist-core`; check that `MEMORIST_ACTOR_ASSERTION_SECRET`/`MEMORIST_ACTOR_SERVICE_TOKEN` are set in `.env` (the installer generates them). |
 | Chat works but never attaches memory | That's the fail-open design when memory is degraded. Check `http://localhost:8777/memcore/diagnostics/daily`, then preflight settings (`MEMORIST_PREFLIGHT_ENABLED`, `MEMORIST_FAIL_OPEN`). |
 | A message was captured but created no memory | Open `/memcore/memory-processing/runs/<run-uuid>/stages`; `no_memory_reason` distinguishes no eligible signal, review, rejection, and consolidation with no result. |
+| Semantic coverage says `unresolved_reference` | The model did not supply one evidence-bound resolution inside the current two/six-unit same-session manifest. Memorist does not guess a referent. |
+| Semantic coverage says `needs_review` | Check gate/route lineage, assistant ratification, privacy ceiling, and accepted evidence. Assistant context and ambiguous acknowledgements cannot become user authority automatically. |
+| Restart reports a semantic replay identity conflict | The immutable message version, contract/policy versions, or current gate/route/privacy authority differs from the recorded plan. Preserve the audit rows and inspect the processing trace; do not delete links or edit UUIDs. |
 
 ## Provider / API key setup
 
@@ -104,3 +107,8 @@ passes the generic connectivity marker can still be rejected if it fails the
 active role prompt/schema probe. Retest after changing model, endpoint,
 capabilities, prompt contract, or role manifest; any such change makes the prior
 certification stale.
+
+For WP02, `memory_extraction` must pass both Jakobson v3 and semantic candidate
+v1 with the same profile. Coverage audit is intentionally content-free; use
+canonical message/evidence access controls for raw text rather than expecting
+it in generic diagnostics.

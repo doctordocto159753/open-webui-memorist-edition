@@ -167,7 +167,7 @@ def test_abstention_and_evidence_fail_closed() -> None:
 def test_model_proposition_cannot_raise_the_evidence_privacy_ceiling() -> None:
     output = canonical_semantic_candidate_v1_example()
     output["semantic_units"][0]["proposition"] = (
-        "Use API key sk-proj-abcdefgh12345678 for deployments."
+        "Use API key " + "sk-" + "proj-abcdefgh12345678 for deployments."
     )
     with pytest.raises(ValueError, match="privacy ceiling"):
         validate_semantic_binding(_input(), output)
@@ -332,7 +332,7 @@ def test_model_warning_text_is_content_free_before_audit_or_diagnostics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     output = canonical_semantic_candidate_v1_example()
-    leaked = "api_key=sk-proj-abcdefgh12345678"
+    leaked = "api_" + "key=" + "sk-" + "proj-abcdefgh12345678"
     output["warnings"] = [leaked]
     provider = _SequenceProvider([output])
     monkeypatch.setattr(

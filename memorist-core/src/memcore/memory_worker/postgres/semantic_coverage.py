@@ -35,10 +35,12 @@ class PostgresSemanticCoverageRepository:
                   message_uuid, message_version_uuid, processing_run_uuid,
                   semantic_prompt_execution_uuid, raw_text_hash,
                   text_envelope_contract_version, semantic_contract_hash,
+                  route_mapping_version, provenance_policy_version,
+                  privacy_policy_version,
                   status, plan_jsonb, warnings_jsonb, created_at, schema_version
                 )
                 VALUES (
-                  %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,1
+                  %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,1
                 )
                 ON CONFLICT (coverage_run_uuid) DO NOTHING
                 """,
@@ -53,6 +55,9 @@ class PostgresSemanticCoverageRepository:
                     plan.raw_text_hash,
                     bindings.text_envelope_contract_version,
                     plan.semantic_contract_hash,
+                    bindings.route_mapping_version,
+                    bindings.provenance_policy_version,
+                    bindings.privacy_policy_version,
                     plan.status,
                     json.dumps(plan.model_dump(mode="json"), sort_keys=True),
                     json.dumps(list(plan.warnings)),
@@ -171,6 +176,19 @@ class PostgresSemanticCoverageRepository:
             if authority is not None:
                 self._assert_candidate_authority(authority)
             if link["state"] == "candidate_linked":
+                existing_candidate = _fetch_one(
+                    self.connection,
+                    "SELECT * FROM memory_candidates WHERE candidate_uuid = %s FOR UPDATE",
+                    (proposal.proposal_id,),
+                )
+                if existing_candidate is None:
+                    raise SemanticCoverageIdentityConflict("linked candidate row is missing")
+                _assert_existing_postgres_candidate(
+                    self.connection,
+                    existing_candidate,
+                    candidate,
+                    evidence,
+                )
                 return {"target_uuid": proposal.proposal_id, "state": "existing"}
             existing_candidate = _fetch_one(
                 self.connection,
@@ -200,9 +218,9 @@ class PostgresSemanticCoverageRepository:
                         INSERT INTO candidate_evidence (
                           evidence_uuid, candidate_uuid, message_uuid, text_unit_uuid,
                           annotation_uuid, route_uuid, evidence_text, start_char,
-                          end_char, created_at, schema_version
+                          end_char, evidence_role, support_type, created_at, schema_version
                         )
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1)
                         """,
                         (
                             item.evidence_uuid,
@@ -214,6 +232,8 @@ class PostgresSemanticCoverageRepository:
                             item.evidence_text,
                             item.start_char,
                             item.end_char,
+                            item.evidence_role.value,
+                            item.support_type.value,
                             item.created_at,
                         ),
                     )
@@ -277,9 +297,11 @@ class PostgresSemanticCoverageRepository:
         row = _fetch_one(
             self.connection,
             """
-            SELECT coverage_hash, message_uuid, processing_run_uuid,
+            SELECT coverage_hash, message_uuid, message_version_uuid, processing_run_uuid,
                    semantic_prompt_execution_uuid, raw_text_hash,
                    text_envelope_contract_version, semantic_contract_hash,
+                   route_mapping_version, provenance_policy_version,
+                   privacy_policy_version,
                    status, plan_jsonb
             FROM semantic_coverage_runs
             WHERE coverage_run_uuid = %s
@@ -292,11 +314,15 @@ class PostgresSemanticCoverageRepository:
         expected = {
             "coverage_hash": plan.coverage_hash,
             "message_uuid": plan.message_uuid,
+            "message_version_uuid": bindings.message_version_uuid,
             "processing_run_uuid": plan.processing_run_uuid,
             "semantic_prompt_execution_uuid": plan.semantic_prompt_execution_uuid,
             "raw_text_hash": plan.raw_text_hash,
             "text_envelope_contract_version": bindings.text_envelope_contract_version,
             "semantic_contract_hash": plan.semantic_contract_hash,
+            "route_mapping_version": bindings.route_mapping_version,
+            "provenance_policy_version": bindings.provenance_policy_version,
+            "privacy_policy_version": bindings.privacy_policy_version,
             "status": plan.status,
         }
         if any(row[key] != value for key, value in expected.items()):
@@ -444,6 +470,8 @@ def _assert_existing_postgres_candidate(
             "evidence_text": item.evidence_text,
             "start_char": item.start_char,
             "end_char": item.end_char,
+            "evidence_role": item.evidence_role.value,
+            "support_type": item.support_type.value,
         }
         if any(stored[column] != value for column, value in expected_item.items()):
             raise SemanticCoverageIdentityConflict(
