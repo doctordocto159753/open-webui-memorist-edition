@@ -207,6 +207,31 @@ def test_sensitivity_ignores_case_and_persian_digits_in_code() -> None:
     assert classify_sensitivity(raw) is SensitivityClass.SECRET
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Authorization: Bearer abcdefghijklmnop", SensitivityClass.SECRET),
+        (
+            "-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----",
+            SensitivityClass.SECRET,
+        ),
+        (
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop",
+            SensitivityClass.SECRET,
+        ),
+        ("Contact me at person@example.test", SensitivityClass.SENSITIVE),
+        ("Call +98 912 123 4567", SensitivityClass.SENSITIVE),
+        ("شماره موبایل من ۰۹۱۲۱۲۳۴۵۶۷ است.", SensitivityClass.SENSITIVE),
+        ("آدرس خانه را در اینجا ننویس.", SensitivityClass.SENSITIVE),
+    ],
+)
+def test_operation6_privacy_corpus_cannot_be_downgraded(
+    text: str,
+    expected: SensitivityClass,
+) -> None:
+    assert classify_sensitivity(text) is expected
+
+
 # --------------------------------------------------------------------------
 # Regressions caught by the independent review pass
 # --------------------------------------------------------------------------

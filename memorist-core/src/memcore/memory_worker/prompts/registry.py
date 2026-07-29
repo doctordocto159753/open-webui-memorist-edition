@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Mapping
 from pathlib import Path
@@ -350,13 +351,19 @@ def validate_prompt_execution(
 
 def render_prompt(prompt_id: str, version: str, variables: dict[str, Any]) -> str:
     prompt = get_prompt(prompt_id, version).full_system_prompt
-    rendered = prompt
-    for key, value in variables.items():
-        replacement = value if isinstance(value, str) else dump_ijson(value)
-        rendered = rendered.replace("{{" + key + "}}", replacement)
-    if "{{PAYLOAD_IJSON}}" in rendered and "payload" not in variables:
-        rendered = rendered.replace("{{PAYLOAD_IJSON}}", dump_ijson(variables))
-    return rendered
+
+    def replacement(match: re.Match[str]) -> str:
+        key = match.group(1)
+        if key in variables:
+            value = variables[key]
+            return value if isinstance(value, str) else dump_ijson(value)
+        if key == "PAYLOAD_IJSON" and "payload" not in variables:
+            return dump_ijson(variables)
+        return match.group(0)
+
+    # Substitute placeholders in the trusted template exactly once. A marker
+    # embedded in untrusted payload text must never be interpreted recursively.
+    return re.sub(r"\{\{([A-Z0-9_]+)\}\}", replacement, prompt)
 
 
 def _definition(

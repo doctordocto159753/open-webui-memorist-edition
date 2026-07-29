@@ -143,6 +143,30 @@ def test_terminal_gate_short_circuits_semantic_execution_and_candidates() -> Non
     assert adapter.persisted_plan is result.plan
 
 
+def test_sensitive_message_never_reaches_semantic_provider_or_prompt_audit() -> None:
+    adapter = _PrivacyAdapter()
+    result = SemanticCandidatePlanningService(adapter).execute(
+        SemanticCandidatePlanningRequest(
+            message_uuid=adapter.scope.message_uuid,
+            processing_run_uuid="processing-run",
+            profile={
+                "provider_type": "openai_compatible_llm",
+                "model_name": "must-not-run",
+                "model_role": "memory_extraction",
+            },
+        )
+    )
+
+    assert result.semantic_status == "skipped_by_privacy"
+    assert result.semantic_called_provider is False
+    assert result.semantic_prompt_execution_uuid is None
+    assert result.proposals == ()
+    assert result.candidates == ()
+    assert result.plan.status == "abstain"
+    assert adapter.record_calls == 0
+    assert adapter.persisted_plan is result.plan
+
+
 class _ContextSource:
     def __init__(
         self,
@@ -220,6 +244,46 @@ class _TerminalAdapter(_ContextSource):
 
     def reserve_and_link_candidate(self, **_: Any) -> dict[str, Any]:
         raise AssertionError("terminal gate must not reserve a candidate")
+
+
+class _PrivacyAdapter(_TerminalAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.scope = _scope(raw_text="Bearer abcdefghijklmnop must stay private.")
+
+    def load_persisted_authorities(
+        self,
+        *,
+        message_uuid: str,
+        processing_run_uuid: str,
+    ) -> tuple[PersistedUnitAuthority, ...]:
+        assert message_uuid == self.scope.message_uuid
+        assert processing_run_uuid == "processing-run"
+        return (
+            PersistedUnitAuthority(
+                text_unit_uuid="text-unit",
+                raw_start=0,
+                raw_end=len(self.scope.raw_text),
+                annotation_uuid="annotation",
+                gate_decision_uuid="gate",
+                gate_decision="manual_review",
+                route_uuid="route",
+                route_type="task_constraint",
+                route_status="ready",
+                privacy_ceiling="normal",
+                privacy_storage_allowed=True,
+            ),
+        )
+
+    def load_semantic_execution(self, **_: Any) -> None:
+        raise AssertionError("privacy ceiling must precede semantic replay/model execution")
+
+    def record_semantic_execution(self, **_: Any) -> None:
+        self.record_calls += 1
+        raise AssertionError("privacy ceiling must not create semantic prompt audit")
+
+    def reserve_and_link_candidate(self, **_: Any) -> dict[str, Any]:
+        raise AssertionError("privacy ceiling must not reserve a candidate")
 
 
 def _scope(*, raw_text: str) -> CurrentContextScope:

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from typing import Any
 
 from memcore.memory_worker.attempt_audit import ProviderAttemptAuditRepository
 from memcore.memory_worker.execution import ContractExecutionOutcome, run_contract_execution
+from memcore.memory_worker.extraction.sensitivity import classify_sensitivity
 from memcore.memory_worker.jakobson_runtime import REMOTE_PROVIDER_TYPES
 from memcore.memory_worker.prompts.contracts import (
     SEMANTIC_CANDIDATE_V1_CONTRACT,
@@ -22,6 +24,7 @@ from memcore.memory_worker.providers.openai_compatible import (
     OpenAICompatibleMemoryExtractionProvider,
 )
 from memcore.memory_worker.semantic_contract import SemanticAnalysisV1Input
+from memcore.models import SensitivityClass
 from memcore.validators.ijson import dump_ijson
 
 
@@ -80,9 +83,37 @@ def execute_semantic_candidate_contract(
         ]
 
     if provider_type not in REMOTE_PROVIDER_TYPES:
-        return run_contract_execution(
-            provider=None,
-            system_prompt="",
+        return _with_content_free_warnings(
+            run_contract_execution(
+                provider=None,
+                system_prompt="",
+                input_payload=payload,
+                contract=SEMANTIC_CANDIDATE_V1_CONTRACT,
+                validate=validate,
+                deterministic_output=semantic_abstention,
+                revalidate=revalidate,
+                allow_fallback=allow_fallback,
+                attempt_audit=attempt_audit,
+            )
+        )
+
+    provider = OpenAICompatibleMemoryExtractionProvider.from_profile(profile, timeout_ms=timeout_ms)
+    system_prompt = render_prompt(
+        SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID,
+        SEMANTIC_CANDIDATE_ANALYSIS_VERSION,
+        {
+            # Replace trusted template material before untrusted payload data.
+            # A message containing a literal ``{{STRICT_JSON_SCHEMA_IJSON}}``
+            # must remain data rather than triggering a second replacement.
+            "STRICT_JSON_SCHEMA_IJSON": dump_ijson(SEMANTIC_CANDIDATE_V1_CONTRACT.json_schema()),
+            "CANONICAL_EXAMPLE_IJSON": dump_ijson(canonical_semantic_candidate_v1_example()),
+            "PAYLOAD_IJSON": payload,
+        },
+    )
+    return _with_content_free_warnings(
+        run_contract_execution(
+            provider=provider,
+            system_prompt=system_prompt,
             input_payload=payload,
             contract=SEMANTIC_CANDIDATE_V1_CONTRACT,
             validate=validate,
@@ -91,28 +122,26 @@ def execute_semantic_candidate_contract(
             allow_fallback=allow_fallback,
             attempt_audit=attempt_audit,
         )
+    )
 
-    provider = OpenAICompatibleMemoryExtractionProvider.from_profile(profile, timeout_ms=timeout_ms)
-    system_prompt = render_prompt(
-        SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID,
-        SEMANTIC_CANDIDATE_ANALYSIS_VERSION,
-        {"PAYLOAD_IJSON": payload},
-    )
-    system_prompt = system_prompt.replace(
-        "{{STRICT_JSON_SCHEMA_IJSON}}",
-        dump_ijson(SEMANTIC_CANDIDATE_V1_CONTRACT.json_schema()),
-    ).replace(
-        "{{CANONICAL_EXAMPLE_IJSON}}",
-        dump_ijson(canonical_semantic_candidate_v1_example()),
-    )
-    return run_contract_execution(
-        provider=provider,
-        system_prompt=system_prompt,
-        input_payload=payload,
-        contract=SEMANTIC_CANDIDATE_V1_CONTRACT,
-        validate=validate,
-        deterministic_output=semantic_abstention,
-        revalidate=revalidate,
-        allow_fallback=allow_fallback,
-        attempt_audit=attempt_audit,
-    )
+
+def _with_content_free_warnings(
+    outcome: ContractExecutionOutcome,
+) -> ContractExecutionOutcome:
+    """Keep non-authoritative model warnings useful without auditing their text."""
+
+    warnings: list[str] = []
+    for index, value in enumerate(outcome.output.get("warnings") or []):
+        raw = str(value)
+        code = raw.lower()
+        safe_code = (
+            0 < len(code) <= 80
+            and all(character.isalnum() or character in {"_", "-"} for character in code)
+            and classify_sensitivity(code) is SensitivityClass.NORMAL
+        )
+        warning = code if safe_code else f"provider_warning_{index + 1}"
+        if warning not in warnings:
+            warnings.append(warning)
+    if warnings == outcome.output.get("warnings"):
+        return outcome
+    return replace(outcome, output={**outcome.output, "warnings": warnings})

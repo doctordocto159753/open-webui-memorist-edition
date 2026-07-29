@@ -17,6 +17,7 @@ from memcore.memory_worker.attempt_audit import (
     stable_stage_execution_uuid,
 )
 from memcore.memory_worker.execution import ContractExecutionOutcome
+from memcore.memory_worker.extraction.sensitivity import classify_sensitivity
 from memcore.memory_worker.identity import execution_profile_fingerprint
 from memcore.memory_worker.prompts.contracts import (
     SEMANTIC_CANDIDATE_V1_CONTRACT,
@@ -59,7 +60,7 @@ from memcore.memory_worker.semantic_runtime import (
     execute_semantic_candidate_contract,
     semantic_abstention,
 )
-from memcore.models import CandidateEvidence, MemoryCandidate, ModelRole
+from memcore.models import CandidateEvidence, MemoryCandidate, ModelRole, SensitivityClass
 from memcore.textsemantics import TEXT_SEMANTICS_CONTRACT_VERSION, build_envelope
 from memcore.validators.ijson import canonical_hash_ijson
 
@@ -246,6 +247,14 @@ class SemanticCandidatePlanningService:
         terminal_short_circuit = any(
             authority.gate_decision in _TERMINAL_GATES for authority in authorities
         )
+        privacy_short_circuit = (
+            any(
+                not authority.privacy_storage_allowed
+                or authority.privacy_ceiling in {"sensitive", "secret"}
+                for authority in authorities
+            )
+            or classify_sensitivity(scope.raw_text) is not SensitivityClass.NORMAL
+        )
         prompt_execution_uuid: str | None = None
         stage_execution_uuid: str | None = None
         called_provider = False
@@ -255,6 +264,14 @@ class SemanticCandidatePlanningService:
                 semantic_abstention("terminal_gate_before_semantic_analysis")
             )
             semantic_status = "skipped_by_gate"
+        elif privacy_short_circuit:
+            # Do not duplicate sensitive current-message content in a remote
+            # semantic call or its replay/audit output. The canonical message
+            # remains the sole content-bearing record and coverage fails closed.
+            semantic_output = SemanticAnalysisV1Output.model_validate(
+                semantic_abstention("privacy_ceiling_before_semantic_analysis")
+            )
+            semantic_status = "skipped_by_privacy"
         else:
             (
                 semantic_output,

@@ -105,6 +105,7 @@ _KEY_VALUE_SECRET_PATTERN = re.compile(
     r"([^\s,;&}\]\)]+)"
 )
 _BEARER_TOKEN_PATTERN = re.compile(r"(?i)\bbearer\s+(?!\[redacted\])[^\s,;&}\]\)]+")
+_BARE_KEY_PREFIX_PATTERN = re.compile(r"(?i)\bsk-[a-z0-9_-]{8,}")
 _URL_PATTERN = re.compile(r"https?://[^\s<>\"']+")
 
 
@@ -125,4 +126,5 @@ def sanitize_error_message(message: str | None) -> str | None:
     sanitized = _URL_PATTERN.sub(_redact_url_match, message)
     sanitized = _BEARER_TOKEN_PATTERN.sub("Bearer [redacted]", sanitized)
     sanitized = _KEY_VALUE_SECRET_PATTERN.sub(r"\1\2[redacted]", sanitized)
+    sanitized = _BARE_KEY_PREFIX_PATTERN.sub("[redacted]", sanitized)
     return sanitized[:500]

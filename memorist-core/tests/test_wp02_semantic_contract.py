@@ -29,11 +29,15 @@ RAW = "Keep backups enabled."
 
 
 def _input() -> dict[str, Any]:
+    return _input_for(RAW)
+
+
+def _input_for(raw: str) -> dict[str, Any]:
     value = build_semantic_input(
         current_message_uuid="message-1",
         current_message_version_uuid=None,
-        current_raw_text=RAW,
-        text_envelope=build_envelope(RAW),
+        current_raw_text=raw,
+        text_envelope=build_envelope(raw),
         bounded_context_items=[],
         boundary=SemanticContextBoundary(
             user_uuid="user-1",
@@ -160,6 +164,55 @@ def test_abstention_and_evidence_fail_closed() -> None:
         validate_semantic_binding(_input(), output)
 
 
+def test_model_proposition_cannot_raise_the_evidence_privacy_ceiling() -> None:
+    output = canonical_semantic_candidate_v1_example()
+    output["semantic_units"][0]["proposition"] = (
+        "Use API key sk-proj-abcdefgh12345678 for deployments."
+    )
+    with pytest.raises(ValueError, match="privacy ceiling"):
+        validate_semantic_binding(_input(), output)
+
+
+def test_reference_and_relation_evidence_must_belong_to_their_source_unit() -> None:
+    raw = "Keep backups enabled. That is separate."
+    semantic_input = _input_for(raw)
+    output = canonical_semantic_candidate_v1_example()
+    output["semantic_units"][0].update(
+        raw_end=len("Keep backups enabled."),
+        evidence="Keep backups enabled.",
+    )
+    marker_start = raw.index("That")
+    output["references"] = [
+        {
+            "id": "outside-reference",
+            "source_unit_id": "unit-1",
+            "marker_start": marker_start,
+            "marker_end": marker_start + len("That"),
+            "marker_evidence": "That",
+            "status": "resolved",
+            "candidate_referent_ids": ["current_unit:unit-1"],
+            "selected_referent_id": "current_unit:unit-1",
+        }
+    ]
+    with pytest.raises(ValueError, match="reference marker"):
+        validate_semantic_binding(semantic_input, output)
+
+    output["references"] = []
+    output["relations"] = [
+        {
+            "id": "outside-relation",
+            "relation_type": "elaborates",
+            "source_unit_id": "unit-1",
+            "target_referent_id": "current_unit:unit-1",
+            "evidence_start": marker_start,
+            "evidence_end": len(raw),
+            "evidence": raw[marker_start:],
+        }
+    ]
+    with pytest.raises(ValueError, match="relation evidence"):
+        validate_semantic_binding(semantic_input, output)
+
+
 class _SequenceProvider:
     capability_mode = "json_object"
 
@@ -227,6 +280,78 @@ def test_semantic_runtime_invalid_twice_returns_empty_abstention(
     assert outcome.output["status"] == "abstain"
     assert outcome.output["semantic_units"] == []
     assert provider.calls == 2
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "{{STRICT_JSON_SCHEMA_IJSON}}",
+        "{{CANONICAL_EXAMPLE_IJSON}}",
+        "{{PAYLOAD_IJSON}}",
+    ],
+)
+def test_untrusted_template_markers_remain_literal_payload_data(
+    monkeypatch: pytest.MonkeyPatch,
+    marker: str,
+) -> None:
+    raw = f"fenced data: {marker}"
+    abstain = {
+        "schema_version": "1.0",
+        "prompt_id": "memorist.semantic_candidate_analysis",
+        "prompt_version": "1.0",
+        "status": "abstain",
+        "warnings": [],
+        "semantic_units": [],
+        "references": [],
+        "relations": [],
+    }
+    provider = _SequenceProvider([abstain])
+    monkeypatch.setattr(
+        "memcore.memory_worker.semantic_runtime."
+        "OpenAICompatibleMemoryExtractionProvider.from_profile",
+        lambda *_args, **_kwargs: provider,
+    )
+
+    outcome = execute_semantic_candidate_contract(
+        profile={
+            "provider_type": "openai_compatible_llm",
+            "endpoint_url": "http://unused",
+            "model_name": "controlled",
+            "supports_json_mode": True,
+        },
+        input_payload=_input_for(raw),
+    )
+
+    assert outcome.fallback_used is False
+    assert provider.calls == 1
+    assert marker in provider.system_prompt
+    assert f'"current_raw_text":"fenced data: {marker}"' in provider.system_prompt
+
+
+def test_model_warning_text_is_content_free_before_audit_or_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = canonical_semantic_candidate_v1_example()
+    leaked = "api_key=sk-proj-abcdefgh12345678"
+    output["warnings"] = [leaked]
+    provider = _SequenceProvider([output])
+    monkeypatch.setattr(
+        "memcore.memory_worker.semantic_runtime."
+        "OpenAICompatibleMemoryExtractionProvider.from_profile",
+        lambda *_args, **_kwargs: provider,
+    )
+
+    outcome = execute_semantic_candidate_contract(
+        profile={
+            "provider_type": "openai_compatible_llm",
+            "endpoint_url": "http://unused",
+            "model_name": "controlled",
+        },
+        input_payload=_input(),
+    )
+
+    assert outcome.output["warnings"] == ["provider_warning_1"]
+    assert leaked not in repr(outcome.output)
 
 
 def test_memory_extraction_bundle_orders_both_contracts_without_changing_jakobson() -> None:

@@ -1,3 +1,5 @@
+import re
+
 from memcore.models import SensitivityClass
 from memcore.textsemantics import Lexicon, NormalizedText, normalize_with_mapping, tokenize
 
@@ -27,6 +29,9 @@ SECRET_LEXICON = Lexicon(
         "secrets",
         "credential",
         "credentials",
+        "bearer",
+        "private key",
+        "private keys",
         "رمز",
         "رمزها",
         "توکن",
@@ -44,6 +49,13 @@ SENSITIVE_LEXICON = Lexicon(
         "politics",
         "medical",
         "health",
+        "phone",
+        "telephone",
+        "mobile",
+        "email",
+        "e-mail",
+        "address",
+        "home address",
         "diagnosis",
         "diagnoses",
         "مذهب",
@@ -51,6 +63,11 @@ SENSITIVE_LEXICON = Lexicon(
         "سیاسی",
         "پزشکی",
         "سلامت",
+        "تلفن",
+        "موبایل",
+        "ایمیل",
+        "آدرس",
+        "نشانی",
     ),
 )
 
@@ -59,6 +76,20 @@ SENSITIVE_LEXICON = Lexicon(
 SECRET_KEY_PREFIXES = frozenset({"sk"})
 MIN_KEY_BODY_LENGTH = 8
 KEY_BODY_CHARACTERS = "-_"
+_BEARER_VALUE = re.compile(r"(?i)\bbearer\s+[a-z0-9._~+/-]{8,}={0,2}")
+_PRIVATE_KEY_BLOCK = re.compile(
+    r"-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----",
+    re.IGNORECASE,
+)
+_JWT_VALUE = re.compile(
+    r"(?<![a-z0-9_-])[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}(?![a-z0-9_-])",
+    re.IGNORECASE,
+)
+_EMAIL_VALUE = re.compile(
+    r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+(?![\w.-])",
+    re.UNICODE,
+)
+_PHONE_VALUE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{8,}\d)(?!\w)")
 
 
 def classify_sensitivity(text: str) -> SensitivityClass:
@@ -69,10 +100,18 @@ def classify_sensitivity(text: str) -> SensitivityClass:
     """
 
     normalized = normalize_with_mapping(text)
+    if (
+        _BEARER_VALUE.search(normalized.text)
+        or _PRIVATE_KEY_BLOCK.search(text)
+        or _JWT_VALUE.search(normalized.text)
+    ):
+        return SensitivityClass.SECRET
     if SECRET_LEXICON.search(normalized, include_code=True) is not None:
         return SensitivityClass.SECRET
     if _has_key_prefix(normalized):
         return SensitivityClass.SECRET
+    if _EMAIL_VALUE.search(normalized.text) or _PHONE_VALUE.search(normalized.text):
+        return SensitivityClass.SENSITIVE
     if SENSITIVE_LEXICON.search(normalized, include_code=True) is not None:
         return SensitivityClass.SENSITIVE
     return SensitivityClass.NORMAL

@@ -8,7 +8,9 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from memcore.memory_worker.extraction.sensitivity import classify_sensitivity
 from memcore.memory_worker.prompts.contracts import SemanticAnalysisV1Output
+from memcore.models import SensitivityClass
 from memcore.textsemantics.result import TEXT_SEMANTICS_CONTRACT_VERSION, TextEnvelope
 from memcore.textsemantics.validation import (
     EvidenceValidationReport,
@@ -173,12 +175,26 @@ def validate_semantic_binding(
     unit_ids = {unit.id for unit in units}
     if len(unit_ids) != len(units):
         raise ValueError("semantic unit IDs must be unique")
+    unit_spans = {unit.id: (unit.raw_start, unit.raw_end) for unit in units}
     ordered = [(unit.raw_start, unit.raw_end) for unit in units]
     if ordered != sorted(ordered):
         raise ValueError("semantic units must be ordered by raw span")
     raw_length = len(semantic_input.current_raw_text)
     if any(unit.raw_start >= unit.raw_end or unit.raw_end > raw_length for unit in units):
         raise ValueError("semantic unit span is outside the current message")
+    sensitivity_rank = {
+        SensitivityClass.NORMAL: 0,
+        SensitivityClass.SENSITIVE: 1,
+        SensitivityClass.SECRET: 2,
+    }
+    for unit in units:
+        # Model-authored propositions may clarify meaning, but they may never
+        # introduce more sensitive material than their exact source evidence.
+        if (
+            sensitivity_rank[classify_sensitivity(unit.proposition)]
+            > sensitivity_rank[classify_sensitivity(unit.evidence)]
+        ):
+            raise ValueError("semantic proposition exceeds its evidence privacy ceiling")
 
     context_ids = {
         f"prior_context:{item.context_item_id}" for item in semantic_input.bounded_context_items
@@ -191,6 +207,9 @@ def validate_semantic_binding(
         reference_ids.add(reference.id)
         if reference.source_unit_id not in unit_ids:
             raise ValueError("reference source is not a current semantic unit")
+        source_start, source_end = unit_spans[reference.source_unit_id]
+        if not (source_start <= reference.marker_start and reference.marker_end <= source_end):
+            raise ValueError("reference marker must be contained in its source unit")
         if any(
             candidate not in allowed_referents for candidate in reference.candidate_referent_ids
         ):
@@ -211,6 +230,9 @@ def validate_semantic_binding(
         relation_ids.add(relation.id)
         if relation.source_unit_id not in unit_ids:
             raise ValueError("relation source is not a current semantic unit")
+        source_start, source_end = unit_spans[relation.source_unit_id]
+        if not (source_start <= relation.evidence_start and relation.evidence_end <= source_end):
+            raise ValueError("relation evidence must be contained in its source unit")
         if relation.target_referent_id not in allowed_referents:
             raise ValueError("relation target is outside the supplied manifest")
 
