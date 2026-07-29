@@ -399,7 +399,7 @@ def test_full_postgres_midflight_lease_loss_fences_all_attempt_artifacts(
         tmp_path,
         monkeypatch,
         messages=1,
-        first_message_text="Remember this: I prefer PostgreSQL.",
+        first_message_text="I prefer PostgreSQL.",
     )
     original = PostgresMemoryWorkerPipeline.prepare_message
     entered = threading.Event()

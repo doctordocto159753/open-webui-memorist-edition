@@ -91,6 +91,22 @@ class SQLiteCanonicalAdapter:
                         (target_uuid,),
                     )
                 ],
+                *[
+                    PrivacyRecord(
+                        storage_type="sqlite",
+                        record_type="message_version",
+                        record_uuid=row["message_version_uuid"],
+                        action="redact",
+                    )
+                    for row in self.connection.execute(
+                        """
+                        SELECT message_version_uuid
+                        FROM message_versions
+                        WHERE message_uuid = ?
+                        """,
+                        (target_uuid,),
+                    )
+                ],
             ]
         if target_type == "session" and target_uuid:
             records: list[PrivacyRecord] = []
@@ -213,7 +229,28 @@ class SQLiteCanonicalAdapter:
                             request_uuid,
                         )
                     )
+                    counts.update(
+                        _erase_prompt_executions_for_message(
+                            self.connection,
+                            record.record_uuid,
+                            request_uuid,
+                        )
+                    )
                     counts["message"] += 1
+                elif record.record_type == "message_version" and record.record_uuid:
+                    cursor = self.connection.execute(
+                        """
+                        UPDATE message_versions
+                        SET raw_text = NULL,
+                            raw_payload_ijson = NULL,
+                            snapshot_ijson = NULL,
+                            change_reason = 'privacy_redacted',
+                            content_hash = ?
+                        WHERE message_version_uuid = ?
+                        """,
+                        (_fingerprint(record.record_uuid), record.record_uuid),
+                    )
+                    counts["message_version"] += cursor.rowcount
                 elif record.record_type == "text_unit" and record.record_uuid:
                     self.connection.execute(
                         """
@@ -263,6 +300,19 @@ class SQLiteCanonicalAdapter:
                 ).fetchone()
                 checks[f"message:{record.record_uuid}"] = (
                     row is None or row["raw_text"] is None and row["redaction_status"] == "erased"
+                )
+            if record.record_type == "message_version" and record.record_uuid:
+                row = self.connection.execute(
+                    """
+                    SELECT raw_text, raw_payload_ijson, snapshot_ijson
+                    FROM message_versions
+                    WHERE message_version_uuid = ?
+                    """,
+                    (record.record_uuid,),
+                ).fetchone()
+                checks[f"message_version:{record.record_uuid}"] = row is None or all(
+                    row[column] is None
+                    for column in ("raw_text", "raw_payload_ijson", "snapshot_ijson")
                 )
         return VerificationResult(
             passed=all(bool(value) for value in checks.values()), checks=checks
@@ -826,6 +876,7 @@ def _adapter_matches(adapter: PrivacyStorageAdapter, record: PrivacyRecord) -> b
             "memory",
             "memory_version",
             "message",
+            "message_version",
             "text_unit",
             "session",
         }
@@ -973,6 +1024,36 @@ def _erase_jakobson_for_message(
         (redacted_payload, redacted_payload, message_uuid),
     )
     counts["jakobson_analysis_run"] += cursor.rowcount
+    return counts
+
+
+def _erase_prompt_executions_for_message(
+    connection: sqlite3.Connection,
+    message_uuid: str,
+    request_uuid: str,
+) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    if not _table_exists(connection, "prompt_execution_runs"):
+        return counts
+    redacted_payload = dump_ijson({"redacted": True, "privacy_request_uuid": request_uuid})
+    cursor = connection.execute(
+        """
+        UPDATE prompt_execution_runs
+        SET input_ref = NULL,
+            raw_output_ijson = ?,
+            validated_output_ijson = ?,
+            warnings_ijson = ?,
+            error_sanitized = NULL
+        WHERE message_uuid = ?
+        """,
+        (
+            redacted_payload,
+            redacted_payload,
+            dump_ijson([]),
+            message_uuid,
+        ),
+    )
+    counts["prompt_execution_run"] += cursor.rowcount
     return counts
 
 

@@ -143,6 +143,40 @@ def test_terminal_gate_short_circuits_semantic_execution_and_candidates() -> Non
     assert adapter.persisted_plan is result.plan
 
 
+def test_one_terminal_unit_short_circuits_provider_but_audits_eligible_sibling() -> None:
+    adapter = _MixedTerminalAdapter()
+    result = SemanticCandidatePlanningService(adapter).execute(
+        SemanticCandidatePlanningRequest(
+            message_uuid=adapter.scope.message_uuid,
+            processing_run_uuid="processing-run",
+            profile={
+                "provider_type": "openai_compatible_llm",
+                "model_name": "must-not-run",
+                "model_role": "memory_extraction",
+            },
+        )
+    )
+
+    assert result.terminal_gate_short_circuit is True
+    assert result.semantic_called_provider is False
+    assert result.semantic_prompt_execution_uuid is None
+    assert result.proposals == ()
+    assert result.candidates == ()
+    assert adapter.record_calls == 0
+    assert adapter.persisted_plan is result.plan
+    assert [
+        (
+            adapter.scope.raw_text[item.raw_start : item.raw_end],
+            item.disposition.value,
+            item.reason_codes,
+        )
+        for item in result.plan.items
+    ] == [
+        ("Discard", "rejected_by_gate", ("gate_discard",)),
+        ("Keep backups enabled", "unsupported", ("uncovered_material",)),
+    ]
+
+
 def test_sensitive_message_never_reaches_semantic_provider_or_prompt_audit() -> None:
     adapter = _PrivacyAdapter()
     result = SemanticCandidatePlanningService(adapter).execute(
@@ -284,6 +318,50 @@ class _PrivacyAdapter(_TerminalAdapter):
 
     def reserve_and_link_candidate(self, **_: Any) -> dict[str, Any]:
         raise AssertionError("privacy ceiling must not reserve a candidate")
+
+
+class _MixedTerminalAdapter(_TerminalAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.scope = _scope(raw_text="Discard. Keep backups enabled.")
+
+    def load_persisted_authorities(
+        self,
+        *,
+        message_uuid: str,
+        processing_run_uuid: str,
+    ) -> tuple[PersistedUnitAuthority, ...]:
+        assert message_uuid == self.scope.message_uuid
+        assert processing_run_uuid == "processing-run"
+        second_start = self.scope.raw_text.index("Keep")
+        return (
+            PersistedUnitAuthority(
+                text_unit_uuid="text-unit-discard",
+                raw_start=0,
+                raw_end=second_start - 1,
+                annotation_uuid="annotation-discard",
+                gate_decision_uuid="gate-discard",
+                gate_decision="discard",
+                route_uuid="route-discard",
+                route_type="ignore",
+                route_status="ignored",
+                privacy_ceiling="normal",
+                privacy_storage_allowed=True,
+            ),
+            PersistedUnitAuthority(
+                text_unit_uuid="text-unit-eligible",
+                raw_start=second_start,
+                raw_end=len(self.scope.raw_text),
+                annotation_uuid="annotation-eligible",
+                gate_decision_uuid="gate-eligible",
+                gate_decision="analyze",
+                route_uuid="route-eligible",
+                route_type="project_context",
+                route_status="ready",
+                privacy_ceiling="normal",
+                privacy_storage_allowed=True,
+            ),
+        )
 
 
 def _scope(*, raw_text: str) -> CurrentContextScope:

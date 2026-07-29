@@ -248,6 +248,128 @@ def test_assistant_proposition_injection_requires_reference_and_ratification() -
     assert copied_plan.items[0].disposition is CoverageDisposition.DURABLE_CANDIDATE
 
 
+@pytest.mark.parametrize("raw", ["Okay.", "متوجه شدم."])
+def test_bare_acknowledgement_cannot_forge_assistant_ratification(raw: str) -> None:
+    assistant_text = "Production backups stay enabled."
+    context = BoundedContextItem(
+        context_item_id="assistant-context",
+        user_uuid="user-a",
+        session_uuid="session-a",
+        workspace_uuid="workspace-a",
+        project_uuid="project-a",
+        message_uuid="assistant-message",
+        message_version_uuid="assistant-version",
+        text_unit_uuid="assistant-unit",
+        role="assistant",
+        turn_index=1,
+        unit_index=0,
+        raw_start=0,
+        raw_end=len(assistant_text),
+        text=assistant_text,
+        raw_text_hash=_sha256(assistant_text),
+        source_authority_ceiling="assistant_claim",
+    )
+    unit = _unit(unit_id="acknowledgement", text=raw, raw_start=0, raw_end=len(raw))
+    unit["proposition"] = assistant_text
+    output = _analysis(
+        raw,
+        [unit],
+        references=[
+            {
+                "id": "forged-assistant-reference",
+                "source_unit_id": "acknowledgement",
+                "marker_start": 0,
+                "marker_end": len(raw),
+                "marker_evidence": raw,
+                "status": "resolved",
+                "candidate_referent_ids": ["prior_context:assistant-context"],
+                "selected_referent_id": "prior_context:assistant-context",
+            }
+        ],
+        relations=[
+            {
+                "id": "forged-ratification",
+                "relation_type": "ratifies",
+                "source_unit_id": "acknowledgement",
+                "target_referent_id": "prior_context:assistant-context",
+                "evidence_start": 0,
+                "evidence_end": len(raw),
+                "evidence": raw,
+            }
+        ],
+    )
+    value = _planner_input(raw, output, (_authority(0, len(raw), 0),)).model_copy(
+        update={"bounded_context_items": (context,)}
+    )
+
+    plan, proposals = plan_candidate_coverage(value)
+
+    assert proposals == ()
+    assert plan.items[0].disposition is CoverageDisposition.NEEDS_REVIEW
+    assert "conflicting_persisted_authority" in plan.items[0].reason_codes
+
+
+def test_explicit_persian_ratification_can_promote_one_assistant_claim() -> None:
+    assistant_text = "پشتیبان‌گیری پروژه فعال می‌ماند."
+    raw = f"بله، {assistant_text}"
+    context = BoundedContextItem(
+        context_item_id="assistant-context",
+        user_uuid="user-a",
+        session_uuid="session-a",
+        workspace_uuid="workspace-a",
+        project_uuid="project-a",
+        message_uuid="assistant-message",
+        message_version_uuid="assistant-version",
+        text_unit_uuid="assistant-unit",
+        role="assistant",
+        turn_index=1,
+        unit_index=0,
+        raw_start=0,
+        raw_end=len(assistant_text),
+        text=assistant_text,
+        raw_text_hash=_sha256(assistant_text),
+        source_authority_ceiling="assistant_claim",
+    )
+    unit = _unit(unit_id="explicit-ratification", text=raw, raw_start=0, raw_end=len(raw))
+    marker_start = raw.index(assistant_text)
+    output = _analysis(
+        raw,
+        [unit],
+        references=[
+            {
+                "id": "assistant-reference",
+                "source_unit_id": "explicit-ratification",
+                "marker_start": marker_start,
+                "marker_end": len(raw),
+                "marker_evidence": assistant_text,
+                "status": "resolved",
+                "candidate_referent_ids": ["prior_context:assistant-context"],
+                "selected_referent_id": "prior_context:assistant-context",
+            }
+        ],
+        relations=[
+            {
+                "id": "explicit-ratification-relation",
+                "relation_type": "ratifies",
+                "source_unit_id": "explicit-ratification",
+                "target_referent_id": "prior_context:assistant-context",
+                "evidence_start": 0,
+                "evidence_end": len(raw),
+                "evidence": raw,
+            }
+        ],
+    )
+    value = _planner_input(raw, output, (_authority(0, len(raw), 0),)).model_copy(
+        update={"bounded_context_items": (context,)}
+    )
+
+    plan, proposals = plan_candidate_coverage(value)
+
+    assert len(proposals) == 1
+    assert plan.items[0].disposition is CoverageDisposition.DURABLE_CANDIDATE
+    assert proposals[0].source_authority == "user_explicit"
+
+
 def test_assistant_injection_guard_ignores_only_shared_function_words() -> None:
     raw = "The project is stable."
     assistant_text = "The weather is clear."
@@ -720,6 +842,26 @@ def test_schema_parity_fails_for_missing_table_or_weakened_wp02_constraint(
     assert any(
         "support_type in ('supporting', 'contradicting')" in issue
         for issue in weakened_report["contract_issues"]
+    )
+
+    shutil.rmtree(postgres_migrations)
+    shutil.copytree(
+        source_root / "src" / "memcore" / "storage" / "postgres" / "migrations",
+        postgres_migrations,
+    )
+    postgres_wp02 = postgres_migrations / "0024_semantic_coverage_audit.sql"
+    postgres_wp02.write_text(
+        postgres_wp02.read_text(encoding="utf-8").replace(
+            "proposal_uuid TEXT UNIQUE,",
+            "proposal_uuid TEXT,",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    uniqueness_report = build_parity_report(sqlite_migrations, postgres_migrations)
+    assert uniqueness_report["status"] == "fail"
+    assert any(
+        "proposal_uuid text unique" in issue for issue in uniqueness_report["contract_issues"]
     )
 
 

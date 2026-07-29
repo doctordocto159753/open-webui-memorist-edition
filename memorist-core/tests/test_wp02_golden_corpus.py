@@ -141,6 +141,7 @@ def test_oracle_detects_forced_resolution_of_ambiguous_reference() -> None:
         "unknown_context",
         "relation_endpoint",
         "target_outside_candidates",
+        "ambiguous_selected",
         "normalized_evidence",
         "overlap",
         "duplicate_id",
@@ -170,6 +171,8 @@ def test_semantic_and_evidence_validator_mutations_fail_closed(mutation: str) ->
         output["references"][0]["candidate_referent_ids"] = [
             "current_unit:deferred-benefit-discussion"
         ]
+    elif mutation == "ambiguous_selected":
+        output["references"][0]["status"] = "ambiguous"
     elif mutation == "normalized_evidence":
         output["semantic_units"][0]["evidence"] = output["semantic_units"][0]["evidence"].replace(
             "Kubuntu", "kubuntu"

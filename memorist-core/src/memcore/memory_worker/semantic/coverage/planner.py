@@ -71,7 +71,7 @@ def plan_candidate_coverage(
             planner_input.semantic_prompt_execution_uuid is None
             or _assistant_reference_is_not_ratified(
                 planner_input,
-                unit.id,
+                unit,
                 unit_reference_indexes,
                 unit_relation_indexes,
             )
@@ -480,7 +480,7 @@ def _context_lineage(
 
 def _assistant_reference_is_not_ratified(
     value: CoveragePlannerInput,
-    semantic_unit_id: str,
+    unit: Any,
     reference_indexes: Sequence[int],
     relation_indexes: Sequence[int],
 ) -> bool:
@@ -494,7 +494,7 @@ def _assistant_reference_is_not_ratified(
     for index in reference_indexes:
         reference = value.semantic_analysis.references[index]
         if (
-            reference.source_unit_id != semantic_unit_id
+            reference.source_unit_id != unit.id
             or reference.status != "resolved"
             or reference.selected_referent_id is None
             or not reference.selected_referent_id.startswith("prior_context:")
@@ -513,12 +513,45 @@ def _assistant_reference_is_not_ratified(
         return False
     if value.message_role != "user" or len(targets) != 1:
         return True
+    if _acknowledgement_only(unit.evidence):
+        return True
     return not any(
-        value.semantic_analysis.relations[index].source_unit_id == semantic_unit_id
+        value.semantic_analysis.relations[index].source_unit_id == unit.id
         and value.semantic_analysis.relations[index].relation_type in {"ratifies", "corrects"}
         and value.semantic_analysis.relations[index].target_referent_id in targets
         for index in relation_indexes
     )
+
+
+_ACKNOWLEDGEMENT_TOKEN_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
+_ACKNOWLEDGEMENT_ONLY_TOKENS = frozenset(
+    {
+        "agreed",
+        "confirmed",
+        "fine",
+        "no",
+        "ok",
+        "okay",
+        "sure",
+        "understood",
+        "yeah",
+        "yep",
+        "yes",
+        "آره",
+        "باشه",
+        "بله",
+        "خوبه",
+        "خیر",
+        "شدم",
+        "متوجه",
+        "نه",
+    }
+)
+
+
+def _acknowledgement_only(text: str) -> bool:
+    tokens = {token.casefold() for token in _ACKNOWLEDGEMENT_TOKEN_PATTERN.findall(text)}
+    return bool(tokens) and tokens <= _ACKNOWLEDGEMENT_ONLY_TOKENS
 
 
 _MEANINGFUL_TOKEN_PATTERN = re.compile(r"\w{2,}", flags=re.UNICODE)

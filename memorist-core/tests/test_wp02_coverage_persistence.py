@@ -6,6 +6,7 @@ import os
 import shutil
 import sqlite3
 import threading
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -65,7 +66,12 @@ from memcore.storage.migrations import (
     default_migrations_dir,
     migration_files,
 )
-from memcore.storage.postgres.migrations import apply_postgres_migrations
+from memcore.storage.postgres.migrations import (
+    apply_postgres_migrations,
+    default_postgres_migrations_dir,
+    postgres_migration_files,
+    postgres_migration_version,
+)
 from memcore.storage.postgres.parity import build_parity_report
 from memcore.storage.sqlite import connect
 from memcore.storage.write_actor import SQLiteWriteActor
@@ -209,7 +215,8 @@ def _seed_authority(connection: sqlite3.Connection) -> None:
         INSERT INTO prompt_execution_runs (
           prompt_execution_uuid, prompt_id, prompt_version, stage, model_role,
           provider_type, model_name, session_uuid, message_uuid, input_hash,
-          output_hash, status, warnings_ijson, input_tokens, output_tokens,
+          output_hash, input_ref, raw_output_ijson, validated_output_ijson,
+          status, warnings_ijson, error_sanitized, input_tokens, output_tokens,
           created_at, schema_version
         ) VALUES (
           '00000000-0000-4000-8000-000000000009',
@@ -218,10 +225,19 @@ def _seed_authority(connection: sqlite3.Connection) -> None:
           'test',
           '00000000-0000-4000-8000-000000000001',
           '00000000-0000-4000-8000-000000000002',
-          ?, ?, 'ok', '[]', 0, 1, ?, 1
+          ?, ?, ?, ?, ?, 'ok', ?, ?, 0, 1, ?, 1
         )
         """,
-        (raw_hash, raw_hash, now),
+        (
+            raw_hash,
+            raw_hash,
+            RAW,
+            dump_ijson({"semantic_units": [{"evidence": RAW}]}),
+            dump_ijson({"semantic_units": [{"evidence": RAW}]}),
+            dump_ijson([RAW]),
+            RAW,
+            now,
+        ),
     )
     connection.commit()
 
@@ -398,6 +414,115 @@ def test_sqlite_fresh_upgrade_repeated_and_content_free_schema(tmp_path: Path) -
     assert latest == "0037_semantic_coverage_audit.sql"
 
 
+@pytest.mark.skipif(not os.getenv("MEMORIST_POSTGRES_DSN"), reason="requires real PostgreSQL")
+def test_postgres_populated_0023_to_0024_upgrade_is_additive_and_repeatable(
+    tmp_path: Path,
+) -> None:
+    psycopg = importlib.import_module("psycopg")
+    sql = importlib.import_module("psycopg.sql")
+    schema_name = f"wp02_upgrade_{uuid.uuid4().hex}"
+    old = tmp_path / "postgres-0023"
+    old.mkdir()
+    for source in postgres_migration_files(default_postgres_migrations_dir()):
+        if postgres_migration_version(source) < 24:
+            shutil.copy2(source, old / source.name)
+
+    connection = psycopg.connect(os.environ["MEMORIST_POSTGRES_DSN"])
+    try:
+        connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema_name)))
+        connection.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(schema_name)))
+        connection.commit()
+        apply_postgres_migrations(connection, old)
+        connection.execute(
+            """
+            INSERT INTO workspaces (workspace_uuid, name)
+            VALUES ('wp02-populated-workspace', 'WP02 populated upgrade')
+            """
+        )
+        connection.commit()
+
+        assert (
+            connection.execute("SELECT to_regclass('semantic_coverage_runs')").fetchone()[0] is None
+        )
+        prior_evidence_columns = {
+            row[0]
+            for row in connection.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'candidate_evidence'
+                """
+            ).fetchall()
+        }
+        assert "evidence_role" not in prior_evidence_columns
+        assert "support_type" not in prior_evidence_columns
+
+        apply_postgres_migrations(connection, default_postgres_migrations_dir())
+        apply_postgres_migrations(connection, default_postgres_migrations_dir())
+
+        assert (
+            connection.execute(
+                """
+            SELECT name
+            FROM workspaces
+            WHERE workspace_uuid = 'wp02-populated-workspace'
+            """
+            ).fetchone()[0]
+            == "WP02 populated upgrade"
+        )
+        assert {
+            row[0]
+            for row in connection.execute(
+                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = current_schema()
+                  AND table_name IN (
+                    'semantic_coverage_runs',
+                    'semantic_coverage_items',
+                    'semantic_candidate_links'
+                  )
+                """
+            ).fetchall()
+        } == {
+            "semantic_coverage_runs",
+            "semantic_coverage_items",
+            "semantic_candidate_links",
+        }
+        evidence_defaults = {
+            row[0]: row[1]
+            for row in connection.execute(
+                """
+                SELECT column_name, column_default
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'candidate_evidence'
+                  AND column_name IN ('evidence_role', 'support_type')
+                """
+            ).fetchall()
+        }
+        assert "'primary'::text" in str(evidence_defaults["evidence_role"])
+        assert "'supporting'::text" in str(evidence_defaults["support_type"])
+        assert (
+            connection.execute(
+                """
+            SELECT migration_id
+            FROM schema_migrations
+            ORDER BY migration_id DESC
+            LIMIT 1
+            """
+            ).fetchone()[0]
+            == "0024_semantic_coverage_audit.sql"
+        )
+    finally:
+        connection.rollback()
+        connection.execute("SET search_path TO public")
+        connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema_name)))
+        connection.commit()
+        connection.close()
+
+
 def test_sqlite_actor_replay_link_and_identity_conflict(tmp_path: Path) -> None:
     path = tmp_path / "actor.sqlite"
     connection = connect(path)
@@ -548,6 +673,27 @@ def test_heritage_forget_and_residue_treat_coverage_as_audit_only(
     connection = connect(tmp_path / "source.sqlite")
     apply_migrations(connection)
     _seed_authority(connection)
+    connection.execute(
+        """
+        INSERT INTO message_versions (
+          message_version_uuid, message_uuid, version_number, raw_text,
+          raw_payload_ijson, snapshot_ijson, change_reason, created_by,
+          created_at, content_hash, schema_version
+        ) VALUES (
+          '00000000-0000-4000-8000-000000000010',
+          '00000000-0000-4000-8000-000000000002',
+          1, ?, ?, ?, 'initial', 'test', ?, ?, 1
+        )
+        """,
+        (
+            RAW,
+            dump_ijson({"raw_text": RAW}),
+            dump_ijson({"raw_text": RAW}),
+            utc_now(),
+            hashlib.sha256(RAW.encode()).hexdigest(),
+        ),
+    )
+    connection.commit()
     plan, proposal, bindings = _plan()
     repository = SQLiteSemanticCoverageRepository(connection)
     repository.persist_plan(plan, bindings)
@@ -580,11 +726,39 @@ def test_heritage_forget_and_residue_treat_coverage_as_audit_only(
     )
     receipt = PrivacyService(connection).execute_request(preview["privacy_request_uuid"])
     retained = load_ijson(receipt["retained_record_counts_ijson"])
+    erased = load_ijson(receipt["erased_record_counts_ijson"])
     assert retained["semantic_candidate_link_audit"] == 1
     assert retained["semantic_coverage_item_audit"] == 1
     assert retained["semantic_coverage_run_audit"] == 1
+    assert erased["message_version"] == 1
+    assert erased["prompt_execution_run"] == 1
     assert RAW not in str(receipt)
-    residue = run_forget_residue_check(connection, "00000000-0000-4000-8000-000000000002")
+    version = connection.execute(
+        """
+        SELECT raw_text, raw_payload_ijson, snapshot_ijson, change_reason
+        FROM message_versions
+        WHERE message_version_uuid = '00000000-0000-4000-8000-000000000010'
+        """
+    ).fetchone()
+    assert tuple(version) == (None, None, None, "privacy_redacted")
+    prompt = connection.execute(
+        """
+        SELECT input_ref, raw_output_ijson, validated_output_ijson,
+               warnings_ijson, error_sanitized
+        FROM prompt_execution_runs
+        WHERE prompt_execution_uuid = '00000000-0000-4000-8000-000000000009'
+        """
+    ).fetchone()
+    assert prompt["input_ref"] is None
+    assert prompt["error_sanitized"] is None
+    assert RAW not in str(tuple(prompt))
+    residue = run_forget_residue_check(
+        connection,
+        "00000000-0000-4000-8000-000000000002",
+        RAW,
+        check_uuid_references=False,
+    )
+    assert residue["status"] == "clean"
     assert not {
         "semantic_coverage_runs",
         "semantic_coverage_items",
