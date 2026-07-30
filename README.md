@@ -1,93 +1,86 @@
 # Memorist — Open WebUI Memorist Edition
 
-Package version: `0.2.0-beta.3`<br>
-Storage schema version: `25`
+Current development release: **`0.2.0-beta.3` (WP02 semantic candidate
+authority)**
 
-**Memorist is an independent community project built on Open WebUI. It is not affiliated with or endorsed by the Open WebUI team.
-******
+Storage schema: **`25`**
 
-<img width="1280" height="640" alt="d171baab-80d9-4496-86b3-800da42faf51" src="https://github.com/user-attachments/assets/484864e3-fac7-4a78-a44e-7a82c7495dd2" />
+**Memorist is an independent community project built on Open WebUI. It is not
+affiliated with or endorsed by the Open WebUI team.**
 
+<img width="1280" height="640" alt="Memorist for Open WebUI" src="https://github.com/user-attachments/assets/484864e3-fac7-4a78-a44e-7a82c7495dd2" />
 
 **Remember with consent, recall with provenance.**
 
-Memorist is a local-first memory layer for [Open WebUI](https://github.com/open-webui/open-webui)
-that lets a chat system remember with consent, show what it remembers, and
-keep the memory machine inspectable.
+Memorist is a local-first memory layer for
+[Open WebUI](https://github.com/open-webui/open-webui). It captures
+conversation evidence with consent, turns eligible material into versioned
+memories, retrieves only scoped context, and shows what was delivered to the
+chat model.
 
-> **Status: early public alpha.** Lite mode uses SQLite. Full mode uses
-> PostgreSQL + FalkorDB and has passed all 11 backend/runtime gates in the tested
-> Linux Docker environment. Real Windows desktop one-click E2E remains pending.
-> Expect rough edges; nothing here deletes memory without asking.
+> **Status: beta development candidate.** Lite uses SQLite. Full uses
+> PostgreSQL with optional FalkorDB projection. Consolidated CI covers quality,
+> PostgreSQL/Full/FalkorDB, package lifecycle, and one-deployment Product E2E
+> on GitHub-hosted runners. Native Windows desktop certification remains a
+> separate release check.
 
-## Why memory, and why this way
+## Why this memory architecture?
 
-Long-running work with LLMs loses continuity: projects, preferences,
-decisions, corrections, and style constraints evaporate between sessions.
-Most fixes summarize old chats into a hidden prompt — invisible, unauditable,
-and easy to poison.
-
-Memorist takes the opposite approach: **memory is made visible.** It separates
-capture, semantic routing, candidate creation, retrieval, and attachment so
-users and developers can inspect how a conversation becomes reusable context.
-This is not chat-history search; it is a memory *machine* with parts you can
-open:
+Appending old chats to a hidden prompt is difficult to audit and easy to
+poison. Memorist separates evidence, interpretation, persistence, and recall:
 
 ```text
 Open WebUI chat
--> raw evidence capture (unchanged messages)
--> sentence units with exact offsets
--> Jakobson communication analysis
--> canonical route + gate decision        (gate before candidate)
--> route-specific candidate extraction    (evidence-linked, trust-classified)
+-> immutable user/assistant capture
+-> TextEnvelope and exact text units
+-> Jakobson v3 annotation
+-> persisted route and persisted gate       (gate before candidate)
+-> bounded semantic analysis v1
+-> strict schema and exact-evidence validation
+-> deterministic coverage and proposal identity
+-> replay-safe candidate persistence
 -> consolidation into versioned memories
 -> scoped, budget-aware retrieval
--> bounded Memory Context Attachment      (data, not command)
--> visible "Memory used" panel in chat
+-> separate Memory Context Attachment       (untrusted data, not command)
+-> read-only "Memory used" display
 ```
 
-The user's prompt is never modified. Memory rides alongside as separate,
-provenance-tagged, untrusted context — and if the memory engine is down, chat
-fails open and just works without it.
+The original user prompt is not rewritten. Retrieved memory is delivered as a
+separate, provenance-tagged context message. If recall is unavailable, chat
+fails open without an attachment.
 
-## What you can do with it
+## What you can do
 
-- **Chat with memory you control.** A per-chat **Memory On / Memory Off**
-  switch sits beside the composer and is enforced server-side: an Off turn is
-  never captured, processed, retrieved from, or attached to.
-- **See exactly what was remembered.** Turns that used memory show a
-  read-only, redacted **"Memory used"** panel with provenance — a window into
-  what the model actually received.
-- **Run fully local, no API key.** Every processing role has a local
-  deterministic fallback. Remote OpenAI-compatible providers are optional,
-  per-role, and gated behind an explicit privacy acknowledgement.
-- **Install without being a developer.** A Windows-first, Docker-backed
-  one-click installer sets up services, secrets, and provider keys — no Git,
-  Python, or `uv` required.
-- **Import, export, and forget.** Provider archives (ChatGPT, Claude, Gemini,
-  Open WebUI) import as untrusted historical evidence; Heritage export gives
-  you a portable, verifiable package; the forget workflow erases with residue
-  checks and receipts.
+- **Control consent per chat.** Memory Off is enforced server-side: no capture,
+  processing, retrieval, or attachment occurs for that turn.
+- **Inspect delivered memory.** The read-only "Memory used" view is built from
+  canonical delivery records and redacted provenance.
+- **Run without an API key.** Processing roles have conservative local
+  deterministic fallbacks. Remote OpenAI-compatible profiles are optional and
+  require explicit privacy acknowledgement.
+- **Use one semantic decision path in Lite and Full.** Both runtimes call the
+  same `SemanticCandidatePlanningService`; storage adapters differ, semantic
+  authority does not.
+- **Import, export, and forget.** Imports remain untrusted historical evidence,
+  Heritage packages are verifiable, and forget performs dependency traversal,
+  residue checking, and receipt creation.
 
-## Quick start (Windows one-click)
+## Quick start
 
-Requirements: Windows 10/11 with **Docker Desktop** installed and running,
-~5 GB free disk. (Docker Desktop is currently required; a Dockerless build is
-a possible future direction, not this release.)
+### Windows release package
 
-1. Download and unzip the release package (`memorist-openwebui-<version>.zip`).
-2. Double-click **`Memorist.cmd`**.
-3. Follow the short wizard — it checks Docker, skips active and
-   Windows-excluded host ports, generates a private `.env`, optionally captures
-   a provider API key locally, validates the rendered Compose topology, starts the services, and
-   opens <http://localhost:3000>.
+Requirements: Windows 10/11, Docker Desktop running, and about 5 GB free disk.
 
-Lifecycle scripts ship in the package: `Start-`, `Stop-`, `Restart-`,
-`Show-Memorist-Logs`, `Reset-Memorist-Data`, `Uninstall-Memorist`. The same
-scripts run under PowerShell 7 on macOS/Linux, and bash equivalents are
-included. Full walkthrough: [docs/INSTALLATION.md](docs/INSTALLATION.md).
+1. Download and unzip `memorist-openwebui-<version>.zip`.
+2. Double-click `Memorist.cmd`.
+3. Follow the wizard. It checks Docker and ports, creates a private `.env`,
+   validates Compose, starts the services, and opens
+   <http://localhost:3000>.
 
-### Quick start (developers, from source)
+The package includes start, stop, restart, logs, reset, and uninstall scripts.
+See [Installation](docs/INSTALLATION.md) before reset or upgrade operations.
+
+### Developers
 
 ```sh
 git clone https://github.com/doctordocto159753/open-webui-memorist-edition.git
@@ -97,133 +90,129 @@ docker compose -f docker-compose.lite.yml up --build
 curl http://localhost:8777/memcore/health
 ```
 
-Pure-Python development without Docker works too — see
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+Pure-Python development is documented in
+[Development](docs/DEVELOPMENT.md).
 
-## Lite vs Full
+## Lite and Full
 
-| | **Lite** (default) | **Full** |
+| | Lite (default) | Full |
 | --- | --- | --- |
 | Canonical store | SQLite | PostgreSQL |
-| Graph projection | disabled | FalkorDB (rebuildable, never canonical) |
-| Embeddings | optional | optional |
-| Footprint | low — runs on modest machines | heavier |
-| Status | validated local path | backend/runtime 11/11 passed; Windows desktop E2E pending |
+| Write discipline | serialized SQLite write actor | PostgreSQL transactions, locks, durable jobs/outboxes |
+| Semantic orchestration | shared WP02 service | the same shared WP02 service |
+| Graph | not required | optional FalkorDB projection |
+| Embeddings | optional and rebuildable | optional and rebuildable |
+| Footprint | lower | higher |
 
-Lite and Full share one canonical semantic pipeline, so both make the same
-memory decisions — Full adds storage scale and graph projection, not different
-semantics.
+SQLite/PostgreSQL records are authoritative. FTS, embeddings, active blocks,
+attachments, and FalkorDB are derived or delivery artifacts and must never
+become semantic authority.
 
-## The memory machine, briefly
+## One chat turn, accurately
 
-Raw messages are **evidence**, not memory. Deterministic sentence units feed a
-Jakobson six-factor communication analysis that distinguishes an instruction
-to the AI from a team obligation, a process fact, a terminology rule, or an
-emotional stance. A canonical authority routes each signal and **gates before
-any candidate exists** — greetings and small talk create no memory, and
-privacy/forget/manual-review requests never become ordinary memories.
-Candidates carry evidence links and a trust/provenance classification
-(assistant/tool/system text never silently gains user authority), then
-consolidate into versioned memories where corrections create new versions
-instead of rewriting history.
+Before the main model runs, the server-side Filter resolves turn policy,
+captures the user message, performs scoped preflight retrieval, and may insert
+a separate `memorist_context` attachment. Open WebUI then runs its selected
+chat model. The Filter outlet captures the assistant response and links it to
+the input and delivered attachment.
 
-Retrieval is scoped, rank-fused, and explainable, with explicit abstention
-when evidence is weak. Attachments are bounded to the model's context budget,
-delimiter-escaped, and marked as data — not instruction.
+Each captured message is processed asynchronously:
 
-Read the full walk-through: [docs/MEMORY_MACHINE.md](docs/MEMORY_MACHINE.md).
+1. exact text units and Jakobson v3 annotations are recorded;
+2. canonical route and gate decisions are persisted;
+3. only eligible gates enter bounded whole-message semantic analysis;
+4. deterministic code validates evidence, plans complete coverage, and creates
+   at most one proposal per durable unit;
+5. proposal UUIDs become replay-safe candidate UUIDs;
+6. consolidation creates, reinforces, supersedes, rejects, or flags canonical
+   memory versions;
+7. later preflight runs retrieve those versions for future turns.
 
-## Configuring memory processing nodes
+The detailed source-level example is
+[Walkthrough پردازش حافظه در موتور مرکزی](docs/reference/core-memory-processing-walkthrough.md).
+The compact conceptual guide is [The Memory Machine](docs/MEMORY_MACHINE.md).
 
-Memorist uses explicit **Model Control Plane** roles instead of one global
-model: `main_chat_observed` (metadata only — Open WebUI keeps owning the chat
-model), `preflight`, `memory_extraction`, `high_confidence_extraction`,
-`embedding`, `privacy_sensitivity`, `block_compaction`, and
-`import_reconstruction`.
+## Processing nodes and model roles
 
-First-run setup lives at **Settings → Memorist → Memory Setup** (admin-only).
-Choose local deterministic (no key), or point a role at any OpenAI-compatible
-endpoint. Secrets follow one rule everywhere: **the browser and database store
-only an environment-variable name; the value lives in your local `.env` /
-container environment**, written once by the installer and never echoed,
-logged, or returned by any API. Remote endpoints require an explicit privacy
-acknowledgement before they become role defaults. The backend also requires a
-persisted current provider certification; changing the endpoint, model,
-capabilities, enabled state, or secret reference makes it stale until retested.
-The UI reports secret reference, Core availability, authentication, and
-certification separately.
+The Model Control Plane resolves explicit roles instead of using one global
+model:
 
-Role resolution is explicit and inspectable: project → workspace → global →
-documented role inheritance → built-in local fallback. The UI shows both the
-configured role and the profile actually effective at runtime. See the
-[processing-node runtime guide](docs/reference/model-control-plane.md) for the
-stage graph, health contract, diagnostics, and failure handling.
+- `main_chat_observed` — metadata only; Open WebUI owns the main chat model;
+- `preflight` — bounded retrieval-planning assistance;
+- `memory_extraction` — the certified Jakobson v3 and semantic candidate v1
+  bundle;
+- `high_confidence_extraction`, `privacy_sensitivity`,
+  `block_compaction`, `import_reconstruction`, and `embedding` — specialized
+  post-capture or projection work.
 
-The host-published Core port is configurable and persisted, but Compose
-services always use `http://memorist-core:8777`. Ollama discovery is opt-in and
-off by default. Fail-open keeps chat available while recording a sanitized
-per-stage degraded status in Memorist Diagnostics.
+Resolution is project → workspace → global → documented inheritance →
+built-in fallback. Remote profiles reference an environment-variable **name**;
+secret values remain in the local environment and are not stored in the
+database or returned to the browser. A profile edit makes its certification
+stale until the exact role contract bundle passes again.
 
-## Privacy and security model
+See [Model Control Plane](docs/reference/model-control-plane.md).
 
-- Local-first by default; `MEMORIST_LOCAL_ONLY=false` is rejected; no
-  telemetry.
-- Memory Off is a server-side consent ceiling, not a UI hint.
-- Memory and imported text are treated as untrusted data — escaped, flagged,
-  and never promoted to directives; prompt injection is mitigated, not
-  eliminated.
-- The trust boundary is your machine: `.env` is plaintext on your disk by
-  documented design, and there is no encryption at rest.
-- Any remote provider you configure sees role-specific data — that's your
-  call, made explicit.
+## Security boundaries
 
-Details, caveats, and vulnerability reporting: [SECURITY.md](SECURITY.md).
+- Memory Off is a server-side consent ceiling.
+- Current and historical text is untrusted data, including
+  `memorist_context`.
+- Gate, route, privacy, provenance, coverage disposition, and proposal
+  identity are deterministic authorities; a model cannot choose them.
+- Bounded semantic context is limited to the same user, session, workspace,
+  and project. Hidden, deleted, redacted, system, tool, sensitive, and
+  cross-boundary records are excluded.
+- Assistant content remains `assistant_claim` unless a current user uniquely
+  references and explicitly ratifies or corrects it.
+- Remote providers see the role-specific payload sent to them. There is no
+  encryption at rest in this release.
 
-## Screenshots
-
-*(Screenshots of the Memory used panel, the Memory On/Off toggle, and the
-Memory Setup wizard are planned for the next release cut. Until then, the
-installer gets you to a live instance in a few minutes.)*
+Read [Security and Privacy](SECURITY.md) for threat-model limits.
 
 ## Documentation
 
-| Doc | What it covers |
+| Document | Scope |
 | --- | --- |
-| [docs/INSTALLATION.md](docs/INSTALLATION.md) | Windows one-click install, Docker Desktop, Lite/Full, `.env` and API keys, lifecycle scripts, backup/upgrade |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | components, runtimes, storage split, recall path, Model Control Plane, installer/release architecture, CI |
-| [docs/MEMORY_MACHINE.md](docs/MEMORY_MACHINE.md) | capture → analysis → gate → route → candidate → consolidation → retrieval → attachment → display, and the consent boundary |
-| [docs/reference/model-control-plane.md](docs/reference/model-control-plane.md) | per-role processing nodes, resolution/inheritance, provider tests, runtime traces, and troubleshooting |
-| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | dev setup, tests, workflows, packaging, release checklist |
-| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Docker/WSL2, ports, provider tests, memory behavior questions, reset/recovery |
-| [SECURITY.md](SECURITY.md) | trust model, secrets, remote-provider privacy, what is not guaranteed |
-| [docs/reference/](docs/reference/) | deep dives: memory engine essay, storage runtimes, import/heritage/forget, prompts, model control |
-| [docs/fa/](docs/fa/) | Persian-language architecture documents |
+| [Walkthrough پردازش حافظه در موتور مرکزی](docs/reference/core-memory-processing-walkthrough.md) | one prompt and one model response through capture, recall, semantic processing, persistence, replay, consolidation, and later retrieval |
+| [Architecture](docs/ARCHITECTURE.md) | component and authority boundaries, Lite/Full storage, runtime paths, CI |
+| [The Memory Machine](docs/MEMORY_MACHINE.md) | compact lifecycle and consent model |
+| [Semantic candidate authority](docs/reference/semantic-candidate-authority.md) | frozen WP02 contracts, field authority, ordering, identity |
+| [Installation](docs/INSTALLATION.md) | package layout, Docker, configuration, lifecycle, backup/upgrade |
+| [Model Control Plane](docs/reference/model-control-plane.md) | roles, profiles, certification, effective runtime resolution |
+| [Development](docs/DEVELOPMENT.md) | setup, tests, workflow, packaging |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | startup, provider, processing, storage, recovery |
+| [Reference index](docs/reference/README.md) | current deep-dive documentation |
+| [Persian architecture](docs/fa/) | Persian long-form architecture material |
+
+Runtime prompt Markdown under `memorist-core/src/.../prompts/` is executable
+contract content, not general documentation. Files under `docs/historical/`
+describe prior baselines and are not current runtime authority.
 
 ## Development and contributing
 
-Backend is Python 3.12 / FastAPI managed with `uv`; frontend components are
-TypeScript tested with vitest; CI enforces the semantic, consent, attachment,
-secret-handling, and installer contracts on every PR through the four-job
-GitHub-hosted Consolidated CI workflow. Start with
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) and
-[CONTRIBUTING.md](CONTRIBUTING.md).
+The backend uses Python 3.12/FastAPI with `uv`; UI components use TypeScript
+and vitest. The authoritative workflow is
+`.github/workflows/ci-consolidated.yml`, with four jobs covering quality and
+integration, PostgreSQL/Full/FalkorDB, package lifecycle, and Product E2E.
+
+Start with [Development](docs/DEVELOPMENT.md) and
+[Contributing](CONTRIBUTING.md).
 
 ## Known limitations
 
-- Alpha software: no security audit, no stability guarantee, schema
-  migrations between alpha versions may require export/import.
-- Docker Desktop (or Docker Engine + Compose) is required for the release
-  path; there is no signed native installer yet.
-- Full backend/runtime certification passed 11/11 in the tested Linux Docker environment; real Windows desktop one-click E2E remains pending.
-- Semantic quality depends on the models you configure; the local
-  deterministic fallback is safe but intentionally conservative.
-- Provider export formats change; import adapters are defensive, not
+- `0.2.0-beta.3` is a beta development candidate, not a stability or security
+  guarantee; no independent security audit is claimed.
+- Docker Desktop (or Docker Engine with Compose) is required for the packaged
+  path; there is no signed native installer.
+- CI exercises the package and Product E2E on GitHub-hosted runners, not every
+  Windows desktop configuration.
+- Semantic quality depends on configured providers. Deterministic fallbacks
+  are safe and deliberately conservative.
+- Provider archive formats change; import adapters are defensive, not
   guaranteed.
-- CI validates the extracted package dry-run and Compose configuration on Linux runners, not every Windows desktop scenario.
 
 ## License and attribution
 
-Licensed under the [MIT License](LICENSE). Memorist is an independent,
-community project that runs beside Open WebUI — it is not an official
-Open WebUI product. Open WebUI remains the parent chat UI and is developed by
-its own community under its own license.
+Licensed under the [MIT License](LICENSE). Memorist runs beside Open WebUI and
+is not an official Open WebUI product.

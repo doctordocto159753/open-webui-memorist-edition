@@ -1,14 +1,14 @@
 # Memorist OpenWebUI Local Package
 
 Package version: `0.2.0-beta.3`
-Status: early public alpha.
+Status: beta development candidate; storage schema `25`.
 
 This self-contained package runs Open WebUI with Memorist Core. Lite uses SQLite.
 Full uses PostgreSQL as the only canonical memory store and FalkorDB as a
-rebuildable graph projection. The Full backend/runtime has passed the eleven
-Docker certification gates on the tested Linux environment. Windows desktop
-one-click validation is tracked separately and must not be inferred from that
-backend certification.
+rebuildable graph projection. Consolidated CI validates the Lite and Full
+runtime, PostgreSQL/FalkorDB, package lifecycle, and Product E2E on hosted
+runners. Native Windows desktop validation is tracked separately and must not
+be inferred from hosted CI.
 
 ## Windows one-click
 

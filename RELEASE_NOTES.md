@@ -1,6 +1,19 @@
 # Release Notes
 
-## v0.2.0-beta.3 — fenced processing-runtime closure (current)
+## v0.2.0-beta.3 — WP02 semantic candidate authority (current development baseline)
+
+- One shared Lite/Full semantic orchestration service now runs after persisted
+  route and gate authority.
+- The ordered memory-extraction certification bundle binds Jakobson v3 and
+  semantic candidate analysis v1.
+- Deterministic material coverage, UUIDv5 proposal identity, and replay-safe
+  SQLite/PostgreSQL proposal/candidate audit persistence are present.
+- Storage schema is `25`: SQLite migration `0037` and PostgreSQL migration
+  `0024`.
+- See `docs/reference/core-memory-processing-walkthrough.md` for the exact
+  prompt/response sequence.
+
+The fenced processing-runtime closure below remains part of this beta line.
 
 This candidate closes the processing-node failure boundaries found during the
 independent audit of PR #49:

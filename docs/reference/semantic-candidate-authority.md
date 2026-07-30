@@ -34,7 +34,7 @@ The base contains both required predecessors:
   `validate_semantic_evidence`, and the final WP01 model/local authority
   boundary.
 
-Current versions and migration heads:
+Operation 0 baseline versions and migration heads (historical freeze input):
 
 | Surface | Current value |
 | --- | --- |
@@ -50,6 +50,13 @@ Current versions and migration heads:
 | Normalization | `memorist.text.normalization.v1` |
 
 No WP02 migration number is reserved by this note.
+
+The implemented WP02 baseline now uses SQLite head
+`0037_semantic_coverage_audit.sql`, PostgreSQL head
+`0024_semantic_coverage_audit.sql`, and `role-contract-manifest-v3`.
+The table above is retained to make the contract-freeze provenance auditable;
+it is not the current runtime/version status. Prompt Pack `2.0` and Jakobson
+`3.0` intentionally remained unchanged.
 
 ## Actual runtime trace
 

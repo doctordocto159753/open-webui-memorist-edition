@@ -1,8 +1,8 @@
 # Contributing to Memorist
 
-Thanks for your interest. Memorist is an early public alpha; contributions
-that improve reliability, honesty of documentation, test coverage, and the
-local-first experience are especially welcome.
+Thanks for your interest. Memorist `0.2.0-beta.3` is a beta development
+candidate. Contributions that improve reliability, documentation accuracy,
+test coverage, and the local-first experience are especially welcome.
 
 ## Ground rules
 

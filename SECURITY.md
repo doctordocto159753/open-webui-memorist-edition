@@ -1,6 +1,7 @@
 # Security and Privacy
 
-Memorist is an early public alpha of a **local-first** memory layer. This
+Memorist `0.2.0-beta.3` is a beta development candidate of a **local-first**
+memory layer. This
 document describes the trust model, how secrets and personal data are handled,
 what the system defends against, and — just as importantly — what it does not
 guarantee.

@@ -4,9 +4,10 @@ This guide covers running Memorist locally: the Windows-first one-click
 release path, the cross-platform script path, and first-run configuration.
 Developer setup from source lives in [DEVELOPMENT.md](DEVELOPMENT.md).
 
-> **Status:** early public alpha. **Lite** uses SQLite. **Full** uses PostgreSQL
-> + FalkorDB and has passed all 11 backend/runtime gates in the tested Linux
-> Docker environment. Real Windows desktop one-click E2E remains pending.
+> **Status:** `0.2.0-beta.3` beta development candidate, storage schema `25`.
+> **Lite** uses SQLite. **Full** uses PostgreSQL with FalkorDB as a rebuildable
+> graph projection. Consolidated CI validates both runtime paths and Product
+> E2E on hosted runners; native Windows desktop validation remains separate.
 
 ## Requirements
 
@@ -164,7 +165,7 @@ http://localhost:<MEMORIST_CORE_HOST_PORT>/memcore/diagnostics/daily
 | Scheduler | disabled | `in_memory` |
 | Required memory features | enabled local memory path | enabled + graph projection |
 | Database/graph host ports | none | none |
-| Certification | validated local path | backend/runtime 11/11 on tested Linux Docker; Windows E2E pending |
+| Validation | Consolidated CI Lite/product paths | Consolidated CI PostgreSQL/Full/FalkorDB paths |
 
 Lite and Full share the same canonical semantic decisions. Full adds the
 PostgreSQL canonical ledger, graph projection, and heavier runtime; it is not
@@ -221,7 +222,7 @@ would make Open WebUI download a local sentence-transformer during first boot.
 
 ## Backup and upgrade
 
-Before an alpha-version upgrade, create a Heritage export or the documented
+Before a beta-version upgrade, create a Heritage export or the documented
 mode-appropriate backup.
 
 Upgrade procedure:
@@ -247,16 +248,18 @@ stage succeeds again.
 
 - Docker Desktop or Docker Engine + Compose is required.
 - There is no signed native `.msi`/`.exe`; SmartScreen may warn about scripts.
-- Full backend/runtime certification is specific to the tested Linux Docker
-  environment, not a production-readiness or security-audit claim.
-- Real Windows desktop one-click and lifecycle E2E remains pending.
+- Hosted CI and container certification are not a production-readiness,
+  security-audit, or every-Windows-configuration claim.
+- Native Windows desktop one-click certification remains a separate release
+  check.
 - Remote semantic quality depends on the profiles and models you configure.
 
 For failures, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
-# Schema 24 upgrade
+# Schema 25 upgrade
 
-Normal startup applies the additive SQLite or PostgreSQL schema 24 migration.
-It creates `processing_provider_attempts` and extends
-`processing_stage_runs`; existing canonical rows are preserved. Back up the
-canonical database before upgrading. Do not delete Docker volumes as an upgrade
-step.
+Normal startup applies additive migrations through storage schema `25`.
+Schema 24 introduced provider-attempt fencing; schema 25 adds content-free
+semantic coverage and candidate-link audit tables (`0037` SQLite / `0024`
+PostgreSQL). Existing canonical message and memory rows are preserved. Back up
+the canonical database before upgrading. Do not delete Docker volumes as an
+upgrade step.

@@ -6,9 +6,15 @@ docs — [ARCHITECTURE](../ARCHITECTURE.md), [MEMORY_MACHINE](../MEMORY_MACHINE.
 [TROUBLESHOOTING](../TROUBLESHOOTING.md) — and drop down here when you need
 implementation-level detail.
 
+Current source-of-truth documents live in `docs/` and `docs/reference/`.
+`docs/historical/` records earlier baselines and is not runtime authority.
+Markdown under source `prompts/` is executable prompt-contract content and
+must not be edited as ordinary prose documentation.
+
 ## Memory engine
 
 - [memory-engine-architecture.md](memory-engine-architecture.md) — full essay-form architecture of the memory engine
+- [core-memory-processing-walkthrough.md](core-memory-processing-walkthrough.md) — one real prompt/response through inlet, recall, model, outlet, worker, persistence, and later retrieval
 - [memory-intelligence-core.md](memory-intelligence-core.md) — sentence-level Jakobson layer and data flow
 - [text-semantics.md](text-semantics.md) — shared normalization, token boundaries, and claim polarity
 - [semantic-analysis-contract.md](semantic-analysis-contract.md) — strict whole-message semantic v1 contract

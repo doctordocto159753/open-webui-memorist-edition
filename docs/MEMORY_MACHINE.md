@@ -4,6 +4,10 @@ This document explains how a chat turn becomes reusable, inspectable context in
 Memorist — the full path from message capture to the "Memory used" display —
 and where the user's consent boundaries sit.
 
+For a code-grounded prompt/response trace with concrete records and Lite/Full
+adapters, read
+[Walkthrough پردازش حافظه در موتور مرکزی](reference/core-memory-processing-walkthrough.md).
+
 The one-line thesis:
 
 ```text
@@ -33,7 +37,10 @@ through gate, route, trust, and consolidation before it can be recalled.
 ```
 
 Consent wraps the whole machine: the per-chat **Memory On / Memory Off**
-switch is enforced server-side before step 1.
+switch is enforced server-side before step 1. Recall and learning are distinct:
+preflight can use only already-consolidated memory, while current user and
+assistant messages become eligible for later turns only after their background
+jobs complete.
 
 ## 1–2. Capture and unitization
 
@@ -217,6 +224,7 @@ project artifacts remain `assistant_claim` evidence with an explicit
 ## Going deeper
 
 - [reference/memory-engine-architecture.md](reference/memory-engine-architecture.md) — full essay-form architecture of the memory engine
+- [reference/core-memory-processing-walkthrough.md](reference/core-memory-processing-walkthrough.md) — exact inlet, model, outlet, worker, persistence, and next-turn retrieval sequence
 - [reference/memory-intelligence-core.md](reference/memory-intelligence-core.md) — Jakobson layer data flow
 - [reference/concept-glossary.md](reference/concept-glossary.md) — frozen terminology
 - [reference/memory-control-contract.md](reference/memory-control-contract.md) — authenticated control-plane contract
