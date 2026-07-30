@@ -115,12 +115,12 @@ def test_context_hints_are_stamped_non_authoritative() -> None:
 
 
 def test_no_production_path_builds_memory_from_a_context_hint() -> None:
-    """The hint may inform routing. It may never inform memory creation."""
+    """Only the WP02 fail-closed validator may consume the hint."""
 
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1] / "src" / "memcore"
-    offenders = [
+    consumers = [
         path
         for path in root.rglob("*.py")
         if "textsemantics" not in path.parts
@@ -129,7 +129,11 @@ def test_no_production_path_builds_memory_from_a_context_hint() -> None:
             or "context_dependency_hints" in path.read_text(encoding="utf-8")
         )
     ]
-    assert offenders == [], f"context hints consumed outside textsemantics: {offenders}"
+    allowed = root / "memory_worker" / "semantic" / "coverage" / "planner.py"
+    assert consumers == [allowed], f"unexpected context-hint consumers: {consumers}"
+    planner = allowed.read_text(encoding="utf-8")
+    assert "_dependency_hint_without_reference" in planner
+    assert "has_unresolved_reference=unresolved" in planner
 
 
 # --------------------------------------------------------------------------
@@ -214,7 +218,8 @@ def test_envelope_is_deterministic_and_json_safe() -> None:
 
 
 def test_audit_payload_carries_no_raw_text() -> None:
-    payload = build_envelope(f"{FIELD_TRACE}\nkey is sk-ant-api03-abcdefghijklmnop").as_json()
+    secret = "sk-" + "ant-api03-abcdefghijklmnop"
+    payload = build_envelope(f"{FIELD_TRACE}\nkey is {secret}").as_json()
     assert "sk-ant-api03" not in payload
     assert "کوبونتو" not in payload
 

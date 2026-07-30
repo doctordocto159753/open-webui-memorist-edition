@@ -26,6 +26,8 @@ from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
 from memcore.validators.ijson import load_ijson
 
+pytestmark = pytest.mark.usefixtures("wp02_downstream_semantic_model")
+
 
 @pytest.fixture()
 def connection(tmp_path: Path) -> Generator[sqlite3.Connection, None, None]:
@@ -213,7 +215,19 @@ def test_full_reconstruction_tracks_every_message_and_creates_memory_artifacts(
     assert report["processing_jobs_skipped"] == 8
     assert report["memory_candidates_created"] >= 1
     assert report["memory_versions_created"] >= 1
-    assert report["prompt_execution_runs"] == 3
+    assert report["prompt_execution_runs"] == 4
+    assert (
+        connection.execute(
+            """
+        SELECT COUNT(*)
+        FROM prompt_execution_runs
+        WHERE import_run_uuid = ?
+          AND prompt_id = 'memorist.semantic_candidate_analysis'
+        """,
+            (run_uuid,),
+        ).fetchone()[0]
+        == 1
+    )
     assert report["model_usage_events"] >= 6
     assert all(item["status"] in {"succeeded", "skipped"} for item in final_statuses)
     succeeded = next(item for item in final_statuses if item["status"] == "succeeded")

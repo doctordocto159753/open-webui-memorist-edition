@@ -23,4 +23,8 @@ python3 installer/scripts/validate_package.py "${archives[0]}"
 python3 release/tests/rc_package_schema.py > "${RUNNER_TEMP}/rc-package-schema.json"
 python3 release/tests/version_consistency.py > "${RUNNER_TEMP}/version-consistency.json"
 python3 release/tests/upgrade_contract.py > "${RUNNER_TEMP}/upgrade-contract.json"
+python3 release/tests/ci_single_deployment_contract.py \
+  > "${RUNNER_TEMP}/ci-single-deployment-contract.json"
+python3 release/tests/source_package_scan.py \
+  > "${RUNNER_TEMP}/source-package-scan.json"
 sha256sum "${archives[0]}" > "${RUNNER_TEMP}/zip-digest.txt"

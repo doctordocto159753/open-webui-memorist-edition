@@ -21,7 +21,7 @@ installer/                   release assembly + installer validation scripts
 release/                     packaging, package manifest, release tests
   memorist-openwebui/        the shippable local package (installer, compose)
 scripts/                     repo maintenance and audit scripts
-.github/workflows/           certification workflows (self-hosted CI)
+.github/workflows/           one Consolidated CI workflow
 ```
 
 ## Prerequisites
@@ -88,26 +88,14 @@ make consistency-check            # local consistency checker
 make test-security                # security-focused suite
 ```
 
-## Certification workflows (CI)
+## Consolidated CI
 
-Every pull request to `main` runs the contract workflows under
-`.github/workflows/`:
-
-| Workflow file | Contract |
-| --- | --- |
-| `pr4d-semantic-baseline.yml` | canonical semantic authority, gate/route/candidate parity, trust/provenance |
-| `pr4b-memory-control.yml` | memory control, scope isolation, actor authentication, attachments E2E |
-| `pr5a-memory-attachment-ux.yml` | attachment display backend + frontend contract |
-| `pr5b-memory-workflow-toggle.yml` | Memory On/Off toggle backend + frontend contract |
-| `pr5c-memory-node-config.yml` | memory node setup, secret redaction |
-| `pr5d-one-click-installer.yml` | installer static checks, compose config, dry run, manifest |
-| `full-postgres-import.yml` | import runtime certification incl. Full PostgreSQL E2E |
-| `public-release-readiness.yml` | docs/link integrity, repo hygiene, lint/type, frontend smoke |
-
-All workflows use `runs-on: [self-hosted, linux, x64, memorist-ci]`.
-**Public forks will not have these runners** and need to either provision
-equivalent self-hosted runners or adapt the `runs-on` labels to hosted
-runners; the suites themselves are plain pytest/vitest/python and portable.
+Every pull request to `main` uses only
+`.github/workflows/ci-consolidated.yml`. Its four GitHub-hosted jobs are
+Quality/Unit/Integration/UI, PostgreSQL/Full/FalkorDB,
+Package/Lifecycle, and One Deployment Product E2E. Extend the existing job
+scripts rather than adding per-feature workflows. Product E2E builds once,
+starts once, and uses `docker compose restart` for restart coverage.
 
 ## Release packaging
 
@@ -119,6 +107,8 @@ python installer/scripts/validate_installer.py --dry-run   # installer static ch
 python installer/scripts/validate_compose.py               # compose config, lite+full
 python release/memorist-openwebui/scripts/gen_checksums.py # refresh package checksums
 python installer/scripts/assemble_rc.py                    # build the RC zip
+python release/tests/source_package_scan.py               # deterministic source ZIP + WP02 inventory
+python release/tests/ci_single_deployment_contract.py     # one Product E2E deployment
 ```
 
 Generated zips and staging directories under `release/rc/` and

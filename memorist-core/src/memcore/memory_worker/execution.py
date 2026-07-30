@@ -110,7 +110,9 @@ def run_contract_execution(
             capability_mode="deterministic",
             provider_response_id=None,
             input_tokens=0,
-            output_tokens=len(output.get("items") or output.get("sentences") or []),
+            output_tokens=len(
+                output.get("items") or output.get("sentences") or output.get("semantic_units") or []
+            ),
             latency_ms=0,
             parse_status="not_called",
             attempt_count=0,

@@ -23,6 +23,7 @@ X-API-Key: another-secret
 api_key=raw-import-key
 token=raw-token
 password=raw-password
+provider echoed {FAKE_PROVIDER_CREDENTIAL} without a field label
 https://user:pass@example.test/v1?token=query-secret
 secret_env_var_name=VERY_PRIVATE_SECRET
 """.strip()

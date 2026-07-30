@@ -3,10 +3,22 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-AUDIT_TABLES = {"privacy_requests", "privacy_request_items", "erasure_receipts"}
+AUDIT_TABLES = {
+    "privacy_requests",
+    "privacy_request_items",
+    "erasure_receipts",
+    "semantic_coverage_runs",
+    "semantic_coverage_items",
+    "semantic_candidate_links",
+}
 TEXT_COLUMNS = {
     "messages": ("raw_text", "raw_payload_ijson", "snapshot_ijson"),
-    "message_versions": ("raw_text", "raw_payload_ijson", "snapshot_ijson"),
+    "message_versions": (
+        "raw_text",
+        "raw_payload_ijson",
+        "snapshot_ijson",
+        "change_reason",
+    ),
     "memory_processing_runs": ("raw_output_ijson", "validation_errors_ijson", "error_text"),
     "text_units": ("text",),
     "memory_candidates": (
@@ -29,6 +41,13 @@ TEXT_COLUMNS = {
     ),
     "memory_signal_routes": ("reason",),
     "memory_versions": ("normalized_text", "value_ijson", "change_reason_ijson"),
+    "prompt_execution_runs": (
+        "input_ref",
+        "raw_output_ijson",
+        "validated_output_ijson",
+        "warnings_ijson",
+        "error_sanitized",
+    ),
     "session_events": ("payload_ijson",),
     "memory_context_attachments": (
         "ijson_attachment",

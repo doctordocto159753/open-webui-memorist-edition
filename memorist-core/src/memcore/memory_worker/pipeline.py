@@ -43,7 +43,14 @@ from memcore.memory_worker.prompts.versions import (
 )
 from memcore.memory_worker.segmentation.sentence_segmenter import SentenceSegmenter
 from memcore.memory_worker.semantic.authority import LiteCandidateAuthorityResolver
+from memcore.memory_worker.semantic.orchestration import (
+    SemanticCandidatePlanningRequest,
+    SemanticCandidatePlanningService,
+)
 from memcore.memory_worker.semantic.project_artifact import structured_project_artifact
+from memcore.memory_worker.semantic.runtime_adapters import (
+    SQLiteSemanticCandidateRuntimeAdapter,
+)
 from memcore.model_control.repository import ModelControlRepository
 from memcore.model_control.resolution import RoleResolutionService
 from memcore.model_control.schemas import UsageEventCreate
@@ -106,6 +113,9 @@ class MemoryWorkerPipeline:
         self.analyzer = StructuredAnalyzer()
         self.extractor = CandidateExtractor()
         self.candidate_authority = LiteCandidateAuthorityResolver(connection)
+        self.semantic_candidate_planning = SemanticCandidatePlanningService(
+            SQLiteSemanticCandidateRuntimeAdapter(connection)
+        )
         self.consolidator = MemoryConsolidator(connection)
         self.jakobson = JakobsonAnalysisService(connection, segmenter=self.unitizer)
         self.provider_job_uuid: str | None = None
@@ -484,16 +494,24 @@ class MemoryWorkerPipeline:
             analyses = self._analyze_units(message, run.processing_run_uuid, units, decisions)
             if analyses:
                 self.messages.mark_processing_status(message_uuid, ProcessingStatus.ANALYZED)
-
-            candidates = self._extract_candidates(
-                message,
-                run.processing_run_uuid,
-                units,
-                analysis_run_uuid=str(jakobson_result["analysis_run_uuid"]),
+        semantic_result = self.semantic_candidate_planning.execute(
+            SemanticCandidatePlanningRequest(
+                message_uuid=message.message_uuid,
+                processing_run_uuid=run.processing_run_uuid,
+                profile=dict(extraction_profile),
                 import_run_uuid=import_run_uuid,
-                provider_type=provider_type,
-                model_name=str(extraction_profile["model_name"]),
+                job_uuid=job_uuid,
+                lease_fence=lease_fence,
             )
+        )
+        candidates = list(semantic_result.candidates)
+        if not candidates and semantic_result.candidate_uuids:
+            candidates = []
+            for candidate_uuid in semantic_result.candidate_uuids:
+                candidate = self.candidates.get_candidate(candidate_uuid)
+                if candidate is None:
+                    raise RepositoryError(f"linked semantic candidate not found: {candidate_uuid}")
+                candidates.append(candidate)
         stage_results = self._run_candidate_stages(
             message,
             run.processing_run_uuid,
@@ -530,6 +548,15 @@ class MemoryWorkerPipeline:
                     "gate_decisions": len(decisions),
                     "analyses": len(analyses),
                     "candidates": len(candidates),
+                    "semantic_coverage_hash": semantic_result.plan.coverage_hash,
+                    "semantic_coverage_status": semantic_result.plan.status,
+                    "semantic_proposals": semantic_result.proposal_count,
+                    "semantic_prompt_execution_uuid": (
+                        semantic_result.semantic_prompt_execution_uuid
+                    ),
+                    "semantic_stage_execution_uuid": (
+                        semantic_result.semantic_stage_execution_uuid
+                    ),
                     "consolidation_decisions": len(decisions_created),
                     "candidate_stage_results": stage_results,
                     "embedding_results": embedding_results,
@@ -547,6 +574,13 @@ class MemoryWorkerPipeline:
             "gate_decisions": len(decisions),
             "analyses": len(analyses),
             "candidates": len(candidates),
+            "semantic_coverage_hash": semantic_result.plan.coverage_hash,
+            "semantic_coverage_status": semantic_result.plan.status,
+            "semantic_proposals": semantic_result.proposal_count,
+            "semantic_prompt_execution_uuid": semantic_result.semantic_prompt_execution_uuid,
+            "semantic_stage_execution_uuid": semantic_result.semantic_stage_execution_uuid,
+            "semantic_context_items": semantic_result.context_item_count,
+            "semantic_terminal_gate_short_circuit": (semantic_result.terminal_gate_short_circuit),
             "consolidation_decisions": len(decisions_created),
             "candidate_stage_results": stage_results,
             "embedding_results": embedding_results,

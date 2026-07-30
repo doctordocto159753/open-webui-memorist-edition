@@ -232,23 +232,36 @@ Provider API keys entered during install are written only to the local
 (the PR5-C boundary). See [INSTALLATION.md](INSTALLATION.md) and
 [SECURITY.md](../SECURITY.md).
 
-## Certification workflows
+## WP02 semantic candidate authority
 
-CI protects the main contracts on every pull request:
+After the persisted route and deterministic gate, one shared Lite/Full service
+builds a two-unit context manifest (six only when non-authoritative dependency
+hints occur), invokes `memorist.semantic_candidate_analysis` once for the whole
+message, applies strict schema and exact-evidence validation, and produces one
+coverage disposition per accepted unit. The model may propose semantics but
+cannot choose route, gate, privacy, provenance, proposal identity, or
+persistence. Assistant context remains `assistant_claim` unless a current user
+uniquely references and explicitly ratifies or corrects it.
 
-| Workflow | Protects |
-| --- | --- |
-| Semantic Baseline | canonical semantic authority, gate/route/candidate parity, trust/provenance |
-| Memory Control Contract | server-side memory control, scope isolation, actor authentication |
-| Memory Attachment UX | read-only, redacted attachment display |
-| Memory Workflow Toggle | truthful per-chat Memory On/Off consent ceiling |
-| Memory Node Configuration | admin-only setup, secret redaction, provider contract |
-| One-Click Installer | installer static checks, compose config, dry run, release manifest |
-| Import Runtime Certification | import security, worker lifecycle, Full PostgreSQL import |
-| Public Release Readiness | docs/link integrity, repo hygiene, core lint/type, frontend smoke |
+Durable proposals use deterministic UUIDv5 identities. SQLite migration `0037`
+and PostgreSQL migration `0024` store content-free coverage/link audit rows;
+raw evidence remains in canonical message/candidate evidence stores. Full
+projects embeddings and graph state only through outboxes—FalkorDB is never
+semantic authority.
 
-Workflows run on self-hosted runners (`memorist-ci`); public forks may need to
-adapt the `runs-on` labels. See [DEVELOPMENT.md](DEVELOPMENT.md).
+## Consolidated CI
+
+The single `.github/workflows/ci-consolidated.yml` workflow runs on
+GitHub-hosted runners with exactly four jobs:
+
+1. Quality, Unit, Integration, and UI
+2. PostgreSQL, Full Runtime, and FalkorDB
+3. Package and Lifecycle
+4. One Deployment Product E2E
+
+The scripts reuse dependency installs, package builds, and the Product E2E
+deployment; no per-feature workflow fan-out is authoritative. See
+[DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Inspirations
 

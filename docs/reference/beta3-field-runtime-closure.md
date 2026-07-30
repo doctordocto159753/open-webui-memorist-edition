@@ -108,12 +108,10 @@ Local and package evidence recorded on Windows with Docker Desktop:
 - No Docker volume was deleted during installation, upgrade, restart, or
   certification.
 
-External-runner disposition:
+Historical CI note:
 
-- GitHub Actions on the Draft PR remain queued because every authoritative job
-  requires `[self-hosted, linux, x64, memorist-ci]` and the repository has no
-  registered runner after the self-hosted server was retired. On 2026-07-25,
-  the repository owner explicitly authorized final closure from the complete
-  local test and runtime-certification record without waiting for those
-  unavailable Actions. The queued runs are therefore documented but non-gating
-  for this beta.3 field-closure verdict.
+- This document records a beta.3 field run and is not the current CI source of
+  truth. The repository now uses the four-job GitHub-hosted Consolidated CI
+  workflow described in [CI_RUNNERS.md](../CI_RUNNERS.md). Current changes must
+  pass that workflow; the retired `memorist-ci` runner disposition does not
+  waive any present gate.

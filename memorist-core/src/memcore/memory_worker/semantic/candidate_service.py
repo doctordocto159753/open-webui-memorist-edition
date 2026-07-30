@@ -13,6 +13,7 @@ from memcore.memory_worker.semantic.candidate_mapping import (
     ROUTE_CANDIDATE_MAPPING_VERSION,
     candidate_mapping_for_route,
 )
+from memcore.memory_worker.semantic.coverage import CandidateProposal
 from memcore.memory_worker.semantic.gate_policy import (
     candidate_policy_for_gate_and_route,
 )
@@ -21,11 +22,15 @@ from memcore.memory_worker.semantic.provenance_policy import (
     decide_candidate_provenance,
 )
 from memcore.models import (
+    CandidateEvidence,
     CandidateStatus,
     CandidateType,
+    EvidenceRole,
     Explicitness,
+    MemoryCandidate,
     SensitivityClass,
     SourceAuthority,
+    SupportType,
 )
 from memcore.textsemantics import (
     NORMALIZATION_CONTRACT_VERSION,
@@ -34,6 +39,7 @@ from memcore.textsemantics import (
     coerce_polarity,
     polarity_from_flag,
 )
+from memcore.validators.ijson import dump_ijson
 
 CANDIDATE_SERVICE_VERSION = "pr4d-candidate-service-v1"
 
@@ -245,6 +251,95 @@ def build_candidate_draft(value: CandidateServiceInput) -> CandidateDraft | None
         end_char=value.end_char - (len(value.text) - len(value.text.rstrip())),
         allows_automatic_memory_creation=allows_memory,
     )
+
+
+def build_candidate_from_proposal(
+    proposal: CandidateProposal,
+    *,
+    processing_run_uuid: str,
+) -> tuple[MemoryCandidate, CandidateEvidence]:
+    """Adapt an already-authoritative WP02 proposal without remapping semantics.
+
+    The coverage planner owns candidate type, proposition mapping, provenance,
+    polarity, privacy and lineage.  This adapter performs only the mechanical
+    conversion into the existing candidate/evidence domain objects.
+    """
+
+    candidate_type = CandidateType(proposal.candidate_type)
+    source_authority = SourceAuthority(proposal.source_authority)
+    explicitness = Explicitness(proposal.explicitness)
+    status = CandidateStatus(proposal.status)
+    sensitivity = SensitivityClass(proposal.privacy_ceiling)
+    confidence = _confidence(source_authority, explicitness, status=status)
+    metadata = {
+        "semantic_authority": "semantic_candidate_analysis_v1",
+        "semantic_unit_id": proposal.semantic_unit_id,
+        "semantic_unit_fingerprint": proposal.semantic_unit_fingerprint,
+        "epistemic_status": proposal.epistemic_status,
+        "durability": proposal.durability,
+        "context_lineage": list(proposal.context_lineage),
+        "gate_decision_uuid": proposal.gate_decision_uuid,
+        "route_uuid": proposal.route_uuid,
+        "annotation_uuid": proposal.annotation_uuid,
+        "prompt_execution_uuid": proposal.prompt_execution_uuid,
+        "candidate_service_version": CANDIDATE_SERVICE_VERSION,
+        "route_mapping_version": ROUTE_CANDIDATE_MAPPING_VERSION,
+        "provenance_policy_version": PROVENANCE_POLICY_VERSION,
+        "allows_automatic_memory_creation": proposal.automatic_candidate_creation_allowed,
+    }
+    candidate = MemoryCandidate(
+        candidate_uuid=proposal.proposal_id,
+        processing_run_uuid=processing_run_uuid,
+        text_unit_uuid=proposal.text_unit_uuid,
+        prompt_execution_uuid=proposal.prompt_execution_uuid,
+        candidate_type=candidate_type,
+        subject_key=proposal.subject_key,
+        predicate=proposal.predicate,
+        object_ijson=dump_ijson(proposal.object_payload),
+        normalized_text=proposal.normalized_text,
+        source_authority=source_authority,
+        explicitness=explicitness,
+        confidence=confidence,
+        polarity=coerce_polarity(proposal.polarity),
+        importance=_proposal_importance(candidate_type),
+        status=status,
+        sensitivity_class=sensitivity,
+        extraction_metadata_ijson=dump_ijson(metadata),
+        rejection_reason_codes_ijson=dump_ijson(list(proposal.reason_codes)),
+    )
+    evidence = CandidateEvidence(
+        candidate_uuid=proposal.proposal_id,
+        message_uuid=proposal.message_uuid,
+        text_unit_uuid=proposal.text_unit_uuid,
+        annotation_uuid=proposal.annotation_uuid,
+        route_uuid=proposal.route_uuid,
+        evidence_text=proposal.evidence,
+        start_char=proposal.raw_start,
+        end_char=proposal.raw_end,
+        evidence_role=EvidenceRole.PRIMARY,
+        support_type=SupportType.SUPPORTING,
+    )
+    return candidate, evidence
+
+
+def _proposal_importance(candidate_type: CandidateType) -> float:
+    """Stable policy-only importance for frozen proposals.
+
+    Importance is deliberately absent from the public proposal contract and
+    therefore cannot be model-selected.  These values preserve the existing
+    candidate-domain weighting without re-running route or text mapping.
+    """
+
+    return {
+        CandidateType.CONSTRAINT: 0.85,
+        CandidateType.GOAL: 0.84,
+        CandidateType.INSTRUCTION: 0.82,
+        CandidateType.STYLE: 0.72,
+        CandidateType.PREFERENCE: 0.70,
+        CandidateType.DEFINITION: 0.70,
+        CandidateType.FACT: 0.62,
+        CandidateType.FEEDBACK: 0.55,
+    }.get(candidate_type, 0.60)
 
 
 def _confidence(

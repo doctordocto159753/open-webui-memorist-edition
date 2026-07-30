@@ -37,7 +37,7 @@ npm ci && npm test
    `npm run lint`, `npm run typecheck`).
 3. Open the PR against `main` with a clear description of what changed and
    why. Certification workflows must pass.
-4. Note: CI runs on the maintainer's self-hosted runners, so workflows may
+4. CI runs through the four-job GitHub-hosted Consolidated CI workflow; jobs may
    not execute on forks until a maintainer triggers them. The suites are
    plain pytest/vitest and can be run locally.
 

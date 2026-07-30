@@ -29,6 +29,16 @@ SHA_PATH = ROOT / "release" / "rc" / f"memorist-openwebui-{RC_VERSION}.sha256"
 # live directly under the single extracted root directory.
 VERSION_SUFFIX = f"memorist-openwebui-{RC_VERSION}/VERSION.ijson"
 MANIFEST_SUFFIX = f"memorist-openwebui-{RC_VERSION}/package-manifest.ijson"
+REQUIRED_WP02_SUFFIXES = (
+    "docs/reference/semantic-candidate-authority.md",
+    "docs/reference/semantic-analysis-contract.md",
+    "docs/reference/memory-worker-prompts.md",
+    "docs/reference/runtime-role-contracts.md",
+    "docs/reference/text-semantics.md",
+    "runtime/memorist-core/migrations/0037_semantic_coverage_audit.sql",
+    "runtime/memorist-core/src/memcore/storage/postgres/migrations/"
+    "0024_semantic_coverage_audit.sql",
+)
 
 
 def run() -> dict[str, Any]:
@@ -78,6 +88,9 @@ def validate_rc_package() -> dict[str, Any]:
 
     with zipfile.ZipFile(ZIP_PATH) as package:
         names = package.namelist()
+        for suffix in REQUIRED_WP02_SUFFIXES:
+            if not any(name.endswith(suffix) for name in names):
+                issues.append({"issue_code": "missing_wp02_contract", "suffix": suffix})
         entry_timestamps = {
             item.date_time for item in package.infolist() if not item.is_dir()
         }

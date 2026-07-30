@@ -5,7 +5,10 @@ from typing import Any
 
 from memcore.memory_worker.prompts.contracts import get_contract
 from memcore.memory_worker.prompts.schemas import validate_jakobson_output
-from memcore.memory_worker.prompts.versions import JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID
+from memcore.memory_worker.prompts.versions import (
+    JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
+    SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID,
+)
 
 
 class PromptValidationError(ValueError):
@@ -103,6 +106,8 @@ def validate_prompt_specific_output(
 ) -> None:
     if prompt_id == JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID:
         _validate_jakobson_prompt_output(output, version)
+    elif prompt_id == SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID:
+        _validate_semantic_candidate_output(output, version)
     elif prompt_id == "memorist.unit_analysis":
         _validate_unit_analysis(output)
     elif prompt_id == "memorist.memory_signal_routing_assist":
@@ -155,6 +160,13 @@ def validate_prompt_output_against_input(
                     raise PromptValidationError(
                         f"jakobson item text does not match input at index {index}"
                     )
+    if prompt_id == SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID:
+        from memcore.memory_worker.semantic_contract import validate_semantic_binding
+
+        try:
+            validate_semantic_binding(input_payload, output)
+        except ValueError as error:
+            raise PromptValidationError(str(error)) from error
     if prompt_id == "memorist.preflight_planning":
         budget = input_payload.get("attachment_budget")
         max_tokens = budget.get("max_tokens") if isinstance(budget, Mapping) else None
@@ -194,6 +206,20 @@ def _validate_jakobson_prompt_output(output: dict[str, Any], version: str | None
         validate_jakobson_output(output)
     except ValueError as error:
         raise PromptValidationError(str(error)) from error
+
+
+def _validate_semantic_candidate_output(output: dict[str, Any], version: str | None = None) -> None:
+    contract = (
+        get_contract(SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID, version)
+        if version is not None
+        else None
+    )
+    if contract is None:
+        raise PromptValidationError("semantic candidate contract is unavailable")
+    issues = contract.validate(output)
+    if issues:
+        first = issues[0]
+        raise PromptValidationError(f"{first['path']}: {first['message']}")
 
 
 def _validate_unit_analysis(output: dict[str, Any]) -> None:

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from memcore.memory_worker.prompts.metadata import PromptMetadata, ValidationResult
 from memcore.memory_worker.prompts.validators import (
@@ -21,6 +22,9 @@ from memcore.memory_worker.prompts.versions import (
     JAKOBSON_SENTENCE_ANALYSIS_V3_VERSION,
     PROMPT_PACK_ID,
     PROMPT_PACK_VERSION,
+    SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID,
+    SEMANTIC_CANDIDATE_ANALYSIS_STAGE,
+    SEMANTIC_CANDIDATE_ANALYSIS_VERSION,
 )
 from memcore.model_control.security import sanitize_error_message
 from memcore.models import ModelRole, new_uuid, utc_now
@@ -104,7 +108,14 @@ class PromptDefinition(BaseModel):
 
     @property
     def full_system_prompt(self) -> str:
-        return f"{GLOBAL_SYSTEM_RULES}\n\n{self.system_prompt}".strip()
+        global_rules = GLOBAL_SYSTEM_RULES
+        if self.prompt_id == SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID:
+            global_rules = global_rules.replace(
+                "Required top-level output fields: schema_version, prompt_id, prompt_version, "
+                "status, warnings, items.",
+                "Return only the exact top-level fields required by the supplied strict schema.",
+            )
+        return f"{global_rules}\n\n{self.system_prompt}".strip()
 
     def public_dict(self) -> dict[str, Any]:
         payload = self.model_dump(mode="json")
@@ -279,7 +290,11 @@ def validate_prompt_input(
     try:
         validate_ijson_value(payload)
         validate_required_input_keys(payload, list(prompt.input_contract.get("required", [])))
-    except (IJsonValidationError, PromptValidationError) as error:
+        if prompt_id == SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID:
+            from memcore.memory_worker.semantic_contract import SemanticAnalysisV1Input
+
+            SemanticAnalysisV1Input.model_validate(payload)
+    except (IJsonValidationError, PromptValidationError, ValidationError) as error:
         raise PromptValidationError(f"prompt input invalid: {error}") from error
     return ValidationResult(valid=True, prompt_id=prompt_id, prompt_version=version)
 
@@ -303,11 +318,12 @@ def validate_prompt_output(
         validate_ijson_value(prompt_output)
     except IJsonValidationError as error:
         raise PromptValidationError(f"prompt output is not valid I-JSON: {error}") from error
-    validate_common_envelope(
-        prompt_id=prompt.prompt_id,
-        prompt_version=prompt.prompt_version,
-        output=prompt_output,
-    )
+    if prompt_id != SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID:
+        validate_common_envelope(
+            prompt_id=prompt.prompt_id,
+            prompt_version=prompt.prompt_version,
+            output=prompt_output,
+        )
     validate_prompt_specific_output(prompt_id, prompt_output, version=prompt.prompt_version)
     return ValidationResult(
         valid=True,
@@ -335,13 +351,19 @@ def validate_prompt_execution(
 
 def render_prompt(prompt_id: str, version: str, variables: dict[str, Any]) -> str:
     prompt = get_prompt(prompt_id, version).full_system_prompt
-    rendered = prompt
-    for key, value in variables.items():
-        replacement = value if isinstance(value, str) else dump_ijson(value)
-        rendered = rendered.replace("{{" + key + "}}", replacement)
-    if "{{PAYLOAD_IJSON}}" in rendered and "payload" not in variables:
-        rendered = rendered.replace("{{PAYLOAD_IJSON}}", dump_ijson(variables))
-    return rendered
+
+    def replacement(match: re.Match[str]) -> str:
+        key = match.group(1)
+        if key in variables:
+            value = variables[key]
+            return value if isinstance(value, str) else dump_ijson(value)
+        if key == "PAYLOAD_IJSON" and "payload" not in variables:
+            return dump_ijson(variables)
+        return match.group(0)
+
+    # Substitute placeholders in the trusted template exactly once. A marker
+    # embedded in untrusted payload text must never be interpreted recursively.
+    return re.sub(r"\{\{([A-Z0-9_]+)\}\}", replacement, prompt)
 
 
 def _definition(
@@ -398,6 +420,38 @@ def _redact_secrets(value: Any) -> Any:
 
 
 PROMPT_LIST = [
+    _definition(
+        SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID,
+        SEMANTIC_CANDIDATE_ANALYSIS_STAGE,
+        [ModelRole.MEMORY_EXTRACTION],
+        "Bounded semantic analysis after persisted route and gate authority.",
+        "semantic_candidate_analysis_v1.md",
+        [
+            "current_message_uuid",
+            "current_message_version_uuid",
+            "current_raw_text",
+            "text_envelope",
+            "bounded_context_items",
+            "boundary",
+            "contract_versions",
+        ],
+        {
+            "schema_name": "memorist_semantic_candidate_analysis_v1",
+            "canonical_collections": ["semantic_units", "references", "relations"],
+            "required_top_level": [
+                "schema_version",
+                "prompt_id",
+                "prompt_version",
+                "status",
+                "warnings",
+                "semantic_units",
+                "references",
+                "relations",
+            ],
+        },
+        default_timeout_ms=8000,
+        version=SEMANTIC_CANDIDATE_ANALYSIS_VERSION,
+    ),
     _definition(
         JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
         JAKOBSON_SENTENCE_ANALYSIS_STAGE,

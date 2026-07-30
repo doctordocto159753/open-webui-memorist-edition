@@ -15,7 +15,8 @@ from memcore.repositories import (
 )
 from memcore.storage.migrations import apply_migrations
 from memcore.storage.sqlite import connect
-from memcore.validators.ijson import load_ijson
+
+pytestmark = pytest.mark.usefixtures("wp02_downstream_semantic_model")
 
 PERSIAN_ELEVEN_STAGE_PLAN = """طرح فنی یازده‌مرحله‌ای پروژه:
 ۱. تعریف دامنه، بازیگران و الزامات حقوقی.
@@ -37,7 +38,7 @@ PERSIAN_FOLLOW_UP = (
 
 
 @pytest.mark.parametrize("author_role", ["user", "assistant"])
-def test_persian_eleven_stage_plan_is_recalled_across_sessions_with_provenance(
+def test_persian_eleven_stage_plan_retain_raw_gate_prevents_cross_session_authority(
     tmp_path: Path,
     author_role: str,
 ) -> None:
@@ -76,36 +77,30 @@ def test_persian_eleven_stage_plan_is_recalled_across_sessions_with_provenance(
     )
 
     processing = MemoryWorkerPipeline(connection, settings).process_message(source.message_uuid)
-    artifact = connection.execute(
-        """
-        SELECT *
-        FROM memory_candidates
-        WHERE processing_run_uuid = ? AND predicate = 'structured_project_artifact'
-        """,
-        (processing["processing_run_uuid"],),
-    ).fetchone()
-    assert artifact is not None
-    assert artifact["status"] == "ready_for_consolidation"
-    assert artifact["source_authority"] == (
-        "assistant_claim" if author_role == "assistant" else "user_explicit"
+    assert preceding_user_uuid is None or author_role == "assistant"
+    assert processing["semantic_terminal_gate_short_circuit"] is True
+    assert processing["candidates"] == 0
+    assert (
+        connection.execute(
+            "SELECT COUNT(*) FROM memory_candidates WHERE processing_run_uuid = ?",
+            (processing["processing_run_uuid"],),
+        ).fetchone()[0]
+        == 0
     )
-    metadata = load_ijson(artifact["extraction_metadata_ijson"])
-    assert metadata["not_user_fact"] is (author_role == "assistant")
-    assert metadata["preceding_user_message_uuid"] == preceding_user_uuid
-
-    memory = connection.execute(
-        """
-        SELECT mv.normalized_text
-        FROM memories m
-        JOIN memory_versions mv ON mv.memory_version_uuid = m.current_version_uuid
-        WHERE mv.source_candidate_uuid = ?
-        """,
-        (artifact["candidate_uuid"],),
-    ).fetchone()
-    assert memory is not None
-    assert "۷." in memory["normalized_text"]
-    assert "Private Data Collections" in memory["normalized_text"]
-    assert "Zero-Knowledge Proofs" in memory["normalized_text"]
+    dispositions = {
+        row["disposition"]
+        for row in connection.execute(
+            """
+            SELECT item.disposition
+            FROM semantic_coverage_items item
+            JOIN semantic_coverage_runs run
+              ON run.coverage_run_uuid = item.coverage_run_uuid
+            WHERE run.processing_run_uuid = ?
+            """,
+            (processing["processing_run_uuid"],),
+        )
+    }
+    assert dispositions == {"rejected_by_gate"}
 
     recall_session = sessions.create_session(
         workspace_uuid=workspace.workspace_uuid,
@@ -126,12 +121,5 @@ def test_persian_eleven_stage_plan_is_recalled_across_sessions_with_provenance(
         )
     )
 
-    assert response.rendered_attachment is not None
-    assert "۷." in response.rendered_attachment
-    assert "Private Data Collections" in response.rendered_attachment
-    assert "Hyperledger Fabric" in response.rendered_attachment
-    assert "Zero-Knowledge Proofs" in response.rendered_attachment
-    if author_role == "assistant":
-        assert "assistant_claim" in response.rendered_attachment
-        assert "user_explicit" not in response.rendered_attachment
+    assert response.rendered_attachment is None
     connection.close()

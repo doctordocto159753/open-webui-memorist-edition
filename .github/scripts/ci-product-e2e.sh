@@ -114,7 +114,7 @@ pg_password=$(openssl rand -hex 16)
 } > "${package_dir}/.env"
 
 pushd "$package_dir" >/dev/null
-pwsh -NoProfile -File ./Start-Memorist.ps1 -NoBrowser
+pwsh -NoProfile -File ./Start-Memorist.ps1 -NoBrowser -NoBuild
 popd >/dev/null
 
 for _ in $(seq 1 30); do
@@ -174,14 +174,22 @@ secrets=$("${compose[@]}" exec -T postgres psql -U memorist -d memorist -tA -c \
 test "$secrets" = "0"
 popd >/dev/null
 
-# Restart the same deployment. This tests persistence but does not rebuild,
-# re-download, or create a second stack.
-docker network disconnect "$network_name" "$stub_name"
+# Restart the existing containers in place. This preserves the one deployment,
+# performs no Compose build/up/down, and exercises process/scheduler restart
+# against the same PostgreSQL and FalkorDB volumes.
 pushd "$package_dir" >/dev/null
-pwsh -NoProfile -File ./Stop-Memorist.ps1
-pwsh -NoProfile -File ./Start-Memorist.ps1 -NoBrowser
+"${compose[@]}" restart
 popd >/dev/null
-docker network connect --alias "$stub_name" "$network_name" "$stub_name"
+
+for _ in $(seq 1 60); do
+  if curl -sf http://localhost:3000/health >/dev/null \
+    && curl -sf http://localhost:8777/memcore/health >/dev/null; then
+    break
+  fi
+  sleep 2
+done
+curl -sf http://localhost:3000/health >/dev/null
+curl -sf http://localhost:8777/memcore/health >/dev/null
 
 docker run --rm --network host --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -e MEMORIST_E2E_BASE_URL=http://localhost:3000 \

@@ -257,6 +257,38 @@ def _copy_archive_docs() -> None:
             ROOT / "docs" / "reference" / "model-control-plane.md",
             Path("docs/reference/model-control-plane.md"),
         ),
+        (
+            ROOT / "docs" / "reference" / "semantic-candidate-authority.md",
+            Path("docs/reference/semantic-candidate-authority.md"),
+        ),
+        (
+            ROOT / "docs" / "reference" / "semantic-analysis-contract.md",
+            Path("docs/reference/semantic-analysis-contract.md"),
+        ),
+        (
+            ROOT / "docs" / "reference" / "memory-worker-prompts.md",
+            Path("docs/reference/memory-worker-prompts.md"),
+        ),
+        (
+            ROOT / "docs" / "reference" / "runtime-role-contracts.md",
+            Path("docs/reference/runtime-role-contracts.md"),
+        ),
+        (
+            ROOT / "docs" / "reference" / "text-semantics.md",
+            Path("docs/reference/text-semantics.md"),
+        ),
+        (
+            ROOT / "docs" / "reference" / "sqlite-runtime.md",
+            Path("docs/reference/sqlite-runtime.md"),
+        ),
+        (
+            ROOT / "docs" / "reference" / "postgres.md",
+            Path("docs/reference/postgres.md"),
+        ),
+        (
+            ROOT / "docs" / "reference" / "sqlite-to-postgres.md",
+            Path("docs/reference/sqlite-to-postgres.md"),
+        ),
     ]:
         if not source.is_file():
             continue

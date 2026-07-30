@@ -6,6 +6,14 @@ units, Jakobson runs and annotations, memory signal routes, candidates, evidence
 memories, memory versions, imports, model usage, durable jobs, privacy requests,
 and projection/erasure outboxes.
 
+WP02 migration `0024_semantic_coverage_audit.sql` adds content-free semantic
+coverage runs/items and candidate links. It also aligns candidate evidence
+roles/support types with SQLite. Coverage-plan insert, candidate/evidence
+creation, and link transition use PostgreSQL transactions and conflict checks;
+a reservation can survive a crash, while a candidate cannot commit without
+its link. Route, gate, privacy, message version, semantic contract, and policy
+versions are checked again on replay.
+
 Migrations live in:
 
 ```text

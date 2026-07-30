@@ -194,6 +194,22 @@ automatic candidate labels differ (`ready_for_consolidation` in Lite,
 for audit. `needs_review` and `rejected` never transition automatically into
 canonical memory.
 
+## WP02 memory-extraction bundle
+
+`memory_extraction` is certified as one ordered bundle:
+`memorist.jakobson_sentence_analysis` v3.0 followed by
+`memorist.semantic_candidate_analysis` v1.0. A single configured profile must
+return non-empty, strict `ok` responses for both runtime-rendered contracts.
+Generic connectivity, a semantic abstention, or success on only one prompt
+cannot certify the profile. The role manifest and bundle hashes include both
+typed contract hashes and prompt texts, so a change to either makes prior
+certification stale.
+
+At runtime semantic analysis is one whole-message call, with at most one
+bounded repair. Provider attempts are reserved before network I/O; an
+`unknown_completion` reservation is not called again. The deterministic
+fallback is an empty abstention and never creates a candidate.
+
 ## Runtime diagnostics
 
 For a processing run, use:
@@ -204,9 +220,12 @@ GET /api/v1/memorist/memory-processing/runs/{processing_run_uuid}/stages
 ```
 
 The secret-free response includes capture/processing state; text-unit, route,
-gate, candidate, and memory counts; canonical and raw candidate statuses; each
-provider/fallback stage; retryable failures; and whether an external provider
-was called. If no canonical memory was produced, `no_memory_reason`
+gate, coverage, candidate, and memory counts; contract/profile identity;
+canonical and raw candidate statuses; each provider/fallback stage; retryable
+failures; and whether an external provider was called. Coverage audit answers
+why a unit was not proposed and which proposal linked to a candidate without
+copying raw messages or prior-context text. If no canonical memory was
+produced, `no_memory_reason`
 distinguishes no eligible signal, review, rejection, and consolidation with no
 result.
 

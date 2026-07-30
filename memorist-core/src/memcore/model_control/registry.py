@@ -131,14 +131,14 @@ def _run_memory_extraction_role_probe(
     timeout_seconds: float,
 ) -> ProviderHealth:
     from memcore.memory_worker.jakobson_runtime import execute_jakobson_contract
-    from memcore.memory_worker.prompts.contracts import (
-        canonical_jakobson_v3_example,
-        get_contract,
+    from memcore.memory_worker.prompts.contracts import canonical_jakobson_v3_example
+    from memcore.memory_worker.semantic_contract import (
+        SemanticContextBoundary,
+        build_semantic_input,
     )
-    from memcore.memory_worker.prompts.versions import (
-        JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
-        JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-    )
+    from memcore.memory_worker.semantic_runtime import execute_semantic_candidate_contract
+    from memcore.model_control.role_contracts import memory_extraction_contract_bundle
+    from memcore.textsemantics.result import build_envelope
 
     sentence = "Keep backups enabled."
     payload = {
@@ -155,10 +155,6 @@ def _run_memory_extraction_role_probe(
     }
     fallback = canonical_jakobson_v3_example()
     fallback["items"][0]["text"] = sentence
-    contract = get_contract(
-        JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
-        JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
-    )
     try:
         outcome = execute_jakobson_contract(
             profile=(
@@ -173,6 +169,36 @@ def _run_memory_extraction_role_probe(
         )
         if outcome.output.get("status") != "ok" or not outcome.output.get("items"):
             raise ValueError("role probe must return a non-empty ok result")
+        semantic_input = build_semantic_input(
+            current_message_uuid="certification-message-1",
+            current_message_version_uuid=None,
+            current_raw_text=sentence,
+            text_envelope=build_envelope(sentence),
+            bounded_context_items=[],
+            boundary=SemanticContextBoundary(
+                user_uuid="certification-user",
+                session_uuid="certification-session",
+                workspace_uuid=None,
+                project_uuid=None,
+                baseline_limit=2,
+                effective_limit=2,
+                dependency_expansion=False,
+            ),
+        )
+        semantic_outcome = execute_semantic_candidate_contract(
+            profile=(
+                profile.model_dump(mode="json")
+                if isinstance(profile, ModelProfile)
+                else dict(profile)
+            ),
+            input_payload=semantic_input,
+            timeout_ms=max(1, int(timeout_seconds * 1000)),
+            allow_fallback=False,
+        )
+        if semantic_outcome.output.get("status") != "ok" or not semantic_outcome.output.get(
+            "semantic_units"
+        ):
+            raise ValueError("semantic role probe must return a non-empty ok result")
     except Exception:
         return health.model_copy(
             update={
@@ -190,16 +216,14 @@ def _run_memory_extraction_role_probe(
                 ),
                 "role_manifest_hash": manifest_hash,
                 "role_probe_status": "incompatible",
-                "role_probe_contract_hash": (
-                    contract.contract_hash if contract is not None else None
-                ),
+                "role_probe_contract_hash": (memory_extraction_contract_bundle()["bundle_hash"]),
             }
         )
     return health.model_copy(
         update={
             "role_manifest_hash": manifest_hash,
             "role_probe_status": "compatible",
-            "role_probe_contract_hash": (contract.contract_hash if contract is not None else None),
+            "role_probe_contract_hash": memory_extraction_contract_bundle()["bundle_hash"],
         }
     )
 

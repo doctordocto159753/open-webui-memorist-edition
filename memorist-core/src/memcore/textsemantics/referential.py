@@ -43,6 +43,14 @@ DEICTIC_TOKENS: Final[frozenset[str]] = frozenset(
         "them",
         "they",
         "such",
+        "previous",
+        "earlier",
+        "above",
+        "prior",
+        "same",
+        "قبلی",
+        "پیشین",
+        "بالا",
     }
 )
 

@@ -1,7 +1,7 @@
 # Memorist — Open WebUI Memorist Edition
 
 Package version: `0.2.0-beta.3`<br>
-Storage schema version: `24`
+Storage schema version: `25`
 
 **Memorist is an independent community project built on Open WebUI. It is not affiliated with or endorsed by the Open WebUI team.
 ******
@@ -203,8 +203,8 @@ installer gets you to a live instance in a few minutes.)*
 
 Backend is Python 3.12 / FastAPI managed with `uv`; frontend components are
 TypeScript tested with vitest; CI enforces the semantic, consent, attachment,
-secret-handling, and installer contracts on every PR (self-hosted runners —
-forks may need to adapt CI). Start with
+secret-handling, and installer contracts on every PR through the four-job
+GitHub-hosted Consolidated CI workflow. Start with
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) and
 [CONTRIBUTING.md](CONTRIBUTING.md).
 

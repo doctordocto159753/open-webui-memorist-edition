@@ -177,8 +177,11 @@ Contract: `memorist.text.envelope.v3`.
 
 ## Evidence-integrity validation
 
-WP01's validator does not validate semantic enum meaning. WP02 must first bind
-model output to one strict closed typed schema.
+WP01's validator does not validate semantic enum meaning. The WP02 runtime first
+binds model output to the strict closed
+`memorist.semantic_candidate_analysis@1.0` schema, then calls this evidence
+validator. Neither the envelope nor dependency hints choose a referent,
+durability, route, gate, or candidate.
 
 Primary API:
 
@@ -197,13 +200,18 @@ Evidence validation checks:
 - units do not overlap or reuse ids;
 - resolved references have a target;
 - resolved references have a non-empty candidate list;
-- every candidate id names an accepted unit;
+- every candidate id names an accepted current unit or supplied bounded-context
+  item;
 - the selected target appears in that candidate list.
 
 Nothing is repaired by guessing. If nothing trustworthy survives, the fallback
 is `abstain` or `retain_raw_only`; neither creates memory.
 
 Contract: `memorist.text.semantic_evidence_validation.v1`.
+
+The envelope's dependency hints may expand supplied context from two to six
+prior units. They can also fail closed when a model omits an expected reference,
+but can never resolve or authorize one.
 
 ## Canonical and graph boundary
 

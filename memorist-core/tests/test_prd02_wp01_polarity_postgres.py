@@ -17,10 +17,12 @@ from memcore.memory_worker.postgres.pipeline import PostgresMemoryWorkerPipeline
 from memcore.models import ModelRole, utc_now
 from memcore.textsemantics import Polarity
 
-pytestmark = pytest.mark.skipif(
-    not os.getenv("MEMORIST_POSTGRES_DSN"),
-    reason="requires real PostgreSQL",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not os.getenv("MEMORIST_POSTGRES_DSN"),
+        reason="requires real PostgreSQL",
+    ),
+]
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -100,15 +102,15 @@ def test_full_mode_rows_default_to_unknown_polarity(tmp_path: Path) -> None:
     assert Polarity.UNKNOWN.value in str(dict(row)["column_default"])
 
 
-def test_deterministic_full_pipeline_does_not_persist_lexical_polarity_hint(
+def test_deterministic_full_pipeline_abstains_from_lexical_polarity_hint(
     tmp_path: Path,
 ) -> None:
     """No model analysis means canonical polarity remains ``unknown``.
 
     The deterministic analyzer may record a lexical hint for diagnostics, but
-    the hint is stamped non-authoritative. Candidates and durable memory
-    versions must therefore fail closed to ``unknown`` until WP02 supplies a
-    validated model semantic unit.
+    the hint is stamped non-authoritative. The WP02 deterministic semantic
+    fallback abstains, so no candidate or durable memory version is created
+    until a validated model semantic unit supplies canonical polarity.
     """
 
     text = "Do not disable PostgreSQL backups."
@@ -167,10 +169,8 @@ def test_deterministic_full_pipeline_does_not_persist_lexical_polarity_hint(
     payload = json.loads(str(dict(modality)["m"]))
     assert payload["polarity"] == Polarity.NEGATED.value
     assert payload["semantic_authority"] == NON_AUTHORITATIVE_LEXICAL_HINT
-    assert polarities, "the fixture must produce at least one candidate"
-    assert set(polarities) == {Polarity.UNKNOWN.value}
-    assert version_polarities, "the fixture must produce at least one memory version"
-    assert set(version_polarities) == {Polarity.UNKNOWN.value}
+    assert polarities == []
+    assert version_polarities == []
 
 
 def _seed_message(connection: Any, text: str) -> str:

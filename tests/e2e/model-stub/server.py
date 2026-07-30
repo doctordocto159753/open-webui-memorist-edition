@@ -61,6 +61,8 @@ def _deterministic_answer(messages: list[dict]) -> str:
         return json.dumps({"memorist_provider_test": "ok"})
     if isinstance(provider_test, dict) and isinstance(provider_test.get("sentences"), list):
         return json.dumps(_jakobson_output(provider_test))
+    if isinstance(provider_test, dict) and "current_raw_text" in provider_test:
+        return json.dumps(_semantic_output(provider_test))
     lowered = (question + " " + context).lower()
     if "alpha" in lowered and "chicken" in lowered:
         return "Your dog is named Alpha and her preferred food is chicken."
@@ -129,6 +131,32 @@ def _jakobson_output(input_payload: dict) -> dict:
             "main_code": "English",
             "main_contact_channel": "chat",
         },
+    }
+
+
+def _semantic_output(input_payload: dict) -> dict:
+    text = str(input_payload.get("current_raw_text") or "")
+    return {
+        "schema_version": "1.0",
+        "prompt_id": "memorist.semantic_candidate_analysis",
+        "prompt_version": "1.0",
+        "status": "ok",
+        "warnings": [],
+        "semantic_units": [
+            {
+                "id": "unit-1",
+                "raw_start": 0,
+                "raw_end": len(text),
+                "evidence": text,
+                "proposition": text,
+                "unit_type": "instruction",
+                "durability": "durable",
+                "polarity": "affirmed",
+                "epistemic_status": "asserted",
+            }
+        ],
+        "references": [],
+        "relations": [],
     }
 
 

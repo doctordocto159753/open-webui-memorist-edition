@@ -91,6 +91,22 @@ class SQLiteCanonicalAdapter:
                         (target_uuid,),
                     )
                 ],
+                *[
+                    PrivacyRecord(
+                        storage_type="sqlite",
+                        record_type="message_version",
+                        record_uuid=row["message_version_uuid"],
+                        action="redact",
+                    )
+                    for row in self.connection.execute(
+                        """
+                        SELECT message_version_uuid
+                        FROM message_versions
+                        WHERE message_uuid = ?
+                        """,
+                        (target_uuid,),
+                    )
+                ],
             ]
         if target_type == "session" and target_uuid:
             records: list[PrivacyRecord] = []
@@ -129,6 +145,7 @@ class SQLiteCanonicalAdapter:
 
     def erase(self, records: list[PrivacyRecord], request_uuid: str) -> ErasureResult:
         counts: Counter[str] = Counter()
+        retained: Counter[str] = Counter()
         with self.connection:
             for record in records:
                 if record.record_type == "memory" and record.record_uuid:
@@ -180,6 +197,9 @@ class SQLiteCanonicalAdapter:
                     )
                     counts["memory_version"] += 1
                 elif record.record_type == "message" and record.record_uuid:
+                    retained.update(
+                        _retained_semantic_audit_counts(self.connection, record.record_uuid)
+                    )
                     self.connection.execute(
                         """
                         UPDATE messages
@@ -209,7 +229,28 @@ class SQLiteCanonicalAdapter:
                             request_uuid,
                         )
                     )
+                    counts.update(
+                        _erase_prompt_executions_for_message(
+                            self.connection,
+                            record.record_uuid,
+                            request_uuid,
+                        )
+                    )
                     counts["message"] += 1
+                elif record.record_type == "message_version" and record.record_uuid:
+                    cursor = self.connection.execute(
+                        """
+                        UPDATE message_versions
+                        SET raw_text = NULL,
+                            raw_payload_ijson = NULL,
+                            snapshot_ijson = NULL,
+                            change_reason = 'privacy_redacted',
+                            content_hash = ?
+                        WHERE message_version_uuid = ?
+                        """,
+                        (_fingerprint(record.record_uuid), record.record_uuid),
+                    )
+                    counts["message_version"] += cursor.rowcount
                 elif record.record_type == "text_unit" and record.record_uuid:
                     self.connection.execute(
                         """
@@ -237,7 +278,11 @@ class SQLiteCanonicalAdapter:
                         (utc_now(), record.record_uuid),
                     )
                     counts["session"] += 1
-        return ErasureResult(erased_counts=dict(counts), retained_counts={}, exceptions=[])
+        return ErasureResult(
+            erased_counts=dict(counts),
+            retained_counts=dict(retained),
+            exceptions=[],
+        )
 
     def verify(self, records: list[PrivacyRecord]) -> VerificationResult:
         checks: dict[str, object] = {}
@@ -255,6 +300,19 @@ class SQLiteCanonicalAdapter:
                 ).fetchone()
                 checks[f"message:{record.record_uuid}"] = (
                     row is None or row["raw_text"] is None and row["redaction_status"] == "erased"
+                )
+            if record.record_type == "message_version" and record.record_uuid:
+                row = self.connection.execute(
+                    """
+                    SELECT raw_text, raw_payload_ijson, snapshot_ijson
+                    FROM message_versions
+                    WHERE message_version_uuid = ?
+                    """,
+                    (record.record_uuid,),
+                ).fetchone()
+                checks[f"message_version:{record.record_uuid}"] = row is None or all(
+                    row[column] is None
+                    for column in ("raw_text", "raw_payload_ijson", "snapshot_ijson")
                 )
         return VerificationResult(
             passed=all(bool(value) for value in checks.values()), checks=checks
@@ -818,6 +876,7 @@ def _adapter_matches(adapter: PrivacyStorageAdapter, record: PrivacyRecord) -> b
             "memory",
             "memory_version",
             "message",
+            "message_version",
             "text_unit",
             "session",
         }
@@ -965,6 +1024,83 @@ def _erase_jakobson_for_message(
         (redacted_payload, redacted_payload, message_uuid),
     )
     counts["jakobson_analysis_run"] += cursor.rowcount
+    return counts
+
+
+def _erase_prompt_executions_for_message(
+    connection: sqlite3.Connection,
+    message_uuid: str,
+    request_uuid: str,
+) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    if not _table_exists(connection, "prompt_execution_runs"):
+        return counts
+    redacted_payload = dump_ijson({"redacted": True, "privacy_request_uuid": request_uuid})
+    cursor = connection.execute(
+        """
+        UPDATE prompt_execution_runs
+        SET input_ref = NULL,
+            raw_output_ijson = ?,
+            validated_output_ijson = ?,
+            warnings_ijson = ?,
+            error_sanitized = NULL
+        WHERE message_uuid = ?
+        """,
+        (
+            redacted_payload,
+            redacted_payload,
+            dump_ijson([]),
+            message_uuid,
+        ),
+    )
+    counts["prompt_execution_run"] += cursor.rowcount
+    return counts
+
+
+def _retained_semantic_audit_counts(
+    connection: sqlite3.Connection, message_uuid: str
+) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    if not _table_exists(connection, "semantic_coverage_runs"):
+        return counts
+    run_count = int(
+        connection.execute(
+            "SELECT COUNT(*) FROM semantic_coverage_runs WHERE message_uuid = ?",
+            (message_uuid,),
+        ).fetchone()[0]
+    )
+    item_count = int(
+        connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM semantic_coverage_items AS item
+            JOIN semantic_coverage_runs AS run
+              ON run.coverage_run_uuid = item.coverage_run_uuid
+            WHERE run.message_uuid = ?
+            """,
+            (message_uuid,),
+        ).fetchone()[0]
+    )
+    link_count = int(
+        connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM semantic_candidate_links AS link
+            JOIN semantic_coverage_items AS item
+              ON item.coverage_item_uuid = link.coverage_item_uuid
+            JOIN semantic_coverage_runs AS run
+              ON run.coverage_run_uuid = item.coverage_run_uuid
+            WHERE run.message_uuid = ?
+            """,
+            (message_uuid,),
+        ).fetchone()[0]
+    )
+    if run_count:
+        counts["semantic_coverage_run_audit"] = run_count
+    if item_count:
+        counts["semantic_coverage_item_audit"] = item_count
+    if link_count:
+        counts["semantic_candidate_link_audit"] = link_count
     return counts
 
 

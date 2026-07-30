@@ -34,7 +34,14 @@ uv run python -m memcore.migrate sqlite-to-postgres \
 The migration is expected to preserve UUIDs, messages, message versions, text
 units, Jakobson annotations, signal routes, candidates, memories, memory
 versions, evidence, prompt execution runs, model profiles, usage events, privacy
-receipts, and import lineage where source and target tables exist.
+receipts, import lineage, semantic coverage runs/items, and proposal/candidate
+links where source and target tables exist.
+
+Verification compares canonical mapped content digests as well as row counts.
+An existing PostgreSQL primary key is accepted only when every mapped value is
+identical; `ON CONFLICT` is not treated as a successful copy by itself. The
+schema parity report fails for a missing WP02 table, column, or weakened closed
+constraint.
 
 After commit:
 

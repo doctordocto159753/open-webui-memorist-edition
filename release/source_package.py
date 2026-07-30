@@ -6,12 +6,15 @@ import json
 import shutil
 import sys
 import zipfile
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = ROOT / "release" / "source"
 DEFAULT_OUT = SOURCE_ROOT / "open-webui-memorist-edition-source.zip"
+DETERMINISTIC_DATE_TIME_BASE = datetime(2000, 1, 1)
+DETERMINISTIC_DATE_TIME_SPAN_SECONDS = 20 * 365 * 24 * 60 * 60
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -97,10 +100,16 @@ def build_source_package(out_path: str | Path = DEFAULT_OUT) -> dict[str, Any]:
 
     if resolved_out.exists():
         resolved_out.unlink()
+    archive_date_time = _content_derived_date_time(manifest_text.encode("utf-8"))
     with zipfile.ZipFile(resolved_out, "w", zipfile.ZIP_DEFLATED) as package:
         for file_path in sorted(staging.rglob("*")):
             if file_path.is_file():
-                package.write(file_path, file_path.relative_to(staging).as_posix())
+                _write_deterministic(
+                    package,
+                    file_path,
+                    file_path.relative_to(staging).as_posix(),
+                    archive_date_time,
+                )
 
     zip_source_issues = scan_source_tree(resolved_out)
     zip_forbidden_issues = scan_forbidden(resolved_out)
@@ -176,6 +185,34 @@ def _has_excluded_runtime_dir(parts: tuple[str, ...]) -> bool:
         ("release", "artifacts"),
     }
     return any(parts[:index] in excluded_paths for index in range(1, len(parts) + 1))
+
+
+def _content_derived_date_time(material: bytes) -> tuple[int, int, int, int, int, int]:
+    seed = int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
+    offset = seed % DETERMINISTIC_DATE_TIME_SPAN_SECONDS
+    timestamp = DETERMINISTIC_DATE_TIME_BASE + timedelta(seconds=offset - (offset % 2))
+    return (
+        timestamp.year,
+        timestamp.month,
+        timestamp.day,
+        timestamp.hour,
+        timestamp.minute,
+        timestamp.second,
+    )
+
+
+def _write_deterministic(
+    package: zipfile.ZipFile,
+    path: Path,
+    arcname: str,
+    date_time: tuple[int, int, int, int, int, int],
+) -> None:
+    info = zipfile.ZipInfo(arcname, date_time=date_time)
+    info.create_system = 3
+    info.compress_type = zipfile.ZIP_DEFLATED
+    mode = 0o755 if path.suffix == ".sh" else 0o644
+    info.external_attr = (0o100000 | mode) << 16
+    package.writestr(info, path.read_bytes())
 
 
 def main(argv: list[str] | None = None) -> int:
