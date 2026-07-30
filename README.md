@@ -1,9 +1,10 @@
 # Memorist — Open WebUI Memorist Edition
 
-Current development release: **`0.2.0-beta.3` (WP02 semantic candidate
-authority)**
+Package version: `0.2.0-beta.3`
 
-Storage schema: **`25`**
+Storage schema version: `25`
+
+Current development line: **WP02 semantic candidate authority**.
 
 **Memorist is an independent community project built on Open WebUI. It is not
 affiliated with or endorsed by the Open WebUI team.**
