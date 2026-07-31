@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 
 from memcore.attachments.builder import AttachmentBuilder
-from memcore.models import RetrievalRun, RetrievalRunStatus, utc_now
+from memcore.models import RetrievalMode, RetrievalRun, RetrievalRunStatus, utc_now
 from memcore.repositories import (
     MessageRepository,
     ProjectRepository,
@@ -141,7 +141,7 @@ def test_scf_stage_three_uses_alias_ordinal_and_message_evidence(tmp_path: Path)
             session_uuid=recall_session.session_uuid,
             project_uuid=project.project_uuid,
             input_message_uuid=query.message_uuid,
-            retrieval_mode="standard",
+            retrieval_mode=RetrievalMode.STANDARD,
             original_query=str(query.raw_text),
             token_budget=1200,
             status=RetrievalRunStatus.COMPLETED,
