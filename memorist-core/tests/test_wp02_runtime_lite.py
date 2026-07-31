@@ -63,6 +63,24 @@ def test_lite_one_profile_runs_both_contracts_and_restart_is_idempotent(
         assert first["candidates"] == 1
         assert first["semantic_proposals"] == 1
         assert first["semantic_coverage_status"] == "complete"
+        analysis = connection.execute(
+            "SELECT * FROM message_semantic_analyses WHERE message_uuid = ?",
+            (message_uuid,),
+        ).fetchone()
+        assert analysis is not None
+        assert analysis["one_line_summary"] == (
+            "preference > answer style > concise responses"
+        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM message_semantic_categories "
+            "WHERE semantic_analysis_uuid = ?",
+            (analysis["semantic_analysis_uuid"],),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM message_concept_tags "
+            "WHERE semantic_analysis_uuid = ?",
+            (analysis["semantic_analysis_uuid"],),
+        ).fetchone()[0] == 2
         candidate = connection.execute("SELECT * FROM memory_candidates").fetchone()
         link = connection.execute("SELECT * FROM semantic_candidate_links").fetchone()
         assert candidate is not None and link is not None
@@ -110,8 +128,9 @@ def test_lite_one_profile_runs_both_contracts_and_restart_is_idempotent(
             (first["processing_run_uuid"],),
         )
         connection.commit()
-        with pytest.raises(RuntimeError, match="semantic replay authority changed"):
-            pipeline.process_message(message_uuid, model_target=profile)
+        replay = pipeline.process_message(message_uuid, model_target=profile)
+        assert replay["semantic_coverage_status"] == "complete"
+        assert connection.execute("SELECT COUNT(*) FROM memory_candidates").fetchone()[0] == 1
         assert len(provider.schema_names) == calls_before_restart
         assert connection.execute("SELECT COUNT(*) FROM memory_candidates").fetchone()[0] == 1
     finally:
@@ -382,6 +401,39 @@ def _semantic_output(input_payload: dict[str, Any]) -> dict[str, Any]:
         "prompt_version": "1.0",
         "status": "ok",
         "warnings": [],
+        "intent": "preference",
+        "primary_topic": "answer style",
+        "secondary_topic": "concise responses",
+        "one_line_summary": "preference > answer style > concise responses",
+        "message_categories": [
+            {
+                "category": "Preference",
+                "normalized_label": "response style",
+                "confidence": 0.98,
+            }
+        ],
+        "concept_tags": [
+            {
+                "canonical_label": "response style",
+                "aliases": ["answer style"],
+                "confidence": 0.96,
+                "raw_start": None,
+                "raw_end": None,
+            },
+            {
+                "canonical_label": "concise responses",
+                "aliases": ["concise answers"],
+                "confidence": 0.95,
+                "raw_start": None,
+                "raw_end": None,
+            },
+        ],
+        "entities": [],
+        "process_references": [],
+        "epistemic_status": "asserted",
+        "temporal_status": "current",
+        "importance": 0.8,
+        "explicit_memory_request": False,
         "semantic_units": [
             {
                 "id": "preference-unit",
@@ -393,6 +445,8 @@ def _semantic_output(input_payload: dict[str, Any]) -> dict[str, Any]:
                 "durability": "durable",
                 "polarity": "affirmed",
                 "epistemic_status": "asserted",
+                "memory_kind": "Preference",
+                "lifecycle_status": "active",
             }
         ],
         "references": [],

@@ -651,7 +651,7 @@ def test_preflight_model_lifecycle_records_before_attachment(
         assert "retrieval_completed" in events
         assert "preflight_model_started" in events
         assert "preflight_model_failed_open" in events
-        assert events.index("retrieval_completed") < events.index("preflight_model_started")
+        assert events.index("preflight_model_started") < events.index("retrieval_completed")
         usage = connection.execute(
             """
             SELECT *

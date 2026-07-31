@@ -9,7 +9,7 @@ from memcore.model_control.repository import ModelControlRepository
 from memcore.model_control.schemas import UsageEventCreate
 from memcore.models import CreatorType, MessageRole, ModelRole, new_uuid, utc_now
 from memcore.openwebui.model_scheduling import resolve_scoped_model_identity
-from memcore.repositories import JobRepository, MessageRepository
+from memcore.repositories import JobRepository, MessageRepository, MessageVersionRepository
 from memcore.storage.commands import WriteResult
 
 
@@ -94,6 +94,13 @@ class CaptureOpenWebUIMessageCommand:
             raw_payload=self.raw_payload,
             turn_index=self.turn_index,
             job_priority=100,
+        )
+        MessageVersionRepository(connection).create_version(
+            message.message_uuid,
+            raw_text=self.content,
+            raw_payload=self.raw_payload,
+            change_reason="initial_capture",
+            created_by=self.role,
         )
         with connection:
             connection.execute(

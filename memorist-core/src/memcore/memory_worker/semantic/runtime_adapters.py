@@ -13,6 +13,7 @@ from typing import Any
 from memcore.memory_worker.attempt_audit import stable_stage_execution_uuid
 from memcore.memory_worker.execution import ContractExecutionOutcome
 from memcore.memory_worker.extraction.sensitivity import classify_sensitivity
+from memcore.memory_worker.message_semantics import persist_message_semantics
 from memcore.memory_worker.postgres.semantic_coverage import (
     PostgresSemanticCoverageRepository,
 )
@@ -453,6 +454,18 @@ class SQLiteSemanticCandidateRuntimeAdapter:
                 f"INSERT INTO processing_stage_runs ({', '.join(columns)}) "
                 f"VALUES ({', '.join('?' for _ in columns)})",
                 tuple(stage[column] for column in columns),
+            )
+            persist_message_semantics(
+                self.connection,
+                postgres=False,
+                message_uuid=message_uuid,
+                processing_run_uuid=processing_run_uuid,
+                prompt_execution_uuid=prompt_execution_uuid,
+                stage_execution_uuid=stage_execution_uuid,
+                contract_hash=contract_hash,
+                scope=scope,
+                input_payload=input_payload,
+                outcome=outcome,
             )
             self.connection.execute(
                 """
@@ -951,6 +964,18 @@ class PostgresSemanticCandidateRuntimeAdapter:
                 f"VALUES ({', '.join(placeholders)})",
                 tuple(stage[column] for column in columns),
             )
+            persist_message_semantics(
+                self.connection,
+                postgres=True,
+                message_uuid=message_uuid,
+                processing_run_uuid=processing_run_uuid,
+                prompt_execution_uuid=prompt_execution_uuid,
+                stage_execution_uuid=stage_execution_uuid,
+                contract_hash=contract_hash,
+                scope=scope,
+                input_payload=input_payload,
+                outcome=outcome,
+            )
             self.connection.execute(
                 """
                 INSERT INTO model_usage_events (
@@ -1139,26 +1164,17 @@ def _validate_completed_replay(
             if authority.raw_start <= item.raw_start and item.raw_end <= authority.raw_end
         ]
         current = containing[0] if len(containing) == 1 else None
-        old_gate = _optional_string(row["gate_decision"])
-        old_route_type = _optional_string(row["route_type"])
-        old_route_status = _optional_string(row["route_status"])
-        if current is None:
-            if old_gate is not None or old_route_type is not None or item.proposal_id is not None:
-                raise RuntimeError("current-run semantic replay authority is incomplete")
-        elif (
-            current.gate_decision != old_gate
-            or current.route_type != old_route_type
-            or current.route_status != old_route_status
-        ):
-            raise RuntimeError("semantic replay authority changed: current-run gate or route")
+        if current is None and item.proposal_id is not None:
+            raise RuntimeError("current-run semantic replay authority is incomplete")
+        # Legacy gate and route values remain immutable audit fields on the
+        # persisted plan. Changes to those annotations do not invalidate the
+        # model-led semantic replay; only source/privacy authority can do so.
         if item.proposal_id is None:
             continue
         if row["state"] != "candidate_linked" or row["candidate_uuid"] != row["proposal_uuid"]:
             return None
         if (
             current is None
-            or current.gate_decision not in {"analyze", "analyze_high_confidence"}
-            or current.route_status != "ready"
             or not current.privacy_storage_allowed
             or current.privacy_ceiling != str(row["sensitivity_class"])
         ):

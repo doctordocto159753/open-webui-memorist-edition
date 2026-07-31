@@ -8,7 +8,10 @@ from bisect import bisect_right
 from collections.abc import Iterable, Sequence
 from typing import Any, Literal
 
-from memcore.memory_worker.semantic.candidate_mapping import candidate_mapping_for_route
+from memcore.memory_worker.semantic.candidate_mapping import (
+    candidate_mapping_for_route,
+    candidate_mapping_for_semantic_unit,
+)
 from memcore.memory_worker.semantic.provenance_policy import decide_candidate_provenance
 
 from .contracts import (
@@ -83,7 +86,7 @@ def plan_candidate_coverage(
             )
         ):
             authority = authority.model_copy(update={"conflicting_authority": True})
-        mapping = (
+        legacy_mapping = (
             candidate_mapping_for_route(
                 authority.route_type,
                 unit.proposition,
@@ -91,6 +94,11 @@ def plan_candidate_coverage(
             )
             if authority is not None
             else None
+        )
+        mapping = legacy_mapping or candidate_mapping_for_semantic_unit(
+            unit.unit_type,
+            unit.proposition,
+            message_uuid=planner_input.message_uuid,
         )
         unresolved = any(
             analysis.references[index].status != "resolved" for index in unit_reference_indexes
@@ -146,8 +154,18 @@ def plan_candidate_coverage(
                     unit_fingerprint=fingerprint,
                     raw_start=unit.raw_start,
                     raw_end=unit.raw_end,
-                    route_type=str(authority.route_type),
-                    route_status=str(authority.route_status),
+                    route_type=(
+                        str(authority.route_type)
+                        if legacy_mapping is not None
+                        else mapping.route_type.value
+                    ),
+                    route_status=(
+                        str(authority.route_status)
+                        if legacy_mapping is not None
+                        else mapping.status.value
+                    ),
+                    # Preserve historical proposal identities while treating
+                    # the gate as audit metadata rather than semantic veto.
                     gate_decision=str(authority.gate_decision),
                     source_authority=provenance.source_authority.value,
                     coverage_disposition=CoverageDisposition.DURABLE_CANDIDATE.value,
@@ -306,18 +324,8 @@ def _uncovered_items(
         start, end = int(group[0]["raw_start"]), int(group[-1]["raw_end"])
         authorities = authority_index.containing(start, end)
         authority = authorities[0] if len(authorities) == 1 else None
-        rejected = authority is not None and authority.gate_decision in {
-            "discard",
-            "retain_raw_only",
-        }
-        disposition = (
-            CoverageDisposition.REJECTED_BY_GATE if rejected else CoverageDisposition.UNSUPPORTED
-        )
-        reasons = (
-            (f"gate_{authority.gate_decision}",)
-            if rejected and authority is not None
-            else ("uncovered_material",)
-        )
+        disposition = CoverageDisposition.UNSUPPORTED
+        reasons = ("uncovered_material",)
         items.append(
             _coverage_item(
                 value,

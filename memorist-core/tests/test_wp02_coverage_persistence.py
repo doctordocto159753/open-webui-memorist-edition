@@ -411,7 +411,7 @@ def test_sqlite_fresh_upgrade_repeated_and_content_free_schema(tmp_path: Path) -
     latest = connection.execute(
         "SELECT migration_id FROM schema_migrations ORDER BY migration_id DESC LIMIT 1"
     ).fetchone()[0]
-    assert latest == "0037_semantic_coverage_audit.sql"
+    assert latest == "0038_message_first_semantics.sql"
 
 
 @pytest.mark.skipif(not os.getenv("MEMORIST_POSTGRES_DSN"), reason="requires real PostgreSQL")
@@ -513,7 +513,7 @@ def test_postgres_populated_0023_to_0024_upgrade_is_additive_and_repeatable(
             LIMIT 1
             """
             ).fetchone()[0]
-            == "0024_semantic_coverage_audit.sql"
+            == "0025_message_first_semantics.sql"
         )
     finally:
         connection.rollback()

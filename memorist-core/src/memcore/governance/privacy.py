@@ -236,6 +236,54 @@ class SQLiteCanonicalAdapter:
                             request_uuid,
                         )
                     )
+                    cursor = self.connection.execute(
+                        """
+                        UPDATE message_semantic_analyses
+                        SET status = 'erased', one_line_summary = NULL,
+                            summary_intent = NULL, primary_topic = NULL,
+                            secondary_topic = NULL, warnings_ijson = '[]',
+                            erased_at = ?, updated_at = ?
+                        WHERE message_uuid = ? AND erased_at IS NULL
+                        """,
+                        (utc_now(), utc_now(), record.record_uuid),
+                    )
+                    counts["message_semantic_analysis"] += cursor.rowcount
+                    cursor = self.connection.execute(
+                        """
+                        UPDATE message_semantic_units
+                        SET proposition_text = NULL, erased_at = ?
+                        WHERE semantic_analysis_uuid IN (
+                          SELECT semantic_analysis_uuid
+                          FROM message_semantic_analyses WHERE message_uuid = ?
+                        ) AND erased_at IS NULL
+                        """,
+                        (utc_now(), record.record_uuid),
+                    )
+                    counts["message_semantic_unit"] += cursor.rowcount
+                    self.connection.execute(
+                        "DELETE FROM message_entity_references WHERE semantic_analysis_uuid IN "
+                        "(SELECT semantic_analysis_uuid FROM message_semantic_analyses "
+                        "WHERE message_uuid = ?)",
+                        (record.record_uuid,),
+                    )
+                    self.connection.execute(
+                        "DELETE FROM message_process_references WHERE semantic_analysis_uuid IN "
+                        "(SELECT semantic_analysis_uuid FROM message_semantic_analyses "
+                        "WHERE message_uuid = ?)",
+                        (record.record_uuid,),
+                    )
+                    self.connection.execute(
+                        "DELETE FROM message_concept_tags WHERE semantic_analysis_uuid IN "
+                        "(SELECT semantic_analysis_uuid FROM message_semantic_analyses "
+                        "WHERE message_uuid = ?)",
+                        (record.record_uuid,),
+                    )
+                    self.connection.execute(
+                        "DELETE FROM message_semantic_categories WHERE semantic_analysis_uuid IN "
+                        "(SELECT semantic_analysis_uuid FROM message_semantic_analyses "
+                        "WHERE message_uuid = ?)",
+                        (record.record_uuid,),
+                    )
                     counts["message"] += 1
                 elif record.record_type == "message_version" and record.record_uuid:
                     cursor = self.connection.execute(

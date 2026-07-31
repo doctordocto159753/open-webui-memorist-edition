@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Any
 
+from memcore.config import get_settings
 from memcore.memory_worker.attempt_audit import ProviderAttemptAuditRepository
 from memcore.memory_worker.execution import ContractExecutionOutcome, run_contract_execution
 from memcore.memory_worker.extraction.sensitivity import classify_sensitivity
@@ -42,6 +43,18 @@ def semantic_abstention(reason_code: str = "semantic_analysis_unavailable") -> d
         "prompt_version": SEMANTIC_CANDIDATE_ANALYSIS_VERSION,
         "status": "abstain",
         "warnings": [safe_reason or "semantic_analysis_unavailable"],
+        "intent": "unknown",
+        "primary_topic": "unknown",
+        "secondary_topic": "unknown",
+        "one_line_summary": "unknown > unknown > unknown",
+        "message_categories": [],
+        "concept_tags": [],
+        "entities": [],
+        "process_references": [],
+        "epistemic_status": "unknown",
+        "temporal_status": "unknown",
+        "importance": 0.0,
+        "explicit_memory_request": False,
         "semantic_units": [],
         "references": [],
         "relations": [],
@@ -53,7 +66,7 @@ def execute_semantic_candidate_contract(
     profile: dict[str, Any],
     input_payload: SemanticAnalysisV1Input | dict[str, Any],
     revalidate: Callable[[], None] | None = None,
-    timeout_ms: int = 8000,
+    timeout_ms: int | None = None,
     allow_fallback: bool = True,
     attempt_audit: ProviderAttemptAuditRepository | None = None,
 ) -> ContractExecutionOutcome:
@@ -97,7 +110,14 @@ def execute_semantic_candidate_contract(
             )
         )
 
-    provider = OpenAICompatibleMemoryExtractionProvider.from_profile(profile, timeout_ms=timeout_ms)
+    effective_timeout_ms = int(
+        profile.get("timeout_ms")
+        or timeout_ms
+        or get_settings().processing_timeout_ms("memory_extraction")
+    )
+    provider = OpenAICompatibleMemoryExtractionProvider.from_profile(
+        profile, timeout_ms=effective_timeout_ms
+    )
     system_prompt = render_prompt(
         SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID,
         SEMANTIC_CANDIDATE_ANALYSIS_VERSION,

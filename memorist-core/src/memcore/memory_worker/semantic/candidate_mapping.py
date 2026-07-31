@@ -62,6 +62,27 @@ def candidate_mapping_for_route(
     )
 
 
+def candidate_mapping_for_semantic_unit(
+    unit_type: str,
+    text: str,
+    *,
+    message_uuid: str,
+) -> RouteCandidateMapping | None:
+    """Map the model's broad unit type when legacy routing has no useful route.
+
+    This is deliberately small: it does not infer meaning from text. The model
+    has already classified the unit and supplied its proposition and evidence.
+    """
+
+    if unit_type == "instruction":
+        route = MemorySignalRouteType.PROMPT_INSTRUCTION
+    elif unit_type in {"statement", "explanation"}:
+        route = MemorySignalRouteType.PROJECT_CONTEXT
+    else:
+        return None
+    return candidate_mapping_for_route(route, text, message_uuid=message_uuid)
+
+
 def _candidate_profile(
     route: MemorySignalRouteType,
     *,

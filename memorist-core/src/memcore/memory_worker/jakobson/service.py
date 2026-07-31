@@ -110,7 +110,7 @@ class DeterministicJakobsonProvider:
 
 
 class OpenAICompatibleJakobsonProvider:
-    def __init__(self, profile: dict[str, Any], timeout_ms: int = 8000) -> None:
+    def __init__(self, profile: dict[str, Any], timeout_ms: int = 120_000) -> None:
         self.provider_type = str(
             profile.get("provider_type") or profile.get("provider") or "openai_compatible"
         )

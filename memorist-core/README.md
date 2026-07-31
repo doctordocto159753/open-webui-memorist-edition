@@ -133,8 +133,14 @@ Pack v2 remains the schema-bound package baseline. The ordered
 `memorist.jakobson_sentence_analysis` v3.0 and
 `memorist.semantic_candidate_analysis` v1.0. Jakobson produces communication
 annotations; the whole-message semantic contract feeds deterministic coverage
-planning after persisted route/gate authority. `memorist.unit_analysis`
-remains aggregate/legacy compatibility only.
+planning. Persisted Jakobson/route/gate records remain compatibility audit data
+and cannot veto ordinary messages before semantic analysis.
+
+Schema 26 adds canonical Message semantics: a three-part summary, multi-valued
+base categories, intent/topics, up to five canonical concepts with aliases,
+entities, process/stage references, exact-span semantic units and explicit
+semantic job outcomes. Lite and Full share this contract; Full also projects
+the message topology to rebuildable FalkorDB nodes.
 
 ## Daily-use hardening
 

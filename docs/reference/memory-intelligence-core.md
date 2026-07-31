@@ -1,8 +1,8 @@
 # Memory Intelligence Core
 
 The Memory Intelligence Core turns immutable message evidence into persisted
-communication annotations, route/gate authority, complete semantic coverage,
-and replay-safe memory candidates. Lite and Full use the same semantic
+first-class Message semantics, compatibility annotations, complete semantic
+coverage, and replay-safe memory candidates. Lite and Full use the same semantic
 orchestration; their storage adapters differ.
 
 ## Current data flow
@@ -11,13 +11,10 @@ orchestration; their storage adapters differ.
 messages.raw_text
   -> TextEnvelope v3
   -> text_units(exact offsets and hashes)
-  -> memorist.jakobson_sentence_analysis v3.0
-  -> prompt/stage/attempt audit
-  -> jakobson_sentence_annotations
-  -> memory_signal_routes
-  -> gate_decisions
   -> bounded same-authority context (2 units, or 6 for dependency hints)
   -> memorist.semantic_candidate_analysis v1.0
+  -> Message summary/categories/topics/concepts/entities/process-stage
+  -> optional memorist.jakobson_sentence_analysis v3.0 compatibility annotation
   -> strict schema + semantic binding + WP01 exact-evidence validation
   -> deterministic CoveragePlan
   -> deterministic CandidateProposal UUIDv5
@@ -33,21 +30,22 @@ semantic contract does not rewrite historical prompt versions.
 
 ## Authority boundaries
 
-The model may return communication factors, semantic propositions,
-references, relations, durability, polarity, and epistemic status. It does not
+The model may return message intent/topics/summary/categories/concepts,
+entities/process stages, semantic propositions, references, relations,
+durability, lifecycle, polarity, and epistemic status. It does not
 own:
 
 - exact evidence acceptance;
-- canonical route or gate;
+- consent/scope/source/privacy policy;
 - privacy or provenance ceilings;
 - coverage disposition;
 - proposal/candidate identity;
 - persistence, consolidation, or graph authority.
 
-`discard` and `retain_raw_only` gates stop before semantic model execution and
-candidate creation. `manual_review` may receive audit coverage but cannot
-create an automatic candidate. Candidate adapters re-read persisted authority
-immediately before transactional persistence.
+Legacy `discard`, `retain_raw_only`, and `manual_review` values remain auditable
+but do not stop ordinary whole-message semantic execution. Candidate adapters
+re-read source integrity, privacy and scope immediately before transactional
+persistence.
 
 ## Jakobson annotation
 
@@ -62,8 +60,9 @@ Each text unit records the six communication factors:
 | `code` | language, register, genre, and shared terminology |
 | `contact_channel` | communication channel or relation |
 
-Jakobson is an annotation lens, not memory. Legacy aggregate linguistic
-analysis is auxiliary and cannot override route/gate or semantic coverage.
+Jakobson is an optional annotation lens, not memory. Legacy aggregate
+linguistic analysis, route and gate are auxiliary and cannot override
+whole-message semantic coverage.
 
 ## Complete semantic coverage
 

@@ -2,7 +2,7 @@
 
 Package version: `0.2.0-beta.3`
 
-Storage schema version: `25`
+Storage schema version: `26`
 
 Current development line: **WP02 semantic candidate authority**.
 
@@ -34,14 +34,15 @@ poison. Memorist separates evidence, interpretation, persistence, and recall:
 Open WebUI chat
 -> immutable user/assistant capture
 -> TextEnvelope and exact text units
--> Jakobson v3 annotation
--> persisted route and persisted gate       (gate before candidate)
--> bounded semantic analysis v1
+-> structural envelope and exact spans
+-> whole-message model-led semantic analysis v1
+-> Message summary/categories/topics/concepts/process-stage ledger
+-> Jakobson/route/gate compatibility annotations (non-vetoing)
 -> strict schema and exact-evidence validation
 -> deterministic coverage and proposal identity
 -> replay-safe candidate persistence
 -> consolidation into versioned memories
--> scoped, budget-aware retrieval
+-> scoped canonical-memory + Message-evidence retrieval
 -> separate Memory Context Attachment       (untrusted data, not command)
 -> read-only "Memory used" display
 ```
@@ -62,6 +63,9 @@ fails open without an attachment.
 - **Use one semantic decision path in Lite and Full.** Both runtimes call the
   same `SemanticCandidatePlanningService`; storage adapters differ, semantic
   authority does not.
+- **Retrieve meaningful messages before promotion.** Model-generated query
+  understanding drives a scope-checked topic/concept/process-stage traversal;
+  a missing canonical claim no longer makes project evidence invisible.
 - **Import, export, and forget.** Imports remain untrusted historical evidence,
   Heritage packages are verifiable, and forget performs dependency traversal,
   residue checking, and receipt creation.

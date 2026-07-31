@@ -22,11 +22,17 @@ NON_REPAIRABLE_CATEGORIES = {"authentication", "quota", "incompatible", "timeout
 
 class OpenAICompatibleProviderError(RuntimeError):
     def __init__(
-        self, message: str, *, category: str = "transport", http_status: int | None = None
+        self,
+        message: str,
+        *,
+        category: str = "transport",
+        http_status: int | None = None,
+        latency_ms: int = 0,
     ):
         super().__init__(message)
         self.category = category
         self.http_status = http_status
+        self.latency_ms = latency_ms
 
 
 @dataclass(frozen=True)
@@ -34,7 +40,7 @@ class OpenAICompatibleProviderConfig:
     base_url: str
     model: str
     api_key: str | None = None
-    timeout_ms: int = 8000
+    timeout_ms: int = 120_000
     supports_structured_output: bool = False
     supports_json_mode: bool = True
 
@@ -63,7 +69,7 @@ class OpenAICompatibleMemoryExtractionProvider:
 
     @classmethod
     def from_profile(
-        cls, profile: dict[str, Any], *, timeout_ms: int = 8000
+        cls, profile: dict[str, Any], *, timeout_ms: int = 120_000
     ) -> OpenAICompatibleMemoryExtractionProvider:
         secret_env = profile.get("secret_env_var_name")
         api_key = os.environ.get(str(secret_env)) if secret_env else None
@@ -140,7 +146,11 @@ class OpenAICompatibleMemoryExtractionProvider:
         response_format = self._response_format(schema, schema_name)
         if response_format is not None:
             body["response_format"] = response_format
-        payload = self._post(body)
+        try:
+            payload = self._post(body)
+        except OpenAICompatibleProviderError as error:
+            error.latency_ms = max(error.latency_ms, int((time.perf_counter() - started) * 1000))
+            raise
         parsed, parse_error = _extract_structured_content(payload)
         usage = payload.get("usage") if isinstance(payload, dict) else {}
         return ProviderAttempt(

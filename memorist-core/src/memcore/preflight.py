@@ -139,11 +139,22 @@ class PreflightService:
                 session_uuid=request.session_uuid,
                 input_message_uuid=request.input_message_uuid,
             )
-            run, _plan, selection = RetrievalRunner(self.connection, self.settings).run(
+            retrieval_runner = RetrievalRunner(self.connection, self.settings)
+            run, plan = retrieval_runner.plan(
                 request.session_uuid,
                 request.input_message_uuid,
                 request.retrieval_mode,
                 budget.effective_token_budget,
+            )
+            query_understanding = self._run_preflight_model(
+                request,
+                run.retrieval_run_uuid,
+                budget.effective_token_budget,
+            )
+            selection = retrieval_runner.execute(
+                run,
+                plan,
+                query_understanding=query_understanding,
             )
             self.events.record_preflight_event(
                 "retrieval_completed",
@@ -154,11 +165,6 @@ class PreflightService:
                 session_uuid=request.session_uuid,
                 input_message_uuid=request.input_message_uuid,
                 retrieval_run_uuid=run.retrieval_run_uuid,
-            )
-            self._run_preflight_model(
-                request,
-                run.retrieval_run_uuid,
-                budget.effective_token_budget,
             )
             if _elapsed_ms(started) > self.settings.preflight_timeout_ms:
                 self.events.record_preflight_event(
@@ -276,7 +282,7 @@ class PreflightService:
         request: PreflightRequest,
         retrieval_run_uuid: str,
         effective_token_budget: int,
-    ) -> None:
+    ) -> dict[str, object] | None:
         repository = ModelControlRepository(self.connection)
         scope = self.connection.execute(
             "SELECT workspace_uuid, project_uuid FROM sessions WHERE session_uuid = ?",
@@ -306,7 +312,7 @@ class PreflightService:
                 "model_profile_uuid": profile_uuid,
                 "provider_type": provider.provider_type,
                 "model_name": provider.model_name,
-                "timeout_ms": self.settings.preflight_model_timeout_ms,
+                "timeout_ms": self.settings.preflight_timeout_ms,
             },
             session_uuid=request.session_uuid,
             input_message_uuid=request.input_message_uuid,
@@ -330,7 +336,7 @@ class PreflightService:
                 self.connection.commit()
                 response = provider.complete_structured(
                     _preflight_prompt(input_payload),
-                    timeout_seconds=self.settings.preflight_model_timeout_ms / 1000,
+                    timeout_seconds=self.settings.preflight_timeout_ms / 1000,
                 )
                 output = response.output_ijson
                 input_tokens = response.input_tokens
@@ -409,6 +415,7 @@ class PreflightService:
                 input_message_uuid=request.input_message_uuid,
                 retrieval_run_uuid=retrieval_run_uuid,
             )
+            return _query_understanding(output)
         except (PromptValidationError, TimeoutError, OSError, RuntimeError, ValueError) as error:
             latency_ms = _elapsed_ms(started)
             with suppress(Exception):
@@ -463,6 +470,7 @@ class PreflightService:
             )
             if not self.settings.preflight_fail_open:
                 raise
+            return None
 
     def _finish(
         self,
@@ -524,6 +532,18 @@ def _valid_preflight_planning_output(status: str, token_budget: int) -> dict[str
         "prompt_version": "2.0",
         "status": status,
         "warnings": [] if status == "ok" else ["preflight provider disabled"],
+        "query_understanding": {
+            "intent": "unknown",
+            "primary_topic": "unknown",
+            "secondary_topic": "unknown",
+            "entities": [],
+            "process_label": None,
+            "stage_ordinal": None,
+            "requested_operation": "recall",
+            "requested_time": None,
+            "expected_answer_type": "contextual_answer",
+            "relation_expansion_hints": [],
+        },
         "items": [
             {
                 "attachment_mode": "standard" if token_budget > 0 else "disabled",
@@ -564,3 +584,8 @@ def _preflight_input_payload(request: PreflightRequest, token_budget: int) -> di
 
 def _preflight_prompt(input_payload: dict[str, object]) -> str:
     return render_prompt("memorist.preflight_planning", "2.0", {"PAYLOAD_IJSON": input_payload})
+
+
+def _query_understanding(output: dict[str, object]) -> dict[str, object] | None:
+    value = output.get("query_understanding")
+    return dict(value) if isinstance(value, dict) else None

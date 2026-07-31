@@ -52,8 +52,8 @@ Operation 0 baseline versions and migration heads (historical freeze input):
 No WP02 migration number is reserved by this note.
 
 The implemented WP02 baseline now uses SQLite head
-`0037_semantic_coverage_audit.sql`, PostgreSQL head
-`0024_semantic_coverage_audit.sql`, and `role-contract-manifest-v3`.
+`0038_message_first_semantics.sql`, PostgreSQL head
+`0025_message_first_semantics.sql`, and `role-contract-manifest-v3`.
 The table above is retained to make the contract-freeze provenance auditable;
 it is not the current runtime/version status. Prompt Pack `2.0` and Jakobson
 `3.0` intentionally remained unchanged.
@@ -172,9 +172,9 @@ existing immutable capture
   -> current text units
   -> Jakobson v3
   -> persisted canonical route
-  -> persisted deterministic gate
-  -> bounded-context resolver
-  -> semantic_candidate_analysis v1
+  -> structural envelope + bounded-context resolver
+  -> whole-message semantic_candidate_analysis v1
+  -> persisted legacy route/gate annotations
   -> strict typed/schema validation
   -> WP01 evidence validation
   -> deterministic coverage planner
@@ -183,21 +183,21 @@ existing immutable capture
   -> consolidation
 ```
 
-The current pipelines make this safer than the older architecture sketch that
-placed semantic analysis before gate: both already persist route and gate before
-their candidate adapters.
+Schema 26 changes the authority boundary: legacy route/gate records remain
+durable audit and replay lineage, but ordinary classifications cannot prevent
+the model from seeing the whole meaningful message.
 
 The invariant is exact:
 
-1. `discard` and `retain_raw_only` do not call semantic candidate analysis and
-   cannot create a proposal.
-2. `manual_review` may call semantic analysis for review evidence but cannot
-   create an automatic proposal.
-3. `analyze` and `analyze_high_confidence` may proceed, subject to persisted
-   route, privacy, provenance, and sensitivity policy.
-4. Every adapter re-reads the persisted gate and route immediately before
-   candidate persistence. A model-returned gate or route field is forbidden.
-5. A gate or route change invalidates the coverage plan and proposal identity.
+1. `discard`, `retain_raw_only`, and `manual_review` are compatibility labels,
+   not pre-semantic vetoes.
+2. Memory Off, invalid ownership/scope/source, deleted/redacted/quarantined
+   evidence, and forbidden privacy/secret transfer still block locally.
+3. Every adapter rechecks source integrity, privacy and scope before candidate
+   persistence. Provider output cannot execute a write.
+4. Historical proposal identities retain legacy route/gate values in their
+   frozen vector, but changing those annotations alone does not invalidate a
+   completed semantic replay.
 
 Strict structure, semantic binding, and evidence integrity share the existing
 single repair budget. The sequence is:
@@ -665,8 +665,8 @@ projection only.
 
 The frozen semantic prompt/contract, ordered memory-extraction certification
 bundle, pure deterministic coverage planner, and content-free coverage replay
-stores are implemented. SQLite migration `0037_semantic_coverage_audit.sql`
-and PostgreSQL migration `0024_semantic_coverage_audit.sql` add only audit
+stores are implemented. SQLite migration `0038_message_first_semantics.sql`
+and PostgreSQL migration `0025_message_first_semantics.sql` add message semantics and audit
 metadata, hashes, offsets, dispositions, and lineage IDs.
 
 At the Operations 1-3 checkpoint these components were deliberately
@@ -712,19 +712,18 @@ System content, tool output, stale units, and cross-session or cross-scope
 records are excluded. Runtime context text remains in its canonical source
 records and is not copied into the coverage audit tables.
 
-If any persisted unit has a terminal `discard` or `retain_raw_only` gate, the
-message is failed closed before semantic model execution so gated material is
-never sent to that stage. `manual_review` may be analyzed but the coverage
-policy prevents automatic candidate creation. A deterministic or failed
-semantic execution produces an auditable abstention/zero-candidate plan; it
-never falls back into the legacy candidate extractor.
+Every ordinary meaningful message reaches whole-message semantic analysis.
+Only hard consent, source-integrity, scope and privacy boundaries short-circuit
+the provider. A deterministic or failed semantic execution produces an
+auditable abstention/zero-candidate or partial outcome and never falls back into
+the legacy candidate extractor.
 
 Remote provider attempts are still reserved before I/O. A completed semantic
 prompt execution is replayed from its validated audit output. Proposal UUIDs
 remain candidate UUIDs, candidate links are reserved before writes, and the
-final SQLite/PostgreSQL transaction locks and re-reads the persisted
-gate/route authority. Existing candidate/evidence rows from a recoverable
+final SQLite/PostgreSQL transaction locks and re-reads source/privacy authority.
+Existing candidate/evidence rows from a recoverable
 pre-link crash are verified and linked rather than duplicated.
 A restart may reuse a completed plan only after all durable links are complete
-and their persisted gate/route rows still authorize automatic creation;
-authority mutation makes replay fail closed.
+and their source/privacy bindings remain valid; hard-authority mutation makes
+replay fail closed.

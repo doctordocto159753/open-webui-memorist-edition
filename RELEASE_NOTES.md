@@ -1,15 +1,32 @@
 # Release Notes
 
+## Message-first model-led semantic repair (Draft PR #56)
+
+- Ordinary `discard`, `retain_raw_only`, and `manual_review` legacy annotations
+  no longer veto whole-message model analysis; hard consent, scope, source and
+  privacy boundaries remain local and fail closed.
+- Storage schema 26 adds Message summaries, categories, topics, canonical
+  concept aliases, entity/process-stage references, exact-span semantic units,
+  retrieval plans and explicit semantic job outcomes for SQLite/PostgreSQL.
+- Full projects the Message topology into rebuildable FalkorDB. Lite retrieval
+  can use scoped Message evidence when no canonical memory claim exists; Full
+  message-evidence query integration remains incomplete in this Draft.
+- Preflight defaults to 60 seconds; background processing roles default to 120
+  seconds with env overrides. Processing input/context settings default to
+  100,000 tokens, but provider-side budget enforcement remains incomplete.
+- Assistant completion capture now creates immutable initial versions and
+  rejects provider-response identity reuse with different content/attachment.
+
 ## v0.2.0-beta.3 — WP02 semantic candidate authority (current development baseline)
 
-- One shared Lite/Full semantic orchestration service now runs after persisted
-  route and gate authority.
+- One shared Lite/Full semantic orchestration service performs whole-message
+  model analysis; persisted route/gate rows are compatibility annotations.
 - The ordered memory-extraction certification bundle binds Jakobson v3 and
   semantic candidate analysis v1.
 - Deterministic material coverage, UUIDv5 proposal identity, and replay-safe
   SQLite/PostgreSQL proposal/candidate audit persistence are present.
-- Storage schema is `25`: SQLite migration `0037` and PostgreSQL migration
-  `0024`.
+- Storage schema is `26`: SQLite migration `0038` and PostgreSQL migration
+  `0025`.
 - See `docs/reference/core-memory-processing-walkthrough.md` for the exact
   prompt/response sequence.
 

@@ -51,8 +51,55 @@ class _ProviderHandler(BaseHTTPRequestHandler):
                     }
                 ],
             }
+        elif "memorist.semantic_candidate_analysis" in messages[0]["content"]:
+            input_payload = json.loads(messages[1]["content"])
+            raw = str(input_payload["current_raw_text"])
+            output = {
+                "schema_version": "1.0",
+                "prompt_id": "memorist.semantic_candidate_analysis",
+                "prompt_version": "1.0",
+                "status": "ok",
+                "warnings": [],
+                "intent": "project record",
+                "primary_topic": "imported project context",
+                "secondary_topic": "historical evidence",
+                "one_line_summary": (
+                    "project record > imported project context > historical evidence"
+                ),
+                "message_categories": [
+                    {
+                        "category": "ProjectArtifact",
+                        "normalized_label": "historical import",
+                        "confidence": 0.9,
+                    }
+                ],
+                "concept_tags": [],
+                "entities": [],
+                "process_references": [],
+                "epistemic_status": "unvalidated",
+                "temporal_status": "historical",
+                "importance": 0.5,
+                "explicit_memory_request": False,
+                "semantic_units": [
+                    {
+                        "id": "imported-unit",
+                        "raw_start": 0,
+                        "raw_end": len(raw),
+                        "evidence": raw,
+                        "proposition": raw,
+                        "unit_type": "statement",
+                        "memory_kind": "ProjectArtifact",
+                        "lifecycle_status": "historical",
+                        "durability": "durable",
+                        "polarity": "affirmed",
+                        "epistemic_status": "unvalidated",
+                    }
+                ],
+                "references": [],
+                "relations": [],
+            }
         else:
-            input_payload = json.loads(user_content)
+            input_payload = json.loads(messages[1]["content"])
             output = valid_jakobson_output()
             output["sentences"][0]["id"] = input_payload["sentences"][0]["id"]
             output["sentences"][0]["text"] = input_payload["sentences"][0]["text"]
@@ -216,7 +263,15 @@ def test_full_postgres_remote_provider_background_worker_e2e(
         assert all(item["model_profile_uuid"] == profile.model_profile_uuid for item in prompts)
         assert all(item["provider_type"] == "openai_compatible_llm" for item in prompts)
         assert all(item["model_name"] == "fake-import-model" for item in prompts)
-        assert all(item["model_role"] == "import_reconstruction" for item in prompts)
+        assert {item["model_role"] for item in prompts} == {
+            "import_reconstruction",
+            "memory_extraction",
+        }
+        with import_connection(settings) as verification_connection:
+            assert verification_connection.execute(
+                "SELECT COUNT(*) FROM message_semantic_analyses "
+                "WHERE source_role IN ('user', 'assistant')"
+            ).fetchone()[0] >= 1
         assert all(item["import_run_uuid"] == run_uuid for item in prompts)
         assert all(item["job_uuid"] for item in prompts)
         assert provider_credential not in database_rendering

@@ -37,7 +37,7 @@ class StageInvocationRequest(BaseModel):
     message_uuid: str | None = None
     prompt_id: str | None = None
     prompt_version: str | None = None
-    timeout_ms: int = Field(default=8_000, ge=50, le=120_000)
+    timeout_ms: int = Field(default=120_000, ge=50, le=900_000)
     idempotency_key: str | None = None
 
 

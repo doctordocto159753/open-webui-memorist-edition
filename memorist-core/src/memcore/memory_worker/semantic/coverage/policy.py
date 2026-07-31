@@ -25,20 +25,15 @@ def disposition_for_unit(
 ) -> DispositionDecision:
     """Apply the frozen WP02 precedence without interpreting raw language."""
 
-    gate = authority.gate_decision if authority is not None else None
-    if gate in {"discard", "retain_raw_only"}:
-        return DispositionDecision(CoverageDisposition.REJECTED_BY_GATE, (f"gate_{gate}",))
     if (
         authority is None
         or authority_count != 1
         or authority.conflicting_authority
-        or gate == "manual_review"
         or authority.gate_decision_uuid is None
         or authority.route_uuid is None
         or authority.annotation_uuid is None
         or authority.route_type is None
         or authority.route_status is None
-        or authority.route_status != "ready"
         or not authority.privacy_storage_allowed
         or authority.privacy_ceiling in {"sensitive", "secret"}
     ):
@@ -50,8 +45,6 @@ def disposition_for_unit(
         if authority is not None:
             if authority.conflicting_authority:
                 reasons.append("conflicting_persisted_authority")
-            if gate == "manual_review":
-                reasons.append("gate_manual_review")
             if authority.privacy_ceiling != "normal" or not authority.privacy_storage_allowed:
                 reasons.append("privacy_or_sensitivity_ceiling")
             if (
@@ -60,7 +53,6 @@ def disposition_for_unit(
                 or authority.annotation_uuid is None
                 or authority.route_type is None
                 or authority.route_status is None
-                or authority.route_status != "ready"
             ):
                 reasons.append("incomplete_authority_lineage")
         return DispositionDecision(

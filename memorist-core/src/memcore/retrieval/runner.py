@@ -1,4 +1,5 @@
 import sqlite3
+from collections.abc import Mapping
 from time import perf_counter
 
 from memcore.config import Settings
@@ -17,6 +18,7 @@ from memcore.models import (
 from memcore.repositories import MessageRepository, RepositoryError, SessionRepository
 from memcore.repositories.retrieval import RetrievalRepository
 from memcore.retrieval.generators import HybridCandidateGenerator
+from memcore.retrieval.message_evidence import MessageEvidenceRetriever
 from memcore.retrieval.planner import PLANNER_VERSION, DeterministicRetrievalPlanner
 from memcore.retrieval.ranking.reranker import safe_rerank
 from memcore.retrieval.ranking.scorer import DeterministicScorer
@@ -97,9 +99,23 @@ class RetrievalRunner:
         input_message_uuid: str,
         retrieval_mode: str,
         token_budget: int,
+        query_understanding: Mapping[str, object] | None = None,
     ) -> tuple[RetrievalRun, RetrievalPlan, SelectionResult]:
-        started = perf_counter()
         run, plan = self.plan(session_uuid, input_message_uuid, retrieval_mode, token_budget)
+        selection = self.execute(run, plan, query_understanding=query_understanding)
+        final_run = self.repository.get_run(run.retrieval_run_uuid)
+        if final_run is None:
+            raise RepositoryError(f"Retrieval run not found: {run.retrieval_run_uuid}")
+        return final_run, plan, selection
+
+    def execute(
+        self,
+        run: RetrievalRun,
+        plan: RetrievalPlan,
+        *,
+        query_understanding: Mapping[str, object] | None = None,
+    ) -> SelectionResult:
+        started = perf_counter()
         self.repository.mark_run_started(run.retrieval_run_uuid)
         generated = HybridCandidateGenerator(self.connection).generate(plan)
         candidates = [
@@ -127,6 +143,14 @@ class RetrievalRunner:
         ]
         scored = safe_rerank(sorted(scored, key=lambda item: item.final_score, reverse=True))
         selection = select_items(scored)
+        if not selection.selected:
+            message_items = MessageEvidenceRetriever(self.connection).retrieve(
+                session_uuid=run.session_uuid,
+                input_message_uuid=run.input_message_uuid,
+                query_understanding=query_understanding,
+            )
+            if message_items:
+                selection = SelectionResult(message_items)
         latency_ms = int((perf_counter() - started) * 1000)
         if selection.abstention_status:
             self.repository.mark_run_abstained(
@@ -139,12 +163,9 @@ class RetrievalRunner:
         self._persist_final_scores(run.retrieval_run_uuid, scored, selection.selected)
         DeliveryTraceService(self.connection).log_retrieval_run_delivery(
             run.retrieval_run_uuid,
-            input_message_uuid,
+            run.input_message_uuid,
         )
-        final_run = self.repository.get_run(run.retrieval_run_uuid)
-        if final_run is None:
-            raise RepositoryError(f"Retrieval run not found: {run.retrieval_run_uuid}")
-        return final_run, plan, selection
+        return selection
 
     def _persist_final_scores(
         self,

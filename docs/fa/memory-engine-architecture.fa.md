@@ -5,9 +5,9 @@
 
 ```text
 نسخه‌ی توسعه: 0.2.0-beta.3
-نسخه‌ی storage schema: 25
-SQLite migration head: 0037_semantic_coverage_audit.sql
-PostgreSQL migration head: 0024_semantic_coverage_audit.sql
+نسخه‌ی storage schema: 26
+SQLite migration head: 0038_message_first_semantics.sql
+PostgreSQL migration head: 0025_message_first_semantics.sql
 Prompt Pack: 2.0
 Jakobson: memorist.jakobson_sentence_analysis 3.0
 Semantic: memorist.semantic_candidate_analysis 1.0
@@ -111,27 +111,27 @@ Filter.inlet
 
 ```text
 capture
--> TextEnvelope v3
--> text units
--> Jakobson v3
--> persisted route
--> persisted gate
+-> TextEnvelope v3 و block/text units
 -> bounded-context resolver
--> semantic candidate analysis v1
+-> whole-message semantic candidate analysis v1
+-> Message summary/categories/topics/concepts/process-stage
+-> Jakobson/route/gate compatibility annotations
 -> strict validation
 -> WP01 exact-evidence validation
 -> deterministic coverage planner
 -> existing candidate service
 ```
 
-gateهای `discard` و `retain_raw_only` پیش از semantic call و candidate
-متوقف می‌شوند. `manual_review` candidate خودکار نمی‌سازد. adapter درست قبل
-از persistence، route/gate و snapshot را دوباره می‌خواند.
+gateهای `discard`، `retain_raw_only` و `manual_review` رکوردهای compatibility
+هستند و پیام عادی را پیش از semantic call متوقف نمی‌کنند. Memory Off،
+source/scope نامعتبر، deleted/redacted/quarantined و privacy/secret ceiling
+همچنان fail-closed هستند. adapter قبل از persistence، source/privacy/snapshot
+را دوباره می‌خواند.
 
-مدل می‌تواند semantic unit، proposition، reference/relation، durability،
-polarity و epistemic status پیشنهاد کند. route، gate، evidence acceptance،
-privacy، provenance، coverage disposition، identity و write در اختیار کد
-قطعی است.
+مدل summary سه‌بخشی، categories، topics، concept tags، entity/process-stage،
+semantic unit، proposition، reference/relation، durability، lifecycle، polarity
+و epistemic status پیشنهاد می‌کند. evidence acceptance، privacy، provenance،
+identity و write در اختیار کد قطعی است.
 
 ## context محدود
 

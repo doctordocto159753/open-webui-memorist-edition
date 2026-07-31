@@ -285,7 +285,7 @@ class Filter:
         if not actor_user or not actor_workspace:
             metadata["memorist_skipped_reason"] = "trusted_actor_identity_unavailable"
             return body
-        current_response_key = response_key(body, assistant_text)
+        current_response_key = response_key(body, assistant_text, str(input_message_uuid))
         if current_response_key in self._completed_response_keys:
             return body
         try:

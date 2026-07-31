@@ -77,6 +77,8 @@ class SemanticContextBoundary(_StrictInput):
 class SemanticContractVersions(_StrictInput):
     semantic_input: Literal["memorist.semantic_candidate_input.v1"]
     semantic_prompt: Literal["1.0"]
+    # Kept in v1 input identity for replay compatibility. Jakobson is a legacy
+    # annotation and no longer authorizes or vetoes this whole-message call.
     jakobson: Literal["3.0"]
     text_envelope: Literal["memorist.text.envelope.v3"]
     evidence_validator: Literal["memorist.text.semantic_evidence_validation.v1"]
@@ -182,6 +184,18 @@ def validate_semantic_binding(
     raw_length = len(semantic_input.current_raw_text)
     if any(unit.raw_start >= unit.raw_end or unit.raw_end > raw_length for unit in units):
         raise ValueError("semantic unit span is outside the current message")
+    for collection_name, records in (
+        ("concept", semantic_output.concept_tags),
+        ("entity", semantic_output.entities),
+        ("process", semantic_output.process_references),
+    ):
+        for record in records:
+            start = record.raw_start
+            end = record.raw_end
+            if (start is None) != (end is None):
+                raise ValueError(f"{collection_name} span must be complete or omitted")
+            if start is not None and end is not None and (start >= end or end > raw_length):
+                raise ValueError(f"{collection_name} span is outside the current message")
     sensitivity_rank = {
         SensitivityClass.NORMAL: 0,
         SensitivityClass.SENSITIVE: 1,

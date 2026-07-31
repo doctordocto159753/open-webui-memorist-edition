@@ -67,7 +67,6 @@ from memcore.validators.ijson import canonical_hash_ijson
 
 SEMANTIC_ORCHESTRATION_VERSION = "memorist.semantic_candidate.orchestration.v1"
 SEMANTIC_PRIVACY_POLICY_VERSION = "wp02-privacy-ceiling-v1"
-_TERMINAL_GATES = {"discard", "retain_raw_only"}
 
 
 def _assert_current_scope_eligible(scope: CurrentContextScope) -> None:
@@ -196,7 +195,7 @@ class SemanticCandidatePlanningResult:
 
 
 class SemanticCandidatePlanningService:
-    """Execute the frozen gate-before-semantic-before-candidate sequence."""
+    """Execute whole-message semantics before legacy promotion annotations."""
 
     def __init__(
         self,
@@ -265,9 +264,10 @@ class SemanticCandidatePlanningService:
                 for authority in authorities
             )
 
-        terminal_short_circuit = any(
-            authority.gate_decision in _TERMINAL_GATES for authority in authorities
-        )
+        # Routes, gates, and Jakobson annotations remain durable compatibility
+        # records, but ordinary legacy classifications no longer prevent the
+        # whole message from reaching model-led semantic analysis.
+        terminal_short_circuit = False
         privacy_short_circuit = (
             any(
                 not authority.privacy_storage_allowed
@@ -280,12 +280,7 @@ class SemanticCandidatePlanningService:
         stage_execution_uuid: str | None = None
         called_provider = False
         fallback_used = False
-        if terminal_short_circuit:
-            semantic_output = SemanticAnalysisV1Output.model_validate(
-                semantic_abstention("terminal_gate_before_semantic_analysis")
-            )
-            semantic_status = "skipped_by_gate"
-        elif privacy_short_circuit:
+        if privacy_short_circuit:
             # Do not duplicate sensitive current-message content in a remote
             # semantic call or its replay/audit output. The canonical message
             # remains the sole content-bearing record and coverage fails closed.

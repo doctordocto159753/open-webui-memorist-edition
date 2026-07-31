@@ -8,9 +8,9 @@ Current baseline:
 
 ```text
 development release: 0.2.0-beta.3
-storage schema: 25
-SQLite migration head: 0037_semantic_coverage_audit.sql
-PostgreSQL migration head: 0024_semantic_coverage_audit.sql
+storage schema: 26
+SQLite migration head: 0038_message_first_semantics.sql
+PostgreSQL migration head: 0025_message_first_semantics.sql
 Prompt Pack: 2.0
 Jakobson: memorist.jakobson_sentence_analysis 3.0
 Semantic analysis: memorist.semantic_candidate_analysis 1.0
@@ -25,7 +25,7 @@ follows one concrete prompt and response through the actual source paths.
 ## Architectural thesis
 
 ```text
-A message is evidence, not memory.
+A message is canonical retrievable evidence and a first-class graph node.
 A model output is a proposal, not authority.
 A candidate is a routed interpretation, not truth.
 A memory is a versioned, evidence-linked claim.
@@ -73,8 +73,8 @@ Filter.inlet
 -> session resolution
 -> idempotent user-message capture
 -> dynamic attachment budget
--> scoped retrieval plan
--> hybrid candidate generation
+-> model-assisted intent/topic/entity/process/stage retrieval plan
+-> canonical memory plus scoped Message-evidence candidate generation
 -> deterministic score/rerank/select or abstain
 -> bounded Memory Context Attachment
 -> delivery record
@@ -91,11 +91,11 @@ same preflight.
 ```text
 captured user or assistant message
 -> processing identity and authority snapshot
--> TextEnvelope and exact text units
--> Jakobson v3
--> persisted annotations/routes/gates
+-> TextEnvelope, structural blocks and exact text units
 -> bounded-context resolver
--> semantic candidate analysis v1
+-> whole-message semantic candidate analysis v1
+-> Message summary/categories/topics/concepts/entity/process-stage ledger
+-> persisted Jakobson/route/gate compatibility annotations
 -> strict and exact-evidence validation
 -> deterministic coverage plan
 -> deterministic proposal/candidate identity

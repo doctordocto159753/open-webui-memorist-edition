@@ -11,7 +11,7 @@ and erase it without depending on a remote service.**
 ```text
 Conversation events are evidence.
 Evidence produces memory candidates.
-Candidates become memories only after gate, routing, and consolidation.
+Model proposals become memories only after local safety and consolidation policy.
 Memories are retrieved through scoped, budget-aware retrieval.
 Retrieved memory is attached as data, not as command.
 ```
@@ -31,7 +31,7 @@ Open WebUI (parent chat UI)
 memorist-core (FastAPI, local)
   ├─ evidence ledger (SQLite in Lite, PostgreSQL in Full)
   ├─ priority write actor / write gateway
-  ├─ worker pipeline (units → Jakobson → route/gate → semantic coverage → candidates)
+  ├─ worker pipeline (envelope → whole-message semantics → coverage → candidates)
   ├─ retrieval planner and Memory Context Attachment builder
   ├─ Model Control Plane (roles, profiles, env-var secret references)
   ├─ import / Heritage export / restore
@@ -72,10 +72,10 @@ Deep dives: [SQLite runtime](reference/sqlite-runtime.md) ·
 message
 → message_version
 → session_event
-→ TextEnvelope + sentence/text unit
-→ Jakobson annotation
-→ canonical route + gate decision
-→ bounded semantic analysis + evidence validation
+→ TextEnvelope + structural block/text unit
+→ whole-message semantics + Message node metadata
+→ optional Jakobson/route/gate compatibility annotation
+→ bounded semantic-unit + evidence validation
 → deterministic coverage plan + proposal reservation
 → memory_candidate (+ evidence links, trust/provenance policy)
 → consolidation decision
@@ -104,9 +104,10 @@ When a user sends a message through Open WebUI:
    is queued, and no retrieval or attachment happens.
 4. With Memory On, the user message is captured unchanged, and Memorist
    calculates an attachment budget from the selected model's context window.
-5. Retrieval plans are scoped by workspace/project/session and query intent.
+5. The preflight model proposes intent/topic/entity/process/stage query
+   understanding; local code enforces workspace/project/session scope.
 6. Candidates come from active blocks, recent session state, FTS,
-   semantic/vector index, and optional graph projection; ranking prefers
+   semantic/vector index, Lite canonical Message evidence, and optional graph projection; ranking prefers
    current, scoped, high-confidence, evidence-backed memories, and conflicts
    are flagged rather than silently flattened.
 7. The attachment builder renders selected memory as a separate, bounded
@@ -130,9 +131,10 @@ The worker path is evidence-grounded and uses one shared Lite/Full semantic
 orchestration service:
 
 ```text
-message → TextEnvelope + sentence units → Jakobson v3
-→ persisted canonical route → persisted gate (gate before candidate)
-→ bounded same-authority context → semantic candidate analysis v1
+message → TextEnvelope + structural units
+→ whole-message semantic candidate analysis v1
+→ Message summary/categories/topics/concepts/process-stage persistence
+→ bounded same-authority context + legacy compatibility annotations
 → strict schema + exact-evidence validation
 → deterministic coverage/disposition + proposal UUID
 → replay-safe candidate/evidence persistence

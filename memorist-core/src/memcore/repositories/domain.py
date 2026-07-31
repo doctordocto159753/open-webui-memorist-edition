@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Mapping
 from enum import StrEnum
+from hashlib import sha256
 from typing import Any, cast
 
 from pydantic import BaseModel
@@ -249,6 +250,9 @@ class MessageRepository:
             raw_text=raw_text,
             raw_payload_ijson=_optional_ijson("raw_payload_ijson", raw_payload),
             snapshot_ijson=_optional_ijson("snapshot_ijson", snapshot),
+            content_hash=(
+                sha256(raw_text.encode("utf-8")).hexdigest() if raw_text is not None else None
+            ),
         )
         with self.connection:
             self.sqlite.insert("messages", _dump_model(message))
@@ -377,6 +381,9 @@ class MessageVersionRepository:
             snapshot_ijson=_optional_ijson("snapshot_ijson", snapshot),
             change_reason=change_reason,
             created_by=created_by,
+            content_hash=(
+                sha256(raw_text.encode("utf-8")).hexdigest() if raw_text is not None else None
+            ),
         )
         with self.connection:
             self.sqlite.insert("message_versions", _dump_model(version))

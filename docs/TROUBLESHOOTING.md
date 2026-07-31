@@ -25,7 +25,7 @@ Common failures, in the order people usually hit them.
 | A message was captured but created no memory | Open `/memcore/memory-processing/runs/<run-uuid>/stages`; `no_memory_reason` distinguishes no eligible signal, review, rejection, and consolidation with no result. |
 | Semantic coverage says `unresolved_reference` | The model did not supply one evidence-bound resolution inside the current two/six-unit same-session manifest. Memorist does not guess a referent. |
 | Semantic coverage says `needs_review` | Check gate/route lineage, assistant ratification, privacy ceiling, and accepted evidence. Assistant context and ambiguous acknowledgements cannot become user authority automatically. |
-| Restart reports a semantic replay identity conflict | The immutable message version, contract/policy versions, or current gate/route/privacy authority differs from the recorded plan. Preserve the audit rows and inspect the processing trace; do not delete links or edit UUIDs. |
+| Restart reports a semantic replay identity conflict | The immutable message version, contract/policy versions, source integrity, or privacy authority differs from the recorded plan. Legacy gate/route annotation changes alone do not veto replay. Preserve the audit rows and inspect the processing trace; do not delete links or edit UUIDs. |
 
 ## Provider / API key setup
 

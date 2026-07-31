@@ -4,6 +4,9 @@ import ast
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from memcore.memory_worker.execution import ContractExecutionOutcome
 from memcore.memory_worker.semantic.bounded_context import (
     BoundedContextResolver,
     CurrentContextScope,
@@ -119,12 +122,15 @@ def test_context_fail_closed_excludes_cross_scope_hidden_roles_stale_and_secrets
     }.issubset(result.exclusion_reason_codes)
 
 
-def test_terminal_gate_short_circuits_semantic_execution_and_candidates() -> None:
+def test_terminal_gate_is_legacy_annotation_and_semantic_model_still_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     adapter = _TerminalAdapter()
+    _stub_semantic_provider(monkeypatch, units=[])
     result = SemanticCandidatePlanningService(adapter).execute(
         SemanticCandidatePlanningRequest(
             message_uuid=adapter.scope.message_uuid,
-            processing_run_uuid="processing-run",
+                processing_run_uuid="00000000-0000-4000-8000-000000000100",
             profile={
                 "provider_type": "openai_compatible_llm",
                 "model_name": "must-not-run",
@@ -133,22 +139,41 @@ def test_terminal_gate_short_circuits_semantic_execution_and_candidates() -> Non
         )
     )
 
-    assert result.terminal_gate_short_circuit is True
-    assert result.semantic_called_provider is False
-    assert result.semantic_prompt_execution_uuid is None
+    assert result.terminal_gate_short_circuit is False
+    assert result.semantic_called_provider is True
+    assert result.semantic_prompt_execution_uuid is not None
     assert result.proposals == ()
     assert result.candidates == ()
-    assert {item.disposition.value for item in result.plan.items} == {"rejected_by_gate"}
-    assert adapter.record_calls == 0
+    assert {item.disposition.value for item in result.plan.items} == {"unsupported"}
+    assert adapter.record_calls == 1
     assert adapter.persisted_plan is result.plan
 
 
-def test_one_terminal_unit_short_circuits_provider_but_audits_eligible_sibling() -> None:
+def test_one_legacy_terminal_unit_does_not_veto_meaningful_sibling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     adapter = _MixedTerminalAdapter()
+    start = adapter.scope.raw_text.index("Keep")
+    _stub_semantic_provider(
+        monkeypatch,
+        units=[
+            {
+                "id": "unit-keep",
+                "raw_start": start,
+                "raw_end": len(adapter.scope.raw_text),
+                "evidence": adapter.scope.raw_text[start:],
+                "proposition": "Backups must remain enabled.",
+                "unit_type": "instruction",
+                "durability": "durable",
+                "polarity": "affirmed",
+                "epistemic_status": "asserted",
+            }
+        ],
+    )
     result = SemanticCandidatePlanningService(adapter).execute(
         SemanticCandidatePlanningRequest(
             message_uuid=adapter.scope.message_uuid,
-            processing_run_uuid="processing-run",
+                processing_run_uuid="00000000-0000-4000-8000-000000000100",
             profile={
                 "provider_type": "openai_compatible_llm",
                 "model_name": "must-not-run",
@@ -157,12 +182,12 @@ def test_one_terminal_unit_short_circuits_provider_but_audits_eligible_sibling()
         )
     )
 
-    assert result.terminal_gate_short_circuit is True
-    assert result.semantic_called_provider is False
-    assert result.semantic_prompt_execution_uuid is None
-    assert result.proposals == ()
-    assert result.candidates == ()
-    assert adapter.record_calls == 0
+    assert result.terminal_gate_short_circuit is False
+    assert result.semantic_called_provider is True
+    assert result.semantic_prompt_execution_uuid is not None
+    assert len(result.proposals) == 1
+    assert len(result.candidates) == 1
+    assert adapter.record_calls == 1
     assert adapter.persisted_plan is result.plan
     assert [
         (
@@ -172,8 +197,8 @@ def test_one_terminal_unit_short_circuits_provider_but_audits_eligible_sibling()
         )
         for item in result.plan.items
     ] == [
-        ("Discard", "rejected_by_gate", ("gate_discard",)),
-        ("Keep backups enabled", "unsupported", ("uncovered_material",)),
+        ("Discard", "unsupported", ("uncovered_material",)),
+        ("Keep backups enabled.", "durable_candidate", ("durable_policy_eligible",)),
     ]
 
 
@@ -182,7 +207,7 @@ def test_sensitive_message_never_reaches_semantic_provider_or_prompt_audit() -> 
     result = SemanticCandidatePlanningService(adapter).execute(
         SemanticCandidatePlanningRequest(
             message_uuid=adapter.scope.message_uuid,
-            processing_run_uuid="processing-run",
+            processing_run_uuid="00000000-0000-4000-8000-000000000100",
             profile={
                 "provider_type": "openai_compatible_llm",
                 "model_name": "must-not-run",
@@ -241,10 +266,10 @@ class _TerminalAdapter(_ContextSource):
         processing_run_uuid: str,
     ) -> tuple[PersistedUnitAuthority, ...]:
         assert message_uuid == self.scope.message_uuid
-        assert processing_run_uuid == "processing-run"
+        assert processing_run_uuid == "00000000-0000-4000-8000-000000000100"
         return (
             PersistedUnitAuthority(
-                text_unit_uuid="text-unit",
+                text_unit_uuid="00000000-0000-4000-8000-000000000101",
                 raw_start=0,
                 raw_end=len(self.scope.raw_text),
                 annotation_uuid="annotation",
@@ -262,11 +287,10 @@ class _TerminalAdapter(_ContextSource):
         return None
 
     def load_semantic_execution(self, **_: Any) -> None:
-        raise AssertionError("terminal gate must precede semantic replay/model execution")
+        return None
 
     def record_semantic_execution(self, **_: Any) -> None:
         self.record_calls += 1
-        raise AssertionError("terminal gate must not record a semantic prompt execution")
 
     def assert_runtime_snapshot(self, **_: Any) -> None:
         return None
@@ -277,7 +301,7 @@ class _TerminalAdapter(_ContextSource):
         return {"state": "created"}
 
     def reserve_and_link_candidate(self, **_: Any) -> dict[str, Any]:
-        raise AssertionError("terminal gate must not reserve a candidate")
+        return {"state": "candidate_linked"}
 
 
 class _PrivacyAdapter(_TerminalAdapter):
@@ -292,10 +316,10 @@ class _PrivacyAdapter(_TerminalAdapter):
         processing_run_uuid: str,
     ) -> tuple[PersistedUnitAuthority, ...]:
         assert message_uuid == self.scope.message_uuid
-        assert processing_run_uuid == "processing-run"
+        assert processing_run_uuid == "00000000-0000-4000-8000-000000000100"
         return (
             PersistedUnitAuthority(
-                text_unit_uuid="text-unit",
+                text_unit_uuid="00000000-0000-4000-8000-000000000101",
                 raw_start=0,
                 raw_end=len(self.scope.raw_text),
                 annotation_uuid="annotation",
@@ -332,30 +356,30 @@ class _MixedTerminalAdapter(_TerminalAdapter):
         processing_run_uuid: str,
     ) -> tuple[PersistedUnitAuthority, ...]:
         assert message_uuid == self.scope.message_uuid
-        assert processing_run_uuid == "processing-run"
+        assert processing_run_uuid == "00000000-0000-4000-8000-000000000100"
         second_start = self.scope.raw_text.index("Keep")
         return (
             PersistedUnitAuthority(
-                text_unit_uuid="text-unit-discard",
+                text_unit_uuid="00000000-0000-4000-8000-000000000102",
                 raw_start=0,
                 raw_end=second_start - 1,
-                annotation_uuid="annotation-discard",
-                gate_decision_uuid="gate-discard",
+                annotation_uuid="00000000-0000-4000-8000-000000000104",
+                gate_decision_uuid="00000000-0000-4000-8000-000000000105",
                 gate_decision="discard",
-                route_uuid="route-discard",
+                route_uuid="00000000-0000-4000-8000-000000000106",
                 route_type="ignore",
                 route_status="ignored",
                 privacy_ceiling="normal",
                 privacy_storage_allowed=True,
             ),
             PersistedUnitAuthority(
-                text_unit_uuid="text-unit-eligible",
+                text_unit_uuid="00000000-0000-4000-8000-000000000103",
                 raw_start=second_start,
                 raw_end=len(self.scope.raw_text),
-                annotation_uuid="annotation-eligible",
-                gate_decision_uuid="gate-eligible",
+                annotation_uuid="00000000-0000-4000-8000-000000000107",
+                gate_decision_uuid="00000000-0000-4000-8000-000000000108",
                 gate_decision="analyze",
-                route_uuid="route-eligible",
+                route_uuid="00000000-0000-4000-8000-000000000109",
                 route_type="project_context",
                 route_status="ready",
                 privacy_ceiling="normal",
@@ -366,8 +390,8 @@ class _MixedTerminalAdapter(_TerminalAdapter):
 
 def _scope(*, raw_text: str) -> CurrentContextScope:
     return CurrentContextScope(
-        message_uuid="message-current",
-        message_version_uuid="version-current",
+        message_uuid="00000000-0000-4000-8000-000000000110",
+        message_version_uuid="00000000-0000-4000-8000-000000000111",
         session_uuid="session-1",
         workspace_uuid="workspace-1",
         project_uuid="project-1",
@@ -418,3 +442,44 @@ def _process_message_source(source: str) -> str:
     tail = source[start:]
     next_method = tail.find("\n    def ", len("\n    def "))
     return tail if next_method < 0 else tail[:next_method]
+
+
+def _stub_semantic_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    units: list[dict[str, Any]],
+) -> None:
+    def execute(**_: Any) -> ContractExecutionOutcome:
+        return ContractExecutionOutcome(
+            output={
+                "schema_version": "1.0",
+                "prompt_id": "memorist.semantic_candidate_analysis",
+                "prompt_version": "1.0",
+                "status": "ok" if units else "abstain",
+                "warnings": [],
+                "semantic_units": units,
+                "references": [],
+                "relations": [],
+            },
+            status="ok" if units else "abstained",
+            called_provider=True,
+            provider_output_valid=True,
+            canonicalized=False,
+            repair_attempted=False,
+            repair_succeeded=False,
+            fallback_used=False,
+            fallback_reason=None,
+            capability_mode="json_schema",
+            provider_response_id="response-1",
+            input_tokens=100,
+            output_tokens=50,
+            latency_ms=25,
+            parse_status="parsed",
+            attempt_count=1,
+            validation_error_paths=[],
+        )
+
+    monkeypatch.setattr(
+        "memcore.memory_worker.semantic.orchestration.execute_semantic_candidate_contract",
+        execute,
+    )

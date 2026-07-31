@@ -5,7 +5,7 @@
 می‌کند. ترتیب زیر از مسیرهای اجرایی موجود در کد استخراج شده است؛ این سند
 طرح آینده یا خلاصه‌ی مفهومیِ مستقل از implementation نیست.
 
-نسخه‌ی مستندشده: `0.2.0-beta.3`، storage schema `25`، semantic candidate
+نسخه‌ی مستندشده: `0.2.0-beta.3`، storage schema `26`، semantic candidate
 contract `1.0`.
 
 ## مثال مکالمه
@@ -39,11 +39,10 @@ user prompt
 
 captured message
   -> TextEnvelope + text units
-  -> Jakobson v3
-  -> persisted route
-  -> persisted gate
-  -> bounded semantic context
-  -> semantic candidate analysis v1
+  -> structural envelope + exact block/span metadata
+  -> whole-message semantic candidate analysis v1
+  -> Message semantics ledger
+  -> optional Jakobson/route/gate compatibility annotations
   -> strict + evidence validation
   -> deterministic coverage plan
   -> proposal/candidate persistence
@@ -98,8 +97,10 @@ Filter ابتدا session را resolve می‌کند و سپس
 
 1. budget را از mode، سقف context مدل، conversation اخیر و حاشیه‌ی completion
    محاسبه می‌کند؛
-2. یک retrieval plan محدود به session/project/workspace می‌سازد؛
-3. candidateها را از منابع canonical و projectionهای مجاز تولید می‌کند؛
+2. مدل preflight یک query understanding محدود شامل intent، topic، entity،
+   process و stage/ordinal پیشنهاد می‌کند؛
+3. کد محلی همان plan را با scope و policy اجباری روی memory versions و Message
+   evidence و projectionهای مجاز اجرا می‌کند؛
 4. scoring قطعی، reranking امن و selection/abstention را اجرا می‌کند؛
 5. رخدادهای `retrieval_started`، `retrieval_completed` و نتیجه را ثبت می‌کند.
 
@@ -180,25 +181,27 @@ dependency hintها و hash را می‌سازد. unitizer سپس `text_units` �
 اعتبارسنجی می‌شوند؛ downstream مجاز نیست evidence را از متن normalize‌شده
 بازسازی کند.
 
-### 8. Jakobson v3، route و gate
+### 8. whole-message semantics و annotationهای سازگاری
 
-prompt `memorist.jakobson_sentence_analysis` نسخه‌ی `3.0` برای unitها اجرا
-می‌شود. اجرای remote قبل از I/O در `processing_provider_attempts` reserve و
-بعد از پاسخ finalize می‌شود. نتیجه‌ی معتبر در
-`prompt_execution_runs`/`processing_stage_runs` و annotationهای Jakobson ثبت
-می‌شود.
+فراخوانی authoritative روی کل پیام با
+`memorist.semantic_candidate_analysis` انجام می‌شود. heading، list، table،
+code fence، fragment و متن فارسی/انگلیسی conventional-sentence gate نیستند.
+اجرای remote قبل از I/O در `processing_provider_attempts` reserve و بعد از
+پاسخ finalize می‌شود؛ timeout و failure latency واقعی دارند و فقط یک repair
+ساختاری مجاز است.
 
-پس از آن deterministic code:
+مدل در یک نتیجه‌ی ساختاری پیشنهاد می‌کند:
 
-1. annotationها را به routeهای canonical نگاشت می‌کند؛
-2. route و status را persist می‌کند؛
-3. gate را محاسبه و persist می‌کند؛
-4. analysisهای legacy را فقط به‌عنوان داده‌ی کمکی نگه می‌دارد.
+1. intent، primary/secondary topic و summary سه‌بخشی؛
+2. چند Message category و حداکثر پنج concept tag؛
+3. entity، process، stage/ordinal، epistemic/temporal status؛
+4. semantic unitهای exact-span با memory kind و lifecycle proposal.
 
-Gate همیشه قبل از semantic candidate و candidate persistence است.
-`discard` و `retain_raw_only` provider semantic را صدا نمی‌زنند و candidate
-نمی‌سازند. `manual_review` می‌تواند پوشش audit داشته باشد ولی candidate
-خودکار ندارد.
+Jakobson v3، route و gate قدیمی هنوز اجرا و persist می‌شوند تا audit و replay
+تاریخی شکسته نشود، اما authority semantic نیستند و `discard`،
+`retain_raw_only` یا `manual_review` معمولی دیگر فراخوانی کل‌پیام را veto
+نمی‌کند. فقط Memory Off، source/scope نامعتبر، deleted/redacted/quarantined و
+privacy/secret ceiling قبل از provider fail-closed هستند.
 
 ### 9. context محدود semantic از history canonical ساخته می‌شود
 
@@ -222,9 +225,8 @@ authority آن را ارتقا دهد.
 
 ### 10. یک semantic call، validation و coverage کامل
 
-`SemanticCandidatePlanningService` تنها orchestration مشترک است. برای gateهای
-مجاز prompt `memorist.semantic_candidate_analysis` نسخه‌ی `1.0` را یک بار روی
-کل پیام اجرا می‌کند:
+`SemanticCandidatePlanningService` orchestration مشترک است و prompt را یک بار
+روی کل پیام اجرا می‌کند:
 
 ```text
 parse
@@ -235,9 +237,10 @@ parse
 -> contract-valid abstention fallback
 ```
 
-مدل فقط semantic unit، proposition، reference/relation، durability، polarity
-و epistemic status پیشنهاد می‌کند. route، gate، privacy، provenance،
-disposition، UUID و persistence متعلق به deterministic code هستند.
+مدل semantic message metadata و unit، proposition، reference/relation،
+durability، polarity، memory kind و lifecycle status پیشنهاد می‌کند. privacy،
+scope، provenance، UUID، lifecycle validation و persistence متعلق به کد محلی
+هستند. «دستور را اجرا نکن» به معنی «دستور را تحلیل نکن» نیست.
 
 `CoveragePlanner` برای هر unit پذیرفته‌شده دقیقاً یک item و برای material
 پوشش‌داده‌نشده یک `unsupported/uncovered_material` item می‌سازد. reference
@@ -269,6 +272,42 @@ disposition، UUID و persistence متعلق به deterministic code هستند.
 existing state را برمی‌گرداند؛ hash متفاوت deterministic identity conflict
 است. بنابراین restart یا تحویل دوباره‌ی job candidate تکراری نمی‌سازد.
 
+### 11.1. Message به‌عنوان node canonical قابل بازیابی
+
+هر خروجی semantic معتبر در `message_semantic_analyses` به `messages`، آخرین
+`message_versions`، processing run و prompt/stage execution وصل می‌شود. محتوای
+خام دوباره در audit کپی نمی‌شود. داده‌های normalized در این جداول هستند:
+
+```text
+message_semantic_categories    multi-select base category
+canonical_concepts             concept canonical identity
+concept_aliases                Persian/English/acronym aliases
+message_concept_tags           at most five tags plus confidence/span
+message_semantic_units         exact span, kind, epistemic/lifecycle state
+message_entity_references      scoped entity links
+message_process_references     process + stage label/ordinal
+semantic_job_outcomes          semantic meaning of generic job success
+model_retrieval_plans          reserved schema; persistence is not wired yet
+```
+
+نمونه‌ی artifact:
+
+```json
+{
+  "one_line_summary": "project proposal > DPQTP > multipath post-quantum transport",
+  "message_categories": ["ProjectArtifact", "Hypothesis", "Question"],
+  "epistemic_status": "proposed",
+  "concept_tags": ["DPQTP", "post-quantum transport", "multipath routing"],
+  "semantic_outcome": "succeeded_with_candidates_only"
+}
+```
+
+Job canonical برای compatibility همچنان `succeeded` می‌شود، ولی diagnostics
+میان `succeeded_with_memory`، `succeeded_with_candidates_only`،
+`succeeded_no_candidate`، `succeeded_with_abstention`،
+`succeeded_with_partial_semantics` و `succeeded_with_failed_open_stage` فرق
+می‌گذارد.
+
 ### 12. candidate stages و consolidation
 
 candidateهای مجاز از policyهای privacy و high-confidence عبور می‌کنند.
@@ -298,6 +337,52 @@ inlet جدید ابتدا آن پیام را capture می‌کند. preflight ا
 واقعاً delivery شده‌اند از audit rows نمایش می‌دهد؛ UI از متن model یا
 metadata مرورگر برای ادعای delivery استفاده نمی‌کند.
 
+### مثال SCF مرحله‌ی سوم
+
+برای query زیر:
+
+> در خصوص مرحله سوم SCF چه تدابیری باید اندیشید؟
+
+preflight model می‌تواند plan زیر را پیشنهاد دهد:
+
+```json
+{
+  "intent": "problem-solving/mitigation",
+  "primary_topic": "scf",
+  "process_label": "supply continuity framework",
+  "stage_ordinal": 3,
+  "relation_expansion_hints": ["need", "constraint", "decision", "problem"]
+}
+```
+
+`MessageEvidenceRetriever` عبارت‌ها را تفسیر نمی‌کند؛ alias canonical `SCF`
+را به concept/process node و ordinal `3` را به `ProcessStage` ثبت‌شده تطبیق
+می‌دهد، scope user/workspace/project را fail-closed اعمال می‌کند و messageهای
+مرتبط را rank می‌کند. تست `tests/test_message_first_retrieval.py` ثابت می‌کند
+که evidence انگلیسی «stabilization phase C» بدون وجود عبارت فارسی query و
+بدون canonical MemoryClaim در attachment قرار می‌گیرد. در Full همان topology
+با edges `MESSAGE_IN_SESSION`، `MESSAGE_IN_PROJECT`, `HAS_MESSAGE_TYPE`,
+`HAS_INTENT`, `HAS_PRIMARY_TOPIC`, `HAS_SECONDARY_TOPIC`, `HAS_CONCEPT_TAG`,
+`MENTIONS_ENTITY`, `REFERS_TO_PROCESS`, `REFERS_TO_STAGE`, `DERIVED_CLAIM` و
+`EVIDENCES` در FalkorDB projection می‌شود؛ graph-down به canonical query برمی‌گردد.
+
+### سه نمونه‌ی authority
+
+Explicit memory: عبارت «این را به‌عنوان تصمیم پایدار به خاطر بسپار» باید
+`explicit_memory_request=true`، category=`Decision` و durability بالا پیشنهاد
+کند، اما privacy/scope/write validation همچنان محلی است.
+
+Implicit artifact: proposal بدون «remember» به‌صورت
+`ProjectArtifact`/`Hypothesis` و epistemic=`proposed` قابل بازیابی است؛ به حقیقت
+عینی تبدیل نمی‌شود.
+
+Instruction/preference: «برای معماری فنی و مرحله‌ای جواب بده» توسط مدل
+پردازشی اجرا نمی‌شود، اما می‌تواند `Instruction` و `Preference` scoped باشد.
+
+Assistant ratification: assistant message با `assistant_claim` ذخیره و قابل
+retrieval است. فقط پیام user بعدی با relation صریح `ratifies`/`corrects` می‌تواند
+claim مشخص را با lineage دستیار promote کند.
+
 ## Lite و Full کجا متفاوت‌اند؟
 
 | مرحله | Lite | Full |
@@ -306,14 +391,14 @@ metadata مرورگر برای ادعای delivery استفاده نمی‌کن�
 | worker adapter | `MemoryWorkerPipeline` | `PostgresMemoryWorkerPipeline` |
 | semantic orchestration | `SemanticCandidatePlanningService` مشترک | همان service |
 | coverage/candidate replay | SQLite repository | PostgreSQL repository/locks |
-| graph | اختیاری/غیر canonical | FalkorDB از outbox، غیر canonical |
+| graph | canonical relation query روی SQLite؛ graph اختیاری | FalkorDB از outbox، غیر canonical |
 | semantic decision | یکسان | یکسان |
 
 ## invariantsی که این sequence حفظ می‌کند
 
 - Memory Off پیش از capture و recall متوقف می‌کند.
-- gate پیش از هر candidate است و adapter پیش از persistence آن را دوباره
-  می‌خواند.
+- مدل قبل از legacy promotion annotation پیام عادی را می‌بیند؛ privacy/scope
+  پیش از هر provider و persistence دوباره اعتبارسنجی می‌شوند.
 - context بین session، user، workspace یا project نشت نمی‌کند.
 - assistant content بدون ratification صریح user authority نمی‌گیرد.
 - ambiguity حل‌نشده، حل‌نشده باقی می‌ماند.
@@ -322,6 +407,30 @@ metadata مرورگر برای ادعای delivery استفاده نمی‌کن�
 - candidate و evidence به exact raw span متصل‌اند.
 - restart و replay candidate تکراری نمی‌سازند.
 - PostgreSQL/SQLite authority هستند؛ embedding و FalkorDB projection هستند.
+
+## timeout، token و failure contract
+
+- `MEMORIST_PREFLIGHT_TIMEOUT_MS=60000` به call واقعی provider می‌رسد و timeout
+  همچنان chat را fail-open نگه می‌دارد.
+- processing role override، سپس
+  `MEMORIST_PROCESSING_NODE_DEFAULT_TIMEOUT_MS=120000` و سپس built-in default
+  اعمال می‌شود؛ default فعال `8000` باقی نمانده است.
+- input/context settings برابر 100000 token هستند و helper کمینه‌سازی
+  certified/provider/role limit وجود دارد؛ اتصال این budget به همه‌ی provider
+  requestها هنوز کامل نیست و output budgets صرفاً جداگانه پیکربندی می‌شوند.
+- attempt success، parse/schema failure، repair، timeout و transport failure
+  elapsed latency واقعی ثبت می‌کنند.
+
+## محدودیت‌های صادقانه‌ی این نسخه
+
+این pass مدل semantic پیام، Message graph، SCF retrieval و evidence fallback را
+در Lite production-integrated کرده است؛ Full projection موجود است ولی Full
+query path هنوز Message evidence را مصرف نمی‌کند. جدول retrieval plan نیز
+فعلاً reserved است و write path ندارد. consolidation موجود هنوز برای همه‌ی عملیات
+`ADD/REINFORCE/UPDATE/SUPERSEDE/CONTRADICT/RETRACT` یک مقایسه‌ی remote مدل‌محور
+جداگانه اجرا نمی‌کند؛ policy/version history فعلی حفظ شده است. provider quota
+scheduler مشترک endpoint+credential+model نیز هنوز به‌طور کامل بین processها
+توزیع‌شده نیست. بنابراین این دو مورد قابلیت پیاده‌شده ادعا نمی‌شوند.
 
 ## مسیرهای کد مرجع
 

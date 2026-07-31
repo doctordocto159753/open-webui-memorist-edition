@@ -4,7 +4,7 @@ This guide covers running Memorist locally: the Windows-first one-click
 release path, the cross-platform script path, and first-run configuration.
 Developer setup from source lives in [DEVELOPMENT.md](DEVELOPMENT.md).
 
-> **Status:** `0.2.0-beta.3` beta development candidate, storage schema `25`.
+> **Status:** `0.2.0-beta.3` beta development candidate, storage schema `26`.
 > **Lite** uses SQLite. **Full** uses PostgreSQL with FalkorDB as a rebuildable
 > graph projection. Consolidated CI validates both runtime paths and Product
 > E2E on hosted runners; native Windows desktop validation remains separate.
@@ -131,7 +131,7 @@ authentication last validated, and certification current/stale as separate
 facts. A default can be removed safely from the same page.
 
 Provider health tests use `MEMORIST_PROVIDER_TEST_TIMEOUT_MS` (60 seconds by
-default), independently from the 1.2-second interactive preflight timeout.
+default), independently from the configurable 60-second interactive preflight timeout.
 Control, capture, diagnostics, and import operations also have separate
 timeouts. Strict-structured providers receive a constant JSON schema; JSON
 object providers get one bounded corrective retry for an exact marker mismatch.
@@ -255,11 +255,14 @@ stage succeeds again.
 - Remote semantic quality depends on the profiles and models you configure.
 
 For failures, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
-# Schema 25 upgrade
+# Schema 26 upgrade
 
-Normal startup applies additive migrations through storage schema `25`.
+Normal startup applies additive migrations through storage schema `26`.
 Schema 24 introduced provider-attempt fencing; schema 25 adds content-free
 semantic coverage and candidate-link audit tables (`0037` SQLite / `0024`
 PostgreSQL). Existing canonical message and memory rows are preserved. Back up
 the canonical database before upgrading. Do not delete Docker volumes as an
 upgrade step.
+Schema 26 adds message-level semantics, concept aliases, process/stage
+references, semantic outcomes and retrieval plans (`0038` SQLite / `0025`
+PostgreSQL) without duplicating raw message text.

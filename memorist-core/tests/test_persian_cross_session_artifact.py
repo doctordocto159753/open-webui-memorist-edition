@@ -38,7 +38,7 @@ PERSIAN_FOLLOW_UP = (
 
 
 @pytest.mark.parametrize("author_role", ["user", "assistant"])
-def test_persian_eleven_stage_plan_retain_raw_gate_prevents_cross_session_authority(
+def test_persian_eleven_stage_plan_legacy_gate_does_not_veto_semantic_analysis(
     tmp_path: Path,
     author_role: str,
 ) -> None:
@@ -78,7 +78,13 @@ def test_persian_eleven_stage_plan_retain_raw_gate_prevents_cross_session_author
 
     processing = MemoryWorkerPipeline(connection, settings).process_message(source.message_uuid)
     assert preceding_user_uuid is None or author_role == "assistant"
-    assert processing["semantic_terminal_gate_short_circuit"] is True
+    assert processing["semantic_terminal_gate_short_circuit"] is False
+    assert processing["semantic_outcome"] in {
+        "succeeded_no_candidate",
+        "succeeded_with_abstention",
+        "succeeded_with_failed_open_stage",
+        "succeeded_with_partial_semantics",
+    }
     assert processing["candidates"] == 0
     assert (
         connection.execute(
@@ -100,7 +106,7 @@ def test_persian_eleven_stage_plan_retain_raw_gate_prevents_cross_session_author
             (processing["processing_run_uuid"],),
         )
     }
-    assert dispositions == {"rejected_by_gate"}
+    assert dispositions == {"unsupported"}
 
     recall_session = sessions.create_session(
         workspace_uuid=workspace.workspace_uuid,

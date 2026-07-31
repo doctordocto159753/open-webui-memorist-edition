@@ -22,7 +22,8 @@ Read-heavy routes open short-lived local SQLite connections.
 
 ## WP02 audit and replay
 
-Migration `0037_semantic_coverage_audit.sql` adds
+Migration `0038_message_first_semantics.sql` adds the Message semantics ledger;
+the preceding `0037_semantic_coverage_audit.sql` adds
 `semantic_coverage_runs`, `semantic_coverage_items`, and
 `semantic_candidate_links`. These rows contain hashes, versions, dispositions,
 lineage UUIDs, and reason codes—not raw evidence, propositions, or bounded

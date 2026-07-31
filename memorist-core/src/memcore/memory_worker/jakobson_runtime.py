@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from memcore.config import get_settings
 from memcore.memory_worker.attempt_audit import ProviderAttemptAuditRepository
 from memcore.memory_worker.execution import (
     ContractExecutionOutcome,
@@ -40,7 +41,7 @@ def execute_jakobson_contract(
     input_payload: dict[str, Any],
     deterministic_builder: Callable[[], dict[str, Any]],
     revalidate: Callable[[], None] | None = None,
-    timeout_ms: int = 8000,
+    timeout_ms: int | None = None,
     allow_fallback: bool = True,
     attempt_audit: ProviderAttemptAuditRepository | None = None,
 ) -> ContractExecutionOutcome:
@@ -86,7 +87,14 @@ def execute_jakobson_contract(
             attempt_audit=attempt_audit,
         )
 
-    provider = OpenAICompatibleMemoryExtractionProvider.from_profile(profile, timeout_ms=timeout_ms)
+    effective_timeout_ms = int(
+        profile.get("timeout_ms")
+        or timeout_ms
+        or get_settings().processing_timeout_ms("memory_extraction")
+    )
+    provider = OpenAICompatibleMemoryExtractionProvider.from_profile(
+        profile, timeout_ms=effective_timeout_ms
+    )
     system_prompt = render_prompt(
         JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
         JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
