@@ -65,17 +65,15 @@ def lite_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
     return settings
 
 
-def _route_client(settings: Settings, schemas: Any) -> type:
+def _route_client(schemas: Any, outcomes: list[dict[str, Any]]) -> type:
     """A transport-only stand-in that calls the real Core route handlers."""
 
     class LiteRouteClient:
-        outcomes: list[dict[str, Any]] = []
-
         def __init__(self, _config: object) -> None:
             pass
 
         def record_integration_outcome(self, **kwargs: Any) -> dict[str, Any]:
-            LiteRouteClient.outcomes.append(dict(kwargs))
+            outcomes.append(dict(kwargs))
             return {"status": "recorded"}
 
         def resolve_turn_policy(self, **kwargs: Any) -> Any:
@@ -162,7 +160,6 @@ def _route_client(settings: Settings, schemas: Any) -> type:
                 )
             )
 
-    del settings
     return LiteRouteClient
 
 
@@ -174,9 +171,8 @@ def test_persian_durable_decision_crosses_chats_through_the_real_filter(
         sys.path.insert(0, str(integration_root))
     filter_module = importlib.import_module("filter.memorist_memory_filter")
     schemas = importlib.import_module("shared.schemas")
-    client = _route_client(lite_settings, schemas)
-    client.outcomes = []
-    monkeypatch.setattr(filter_module, "MemoristClient", client)
+    outcomes: list[dict[str, Any]] = []
+    monkeypatch.setattr(filter_module, "MemoristClient", _route_client(schemas, outcomes))
 
     actor = {"id": USER, "workspace_id": WORKSPACE}
     source_chat = f"chat-source-{uuid4().hex}"
@@ -301,7 +297,7 @@ def test_persian_durable_decision_crosses_chats_through_the_real_filter(
         assert versions == 1
 
     # The whole flow is audited end to end, including the cross-chat recall.
-    assert [(row["stage"], row["outcome"]) for row in client.outcomes] == [
+    assert [(row["stage"], row["outcome"]) for row in outcomes] == [
         ("capture", "ok"),
         ("recall", "ok"),
         ("capture", "ok"),
