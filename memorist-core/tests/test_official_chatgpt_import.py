@@ -215,7 +215,7 @@ def test_full_reconstruction_tracks_every_message_and_creates_memory_artifacts(
     assert report["processing_jobs_skipped"] == 8
     assert report["memory_candidates_created"] >= 1
     assert report["memory_versions_created"] >= 1
-    assert report["prompt_execution_runs"] == 4
+    assert report["prompt_execution_runs"] == 6
     assert (
         connection.execute(
             """
@@ -226,7 +226,7 @@ def test_full_reconstruction_tracks_every_message_and_creates_memory_artifacts(
         """,
             (run_uuid,),
         ).fetchone()[0]
-        == 1
+        == 3
     )
     assert report["model_usage_events"] >= 6
     assert all(item["status"] in {"succeeded", "skipped"} for item in final_statuses)

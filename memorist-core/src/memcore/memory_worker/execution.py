@@ -186,7 +186,7 @@ def run_contract_execution(
             provider_response_id=None,
             input_tokens=0,
             output_tokens=0,
-            latency_ms=0,
+            latency_ms=error.latency_ms,
             attempt_count=attempt_audit.count() if attempt_audit is not None else 1,
             validation_error_paths=[],
         )
@@ -321,7 +321,7 @@ def run_contract_execution(
             provider_response_id=provider_response_id,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            latency_ms=latency_ms,
+            latency_ms=latency_ms + error.latency_ms,
             attempt_count=attempt_audit.count() if attempt_audit is not None else 2,
             validation_error_paths=_paths(last_issues),
         )

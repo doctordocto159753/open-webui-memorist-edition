@@ -26,6 +26,7 @@ from memcore.memory_worker.prompts.versions import (
     JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
     JAKOBSON_SENTENCE_ANALYSIS_V3_VERSION,
     SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID,
+    SEMANTIC_CANDIDATE_ANALYSIS_V1_VERSION,
     SEMANTIC_CANDIDATE_ANALYSIS_VERSION,
 )
 
@@ -115,12 +116,114 @@ class JakobsonV3Output(_Strict):
         return self
 
 
-SemanticUnitType = Literal["statement", "instruction", "question", "explanation"]
+SemanticUnitType = Literal[
+    "statement",
+    "instruction",
+    "question",
+    "explanation",
+    "heading",
+    "list_item",
+    "table_row",
+    "code_block",
+    "fragment",
+]
 SemanticDurability = Literal["durable", "transient", "context_only", "unknown"]
 SemanticPolarity = Literal["affirmed", "negated", "unknown"]
 SemanticEpistemicStatus = Literal["asserted", "hedged", "hypothetical", "questioned", "unknown"]
 SemanticReferenceStatus = Literal["resolved", "unresolved", "ambiguous"]
 SemanticRelationType = Literal["ratifies", "corrects", "supersedes", "contradicts", "elaborates"]
+MessageCategory = Literal[
+    "Instruction",
+    "Need",
+    "Preference",
+    "Decision",
+    "ProjectArtifact",
+    "ProjectState",
+    "FactClaim",
+    "Hypothesis",
+    "Constraint",
+    "Question",
+    "LearningGoal",
+    "Feedback",
+    "Correction",
+    "Retraction",
+    "Process",
+    "Other",
+]
+MessageEpistemicStatus = Literal[
+    "asserted",
+    "proposed",
+    "hypothetical",
+    "hedged",
+    "questioned",
+    "unvalidated",
+    "confirmed",
+    "corrected",
+    "contradicted",
+    "retracted",
+    "unknown",
+]
+MemoryKind = Literal[
+    "Instruction",
+    "Need",
+    "Preference",
+    "Decision",
+    "ProjectArtifact",
+    "ProjectState",
+    "FactClaim",
+    "Hypothesis",
+    "Constraint",
+    "Question",
+    "LearningGoal",
+    "Feedback",
+    "Correction",
+    "Retraction",
+]
+
+
+class MessageCategoryTag(_SemanticStrict):
+    category: MessageCategory
+    normalized_label: str = ""
+    confidence: Annotated[float, Field(ge=0, le=1)] = 0.5
+
+
+class MessageConceptTag(_SemanticStrict):
+    canonical_label: Annotated[str, Field(min_length=1)]
+    aliases: list[str] = []
+    confidence: Annotated[float, Field(ge=0, le=1)] = 0.5
+    raw_start: Annotated[int, Field(ge=0)] | None = None
+    raw_end: Annotated[int, Field(gt=0)] | None = None
+
+    @model_validator(mode="after")
+    def _span_is_complete(self) -> MessageConceptTag:
+        if (self.raw_start is None) != (self.raw_end is None):
+            raise ValueError("concept span must be complete or omitted")
+        if (
+            self.raw_start is not None
+            and self.raw_end is not None
+            and self.raw_start >= self.raw_end
+        ):
+            raise ValueError("concept raw_start must be less than raw_end")
+        return self
+
+
+class MessageEntity(_SemanticStrict):
+    canonical_name: Annotated[str, Field(min_length=1)]
+    entity_type: str = "Entity"
+    aliases: list[str] = []
+    confidence: Annotated[float, Field(ge=0, le=1)] = 0.5
+    raw_start: Annotated[int, Field(ge=0)] | None = None
+    raw_end: Annotated[int, Field(gt=0)] | None = None
+
+
+class MessageProcessReference(_SemanticStrict):
+    process_label: Annotated[str, Field(min_length=1)]
+    aliases: list[str] = []
+    stage_label: str | None = None
+    stage_ordinal: Annotated[int, Field(ge=1)] | None = None
+    confidence: Annotated[float, Field(ge=0, le=1)] = 0.5
+    raw_start: Annotated[int, Field(ge=0)] | None = None
+    raw_end: Annotated[int, Field(gt=0)] | None = None
 
 
 class SemanticUnit(_SemanticStrict):
@@ -133,6 +236,8 @@ class SemanticUnit(_SemanticStrict):
     durability: SemanticDurability
     polarity: SemanticPolarity
     epistemic_status: SemanticEpistemicStatus
+    memory_kind: MemoryKind | None = None
+    lifecycle_status: str = "unknown"
 
 
 class SemanticReference(_SemanticStrict):
@@ -161,10 +266,55 @@ class SemanticAnalysisV1Output(_SemanticStrict):
 
     schema_version: Literal["1.0"]
     prompt_id: Literal["memorist.semantic_candidate_analysis"]
+    prompt_version: Literal["1.1"]
+    status: Literal["ok", "abstain"]
+    warnings: list[str]
+    intent: str = "unknown"
+    primary_topic: str = "unknown"
+    secondary_topic: str = "unknown"
+    one_line_summary: str = "unknown > unknown > unknown"
+    message_categories: list[MessageCategoryTag] = []
+    concept_tags: list[MessageConceptTag] = []
+    entities: list[MessageEntity] = []
+    process_references: list[MessageProcessReference] = []
+    epistemic_status: MessageEpistemicStatus = "unknown"
+    temporal_status: str = "unknown"
+    importance: Annotated[float, Field(ge=0, le=1)] = 0.5
+    explicit_memory_request: bool = False
+    semantic_units: list[SemanticUnit]
+    references: list[SemanticReference]
+    relations: list[SemanticRelation]
+
+    @model_validator(mode="after")
+    def _message_metadata_is_bounded(self) -> SemanticAnalysisV1Output:
+        if len(self.concept_tags) > 5:
+            raise ValueError("concept_tags must contain at most five items")
+        if self.one_line_summary.count(" > ") != 2:
+            raise ValueError("one_line_summary must use intent > primary topic > secondary topic")
+        return self
+
+
+class LegacySemanticUnitV1(_SemanticStrict):
+    id: Annotated[str, Field(min_length=1)]
+    raw_start: Annotated[int, Field(ge=0)]
+    raw_end: Annotated[int, Field(gt=0)]
+    evidence: Annotated[str, Field(min_length=1)]
+    proposition: Annotated[str, Field(min_length=1)]
+    unit_type: Literal["statement", "instruction", "question", "explanation"]
+    durability: SemanticDurability
+    polarity: SemanticPolarity
+    epistemic_status: SemanticEpistemicStatus
+
+
+class LegacySemanticAnalysisV1Output(_SemanticStrict):
+    """Immutable historical schema for prompt version 1.0."""
+
+    schema_version: Literal["1.0"]
+    prompt_id: Literal["memorist.semantic_candidate_analysis"]
     prompt_version: Literal["1.0"]
     status: Literal["ok", "abstain"]
     warnings: list[str]
-    semantic_units: list[SemanticUnit]
+    semantic_units: list[LegacySemanticUnitV1]
     references: list[SemanticReference]
     relations: list[SemanticRelation]
 
@@ -266,12 +416,23 @@ SEMANTIC_CANDIDATE_V1_CONTRACT = PromptContract(
     model=SemanticAnalysisV1Output,
 )
 
+SEMANTIC_CANDIDATE_LEGACY_V1_CONTRACT = PromptContract(
+    prompt_id=SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID,
+    prompt_version=SEMANTIC_CANDIDATE_ANALYSIS_V1_VERSION,
+    json_schema_name="memorist_semantic_candidate_analysis_v1_legacy",
+    model=LegacySemanticAnalysisV1Output,
+)
+
 _CONTRACTS: dict[tuple[str, str], PromptContract] = {
     (JAKOBSON_V3_CONTRACT.prompt_id, JAKOBSON_V3_CONTRACT.prompt_version): JAKOBSON_V3_CONTRACT,
     (
         SEMANTIC_CANDIDATE_V1_CONTRACT.prompt_id,
         SEMANTIC_CANDIDATE_V1_CONTRACT.prompt_version,
     ): SEMANTIC_CANDIDATE_V1_CONTRACT,
+    (
+        SEMANTIC_CANDIDATE_LEGACY_V1_CONTRACT.prompt_id,
+        SEMANTIC_CANDIDATE_LEGACY_V1_CONTRACT.prompt_version,
+    ): SEMANTIC_CANDIDATE_LEGACY_V1_CONTRACT,
 }
 
 
@@ -359,9 +520,33 @@ def canonical_semantic_candidate_v1_example() -> dict[str, Any]:
     output = SemanticAnalysisV1Output(
         schema_version="1.0",
         prompt_id="memorist.semantic_candidate_analysis",
-        prompt_version="1.0",
+        prompt_version="1.1",
         status="ok",
         warnings=[],
+        intent="instruction",
+        primary_topic="backup policy",
+        secondary_topic="enabled state",
+        one_line_summary="instruction > backup policy > enabled state",
+        message_categories=[
+            MessageCategoryTag(
+                category="Instruction", normalized_label="backup policy", confidence=0.9
+            )
+        ],
+        concept_tags=[
+            MessageConceptTag(
+                canonical_label="backup policy",
+                aliases=["backups"],
+                confidence=0.9,
+                raw_start=5,
+                raw_end=12,
+            )
+        ],
+        entities=[],
+        process_references=[],
+        epistemic_status="asserted",
+        temporal_status="current",
+        importance=0.8,
+        explicit_memory_request=False,
         semantic_units=[
             SemanticUnit(
                 id="unit-1",
@@ -373,6 +558,8 @@ def canonical_semantic_candidate_v1_example() -> dict[str, Any]:
                 durability="durable",
                 polarity="affirmed",
                 epistemic_status="asserted",
+                memory_kind="Instruction",
+                lifecycle_status="active",
             )
         ],
         references=[],

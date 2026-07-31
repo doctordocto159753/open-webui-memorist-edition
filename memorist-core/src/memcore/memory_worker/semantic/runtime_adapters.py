@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import uuid
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
@@ -13,9 +14,11 @@ from typing import Any
 from memcore.memory_worker.attempt_audit import stable_stage_execution_uuid
 from memcore.memory_worker.execution import ContractExecutionOutcome
 from memcore.memory_worker.extraction.sensitivity import classify_sensitivity
+from memcore.memory_worker.message_semantics import persist_message_semantics
 from memcore.memory_worker.postgres.semantic_coverage import (
     PostgresSemanticCoverageRepository,
 )
+from memcore.memory_worker.prompts.contracts import SemanticAnalysisV1Output
 from memcore.memory_worker.prompts.versions import (
     SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID,
     SEMANTIC_CANDIDATE_ANALYSIS_VERSION,
@@ -48,6 +51,7 @@ from memcore.repositories.semantic_coverage import SQLiteSemanticCoverageReposit
 from memcore.validators.ijson import canonical_hash_ijson, dump_ijson, load_ijson
 
 _SEMANTIC_STAGE = "semantic_candidate_analysis"
+_SEMANTIC_TEXT_UNIT_NAMESPACE = uuid.UUID("4c5e2229-f900-5b05-8d7a-48b0b555c457")
 
 
 class SQLiteSemanticCandidateRuntimeAdapter:
@@ -454,6 +458,18 @@ class SQLiteSemanticCandidateRuntimeAdapter:
                 f"VALUES ({', '.join('?' for _ in columns)})",
                 tuple(stage[column] for column in columns),
             )
+            persist_message_semantics(
+                self.connection,
+                postgres=False,
+                message_uuid=message_uuid,
+                processing_run_uuid=processing_run_uuid,
+                prompt_execution_uuid=prompt_execution_uuid,
+                stage_execution_uuid=stage_execution_uuid,
+                contract_hash=contract_hash,
+                scope=scope,
+                input_payload=input_payload,
+                outcome=outcome,
+            )
             self.connection.execute(
                 """
                 INSERT INTO model_usage_events (
@@ -522,6 +538,31 @@ class SQLiteSemanticCandidateRuntimeAdapter:
     ) -> dict[str, Any]:
         return self.coverage.persist_plan(plan, bindings)
 
+    def ensure_semantic_span_authorities(
+        self,
+        *,
+        scope: CurrentContextScope,
+        processing_run_uuid: str,
+        semantic_output: SemanticAnalysisV1Output,
+        authorities: Sequence[PersistedUnitAuthority],
+    ) -> Sequence[PersistedUnitAuthority]:
+        _insert_missing_semantic_text_units(
+            self.connection,
+            postgres=False,
+            scope=scope,
+            semantic_output=semantic_output,
+            authorities=authorities,
+        )
+        # SQLite coverage commands deliberately start their own IMMEDIATE
+        # transaction and roll back any open transaction first.  Make the
+        # synthetic source authority durable before handing control to that
+        # legacy command boundary.
+        self.connection.commit()
+        return self.load_persisted_authorities(
+            message_uuid=scope.message_uuid,
+            processing_run_uuid=processing_run_uuid,
+        )
+
     def reserve_and_link_candidate(
         self,
         *,
@@ -530,7 +571,7 @@ class SQLiteSemanticCandidateRuntimeAdapter:
         candidate: MemoryCandidate,
         evidence: CandidateEvidence,
         payload_hash: str,
-        authority: CandidateAuthorityBinding,
+        authority: CandidateAuthorityBinding | None,
     ) -> dict[str, Any]:
         self.coverage.reserve_candidate(
             proposal.proposal_id,
@@ -951,6 +992,18 @@ class PostgresSemanticCandidateRuntimeAdapter:
                 f"VALUES ({', '.join(placeholders)})",
                 tuple(stage[column] for column in columns),
             )
+            persist_message_semantics(
+                self.connection,
+                postgres=True,
+                message_uuid=message_uuid,
+                processing_run_uuid=processing_run_uuid,
+                prompt_execution_uuid=prompt_execution_uuid,
+                stage_execution_uuid=stage_execution_uuid,
+                contract_hash=contract_hash,
+                scope=scope,
+                input_payload=input_payload,
+                outcome=outcome,
+            )
             self.connection.execute(
                 """
                 INSERT INTO model_usage_events (
@@ -1018,6 +1071,26 @@ class PostgresSemanticCandidateRuntimeAdapter:
     ) -> dict[str, Any]:
         return self.coverage.persist_plan(plan, bindings)
 
+    def ensure_semantic_span_authorities(
+        self,
+        *,
+        scope: CurrentContextScope,
+        processing_run_uuid: str,
+        semantic_output: SemanticAnalysisV1Output,
+        authorities: Sequence[PersistedUnitAuthority],
+    ) -> Sequence[PersistedUnitAuthority]:
+        _insert_missing_semantic_text_units(
+            self.connection,
+            postgres=True,
+            scope=scope,
+            semantic_output=semantic_output,
+            authorities=authorities,
+        )
+        return self.load_persisted_authorities(
+            message_uuid=scope.message_uuid,
+            processing_run_uuid=processing_run_uuid,
+        )
+
     def reserve_and_link_candidate(
         self,
         *,
@@ -1026,7 +1099,7 @@ class PostgresSemanticCandidateRuntimeAdapter:
         candidate: MemoryCandidate,
         evidence: CandidateEvidence,
         payload_hash: str,
-        authority: CandidateAuthorityBinding,
+        authority: CandidateAuthorityBinding | None,
     ) -> dict[str, Any]:
         self.coverage.reserve_candidate(
             proposal.proposal_id,
@@ -1039,6 +1112,92 @@ class PostgresSemanticCandidateRuntimeAdapter:
             (evidence,),
             authority,
         )
+
+
+def _insert_missing_semantic_text_units(
+    connection: Any,
+    *,
+    postgres: bool,
+    scope: CurrentContextScope,
+    semantic_output: SemanticAnalysisV1Output,
+    authorities: Sequence[PersistedUnitAuthority],
+) -> None:
+    missing = [
+        unit
+        for unit in semantic_output.semantic_units
+        if not any(
+            authority.raw_start <= unit.raw_start and unit.raw_end <= authority.raw_end
+            for authority in authorities
+        )
+    ]
+    if not missing:
+        return
+    placeholder = "%s" if postgres else "?"
+    row = connection.execute(
+        f"SELECT COALESCE(MAX(unit_index), -1) AS max_index FROM text_units "
+        f"WHERE message_uuid = {placeholder}",
+        (scope.message_uuid,),
+    ).fetchone()
+    start_index = int(row["max_index"] if row is not None else -1) + 1
+    for offset, unit in enumerate(missing):
+        text = scope.raw_text[unit.raw_start : unit.raw_end]
+        identity = (
+            f"{scope.message_uuid}:{hashlib.sha256(scope.raw_text.encode('utf-8')).hexdigest()}:"
+            f"{unit.raw_start}:{unit.raw_end}"
+        )
+        text_unit_uuid = str(uuid.uuid5(_SEMANTIC_TEXT_UNIT_NAMESPACE, identity))
+        unit_index = start_index + offset
+        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        if postgres:
+            connection.execute(
+                """
+                INSERT INTO text_units (
+                  text_unit_uuid, unit_uuid, message_uuid, session_uuid, speaker_role,
+                  unit_type, unit_index, text, start_char, end_char, char_start,
+                  char_end, segmentation_confidence, segmentation_notes, content_hash,
+                  created_at, schema_version
+                ) VALUES (%s,%s,%s,%s,%s,'fragment',%s,%s,%s,%s,%s,%s,'high',
+                          'semantic_multi_unit_span',%s,%s,1)
+                ON CONFLICT (message_uuid, unit_type, unit_index) DO NOTHING
+                """,
+                (
+                    text_unit_uuid,
+                    text_unit_uuid,
+                    scope.message_uuid,
+                    scope.session_uuid,
+                    scope.role,
+                    unit_index,
+                    text,
+                    unit.raw_start,
+                    unit.raw_end,
+                    unit.raw_start,
+                    unit.raw_end,
+                    content_hash,
+                    utc_now(),
+                ),
+            )
+        else:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO text_units (
+                  text_unit_uuid, message_uuid, session_uuid, unit_index, unit_type,
+                  text, start_char, end_char, speaker_role, content_hash, created_at,
+                  schema_version
+                ) VALUES (?, ?, ?, ?, 'fragment', ?, ?, ?, ?, ?, ?, 1)
+                """,
+                (
+                    text_unit_uuid,
+                    scope.message_uuid,
+                    scope.session_uuid,
+                    unit_index,
+                    text,
+                    unit.raw_start,
+                    unit.raw_end,
+                    scope.role,
+                    content_hash,
+                    utc_now(),
+                ),
+            )
 
 
 def _prior_context_record(row: Mapping[str, Any]) -> PriorContextRecord:
@@ -1139,26 +1298,17 @@ def _validate_completed_replay(
             if authority.raw_start <= item.raw_start and item.raw_end <= authority.raw_end
         ]
         current = containing[0] if len(containing) == 1 else None
-        old_gate = _optional_string(row["gate_decision"])
-        old_route_type = _optional_string(row["route_type"])
-        old_route_status = _optional_string(row["route_status"])
-        if current is None:
-            if old_gate is not None or old_route_type is not None or item.proposal_id is not None:
-                raise RuntimeError("current-run semantic replay authority is incomplete")
-        elif (
-            current.gate_decision != old_gate
-            or current.route_type != old_route_type
-            or current.route_status != old_route_status
-        ):
-            raise RuntimeError("semantic replay authority changed: current-run gate or route")
+        if current is None and item.proposal_id is not None:
+            raise RuntimeError("current-run semantic replay authority is incomplete")
+        # Legacy gate and route values remain immutable audit fields on the
+        # persisted plan. Changes to those annotations do not invalidate the
+        # model-led semantic replay; only source/privacy authority can do so.
         if item.proposal_id is None:
             continue
         if row["state"] != "candidate_linked" or row["candidate_uuid"] != row["proposal_uuid"]:
             return None
         if (
             current is None
-            or current.gate_decision not in {"analyze", "analyze_high_confidence"}
-            or current.route_status != "ready"
             or not current.privacy_storage_allowed
             or current.privacy_ceiling != str(row["sensitivity_class"])
         ):

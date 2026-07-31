@@ -25,6 +25,7 @@ from memcore.memory_worker.identity import (
     execution_profile_fingerprint,
 )
 from memcore.memory_worker.jakobson_runtime import execute_jakobson_contract
+from memcore.memory_worker.message_semantics import update_semantic_job_outcome
 from memcore.memory_worker.postgres.deterministic_fallback import (
     deterministic_jakobson_output,
 )
@@ -520,6 +521,14 @@ class PostgresMemoryWorkerPipeline:
                 lease_fence=lease_fence,
             )
             with fenced_write(self.connection, lease_fence, postgres=True):
+                semantic_outcome = update_semantic_job_outcome(
+                    self.connection,
+                    postgres=True,
+                    processing_run_uuid=str(run["processing_run_uuid"]),
+                    candidate_count=len(candidates),
+                    memory_count=int(memories),
+                    partial=bool(semantic_result.plan.warnings),
+                )
                 self.connection.execute(
                     "UPDATE messages SET processing_status = 'available', updated_at = %s "
                     "WHERE message_uuid = %s",
@@ -541,6 +550,7 @@ class PostgresMemoryWorkerPipeline:
                 "semantic_coverage_hash": semantic_result.plan.coverage_hash,
                 "semantic_coverage_status": semantic_result.plan.status,
                 "semantic_proposals": semantic_result.proposal_count,
+                "semantic_outcome": semantic_outcome,
                 "semantic_prompt_execution_uuid": (semantic_result.semantic_prompt_execution_uuid),
                 "semantic_stage_execution_uuid": (semantic_result.semantic_stage_execution_uuid),
                 "semantic_context_items": semantic_result.context_item_count,
@@ -758,7 +768,12 @@ class PostgresMemoryWorkerPipeline:
         prompt = render_prompt(
             JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID, PROMPT_PACK_VERSION, input_payload
         )
-        provider = OpenAICompatibleMemoryExtractionProvider.from_profile(profile, timeout_ms=8000)
+        timeout_ms = int(
+            profile.get("timeout_ms") or self.settings.processing_timeout_ms("memory_extraction")
+        )
+        provider = OpenAICompatibleMemoryExtractionProvider.from_profile(
+            profile, timeout_ms=timeout_ms
+        )
         response = provider.extract(system_prompt=prompt, input_payload=input_payload)
         validate_prompt_execution(
             JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,

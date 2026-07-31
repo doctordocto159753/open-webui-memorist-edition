@@ -10,6 +10,7 @@ AUDIT_TABLES = {
     "semantic_coverage_runs",
     "semantic_coverage_items",
     "semantic_candidate_links",
+    "semantic_job_outcomes",
 }
 TEXT_COLUMNS = {
     "messages": ("raw_text", "raw_payload_ijson", "snapshot_ijson"),
@@ -28,6 +29,20 @@ TEXT_COLUMNS = {
         "rejection_reason_codes_ijson",
     ),
     "candidate_evidence": ("evidence_text",),
+    "message_semantic_analyses": (
+        "one_line_summary",
+        "summary_intent",
+        "primary_topic",
+        "secondary_topic",
+        "warnings_ijson",
+    ),
+    "message_semantic_units": ("proposition_text",),
+    "message_entity_references": ("canonical_name", "entity_type", "aliases_ijson"),
+    "message_process_references": (
+        "process_label",
+        "process_aliases_ijson",
+        "stage_label",
+    ),
     "jakobson_analysis_runs": ("warnings_ijson", "raw_output_ijson"),
     "jakobson_sentence_annotations": (
         "sentence_text",

@@ -179,7 +179,7 @@ Contract: `memorist.text.envelope.v3`.
 
 WP01's validator does not validate semantic enum meaning. The WP02 runtime first
 binds model output to the strict closed
-`memorist.semantic_candidate_analysis@1.0` schema, then calls this evidence
+`memorist.semantic_candidate_analysis@1.1` schema, then calls this evidence
 validator. Neither the envelope nor dependency hints choose a referent,
 durability, route, gate, or candidate.
 

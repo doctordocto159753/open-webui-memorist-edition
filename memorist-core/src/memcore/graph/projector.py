@@ -17,7 +17,7 @@ class GraphProjectionResult:
 
 
 class FalkorGraphProjector:
-    projection_version = "memorist-full-graph-v1"
+    projection_version = "memorist-message-first-graph-v2"
 
     def __init__(self, client: GraphClient) -> None:
         self.client = client
@@ -38,6 +38,109 @@ class FalkorGraphProjector:
             f"c.type = {_quote(str(candidate.get('candidate_type', 'unknown')))}"
         )
         self.client.graph_query(query)
+
+    def project_message_semantics(self, record: dict[str, Any]) -> None:
+        self.client.graph_query(self.message_semantics_query(record))
+
+    def message_semantics_query(self, record: dict[str, Any]) -> str:
+        message_uuid = str(record["message_uuid"])
+        workspace_uuid = str(record["workspace_uuid"])
+        project_uuid = str(record.get("project_uuid") or "")
+        session_uuid = str(record["session_uuid"])
+        role = str(record["source_role"])
+        status = str(record["status"])
+        summary = str(record.get("one_line_summary") or "")
+        intent = str(record.get("summary_intent") or "unknown")
+        primary_topic = str(record.get("primary_topic") or "unknown")
+        secondary_topic = str(record.get("secondary_topic") or "unknown")
+        categories = _as_strings(record.get("categories"))
+        concepts = _as_strings(record.get("concepts"))[:5]
+        entities = _as_strings(record.get("entities"))
+        processes = record.get("processes") or []
+        units = record.get("units") or []
+        lines = [
+            f"MERGE (w:Workspace {{uuid: {_quote(workspace_uuid)}}})",
+            f"MERGE (s:Session {{uuid: {_quote(session_uuid)}}})",
+            f"MERGE (m:Message {{uuid: {_quote(message_uuid)}}})",
+            f"SET m.role = {_quote(role)}, m.status = {_quote(status)}, "
+            f"m.summary = {_quote(summary)}",
+            "MERGE (s)-[:HAS_MESSAGE]->(m)",
+            "MERGE (m)-[:MESSAGE_IN_SESSION]->(s)",
+        ]
+        if project_uuid:
+            lines.extend(
+                [
+                    f"MERGE (p:Project {{uuid: {_quote(project_uuid)}}})",
+                    "MERGE (w)-[:IN_PROJECT]->(p)",
+                    "MERGE (p)-[:HAS_SESSION]->(s)",
+                    "MERGE (m)-[:MESSAGE_IN_PROJECT]->(p)",
+                ]
+            )
+        lines.extend(
+            [
+                f"MERGE (i:Intent {{label: {_quote(intent)}}})",
+                "MERGE (m)-[:HAS_INTENT]->(i)",
+                f"MERGE (pt:Topic {{label: {_quote(primary_topic)}}})",
+                "MERGE (m)-[:HAS_PRIMARY_TOPIC]->(pt)",
+                f"MERGE (st:Topic {{label: {_quote(secondary_topic)}}})",
+                "MERGE (m)-[:HAS_SECONDARY_TOPIC]->(st)",
+            ]
+        )
+        for index, category in enumerate(categories):
+            lines.extend(
+                [
+                    f"MERGE (mt{index}:MessageType {{name: {_quote(category)}}})",
+                    f"MERGE (m)-[:HAS_MESSAGE_TYPE]->(mt{index})",
+                ]
+            )
+        for index, concept in enumerate(concepts):
+            lines.extend(
+                [
+                    f"MERGE (c{index}:Concept {{label: {_quote(concept)}}})",
+                    f"MERGE (m)-[:HAS_CONCEPT_TAG]->(c{index})",
+                ]
+            )
+        for index, entity in enumerate(entities):
+            lines.extend(
+                [
+                    f"MERGE (e{index}:Entity {{name: {_quote(entity)}}})",
+                    f"MERGE (m)-[:MENTIONS_ENTITY]->(e{index})",
+                ]
+            )
+        for index, process in enumerate(processes):
+            process_label = str(process["process_label"])
+            lines.extend(
+                [
+                    f"MERGE (proc{index}:Process {{label: {_quote(process_label)}}})",
+                    f"MERGE (m)-[:REFERS_TO_PROCESS]->(proc{index})",
+                ]
+            )
+            if process.get("stage_ordinal") is not None:
+                stage_key = f"{process_label}:{process['stage_ordinal']}"
+                lines.extend(
+                    [
+                        f"MERGE (stage{index}:ProcessStage {{key: {_quote(stage_key)}}})",
+                        f"SET stage{index}.ordinal = {int(process['stage_ordinal'])}",
+                        f"MERGE (proc{index})-[:HAS_STAGE]->(stage{index})",
+                        f"MERGE (m)-[:REFERS_TO_STAGE]->(stage{index})",
+                    ]
+                )
+        for index, unit in enumerate(units):
+            unit_uuid = str(unit["semantic_unit_uuid"])
+            memory_kind = str(unit.get("memory_kind") or "MemoryClaim")
+            node_label = memory_kind if memory_kind in _SAFE_UNIT_LABELS else "MemoryClaim"
+            lines.extend(
+                [
+                    f"MERGE (u{index}:{node_label} {{uuid: {_quote(unit_uuid)}}})",
+                    f"SET u{index}.epistemic_status = "
+                    f"{_quote(str(unit.get('epistemic_status') or 'unknown'))}, "
+                    f"u{index}.lifecycle_status = "
+                    f"{_quote(str(unit.get('lifecycle_status') or 'unknown'))}",
+                    f"MERGE (m)-[:DERIVED_CLAIM]->(u{index})",
+                    f"MERGE (u{index})-[:EVIDENCES]->(m)",
+                ]
+            )
+        return "\n".join(lines)
 
     def delete_erased_source(self, source_uuid: str) -> None:
         self.client.graph_query(
@@ -126,3 +229,27 @@ class FalkorGraphProjector:
 
 def _quote(value: str) -> str:
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+_SAFE_UNIT_LABELS = {
+    "Instruction",
+    "Need",
+    "Preference",
+    "Decision",
+    "ProjectArtifact",
+    "ProjectState",
+    "FactClaim",
+    "Hypothesis",
+    "Constraint",
+    "Question",
+    "LearningGoal",
+    "Feedback",
+    "Correction",
+    "Retraction",
+}
+
+
+def _as_strings(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if item]
+    return []

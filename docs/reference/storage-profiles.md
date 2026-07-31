@@ -22,7 +22,9 @@ MEMORIST_HOT_SCHEDULER=disabled
 
 SQLite Lite includes WAL, foreign keys, bounded retry, local object storage,
 local FTS, and the SQLite write actor for hot Open WebUI writes, import commit,
-Heritage restore, and privacy mutation paths.
+Heritage restore, and privacy mutation paths. WP02 coverage and proposal replay
+use the same shared semantic service as Full and SQLite-specific transactional
+persistence.
 
 ## Full
 
@@ -54,5 +56,11 @@ Current status:
 Full Mode: certified in the tested local Docker environment.
 ```
 
-The authoritative report records 11/11 passed gates with no skips. This is an
-environment-specific certification, not a production-readiness claim.
+The Consolidated CI Full job requires real PostgreSQL and FalkorDB paths,
+semantic parity/replay, and no relevant skip. This is an
+environment-specific validation, not a production-readiness claim.
+
+Lite and Full do not have separate semantic policies. Both use
+`SemanticCandidatePlanningService`, the same coverage/identity code, and the
+same route/gate/privacy/provenance ceilings. Only store adapters, transaction
+mechanics, jobs, and projections differ.

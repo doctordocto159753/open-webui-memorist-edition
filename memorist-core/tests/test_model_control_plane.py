@@ -67,13 +67,13 @@ def test_role_contract_manifest_uses_each_roles_actual_contract() -> None:
     extraction = role_contract_manifest("memory_extraction")
     reconstruction = role_contract_manifest("import_reconstruction")
     bundle = extraction["bundle"]
-    assert bundle["bundle_id"] == "memory-extraction-contract-bundle-v1"
+    assert bundle["bundle_id"] == "memory-extraction-contract-bundle-v2"
     assert [
         (entry["prompt"]["prompt_id"], entry["prompt"]["prompt_version"])
         for entry in bundle["prompts"]
     ] == [
         ("memorist.jakobson_sentence_analysis", "3.0"),
-        ("memorist.semantic_candidate_analysis", "1.0"),
+        ("memorist.semantic_candidate_analysis", "1.1"),
     ]
     assert reconstruction["prompt"]["metadata"]["prompt_id"] == "memorist.import_reconstruction"
     assert reconstruction["prompt"]["metadata"]["prompt_version"] == "2.0"
@@ -651,7 +651,7 @@ def test_preflight_model_lifecycle_records_before_attachment(
         assert "retrieval_completed" in events
         assert "preflight_model_started" in events
         assert "preflight_model_failed_open" in events
-        assert events.index("retrieval_completed") < events.index("preflight_model_started")
+        assert events.index("preflight_model_started") < events.index("retrieval_completed")
         usage = connection.execute(
             """
             SELECT *
@@ -1887,6 +1887,8 @@ def _role_contract_probe_output(prompt_text: str) -> dict[str, Any] | None:
     ]
     for prompt_id, item in fixtures:
         if prompt_id in prompt_text:
+            if prompt_id == "memorist.preflight_planning":
+                base["prompt_version"] = "2.1"
             return {**base, "prompt_id": prompt_id, "items": [item]}
     return None
 

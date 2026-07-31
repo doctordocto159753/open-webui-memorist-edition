@@ -28,7 +28,7 @@ such as preflight and import reconstruction. `memory_extraction` uses the
 ordered `memory-extraction-contract-bundle-v1`:
 
 1. `memorist.jakobson_sentence_analysis@3.0`;
-2. `memorist.semantic_candidate_analysis@1.0`.
+2. `memorist.semantic_candidate_analysis@1.1`.
 
 The role manifest is `role-contract-manifest-v3`. Its hash includes both typed
 contract hashes and full prompt texts, so editing either member stales

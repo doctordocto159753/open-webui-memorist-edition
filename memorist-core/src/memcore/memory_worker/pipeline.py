@@ -34,6 +34,7 @@ from memcore.memory_worker.jakobson.service import (
     OpenAICompatibleJakobsonProvider,
 )
 from memcore.memory_worker.jakobson_runtime import execute_jakobson_contract
+from memcore.memory_worker.message_semantics import update_semantic_job_outcome
 from memcore.memory_worker.postgres.deterministic_fallback import deterministic_jakobson_output
 from memcore.memory_worker.prepared import PreparedJakobsonInference
 from memcore.memory_worker.prompts.contracts import canonical_sentence_items, get_contract
@@ -539,6 +540,17 @@ class MemoryWorkerPipeline:
         with fenced_write(self.connection, lease_fence):
             self.messages.mark_processing_status(message_uuid, ProcessingStatus.PROJECTED)
             self.messages.mark_processing_status(message_uuid, ProcessingStatus.AVAILABLE)
+            memory_count = sum(
+                decision.target_memory_uuid is not None for decision in decisions_created
+            )
+            semantic_outcome = update_semantic_job_outcome(
+                self.connection,
+                postgres=False,
+                processing_run_uuid=run.processing_run_uuid,
+                candidate_count=len(candidates),
+                memory_count=memory_count,
+                partial=bool(semantic_result.plan.warnings),
+            )
             self.runs.mark_succeeded(
                 run.processing_run_uuid,
                 raw_output={
@@ -551,6 +563,7 @@ class MemoryWorkerPipeline:
                     "semantic_coverage_hash": semantic_result.plan.coverage_hash,
                     "semantic_coverage_status": semantic_result.plan.status,
                     "semantic_proposals": semantic_result.proposal_count,
+                    "semantic_outcome": semantic_outcome,
                     "semantic_prompt_execution_uuid": (
                         semantic_result.semantic_prompt_execution_uuid
                     ),
@@ -577,6 +590,7 @@ class MemoryWorkerPipeline:
             "semantic_coverage_hash": semantic_result.plan.coverage_hash,
             "semantic_coverage_status": semantic_result.plan.status,
             "semantic_proposals": semantic_result.proposal_count,
+            "semantic_outcome": semantic_outcome,
             "semantic_prompt_execution_uuid": semantic_result.semantic_prompt_execution_uuid,
             "semantic_stage_execution_uuid": semantic_result.semantic_stage_execution_uuid,
             "semantic_context_items": semantic_result.context_item_count,

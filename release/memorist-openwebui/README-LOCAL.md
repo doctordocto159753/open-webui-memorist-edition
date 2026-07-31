@@ -4,10 +4,10 @@ Memorist is a local-first memory edition of Open WebUI. This package runs
 everything on your own machine with Docker; you do **not** need Git, Python, or
 `uv` to use it.
 
-> Status: early public alpha. Lite uses SQLite. Full uses PostgreSQL + FalkorDB
-> and has passed the eleven backend/runtime gates in the tested Linux Docker
-> environment. Windows desktop one-click validation remains a separate release
-> gate.
+> Status: `0.2.0-beta.3` beta development candidate, storage schema `27`.
+> Lite uses SQLite. Full uses PostgreSQL + FalkorDB. Hosted Consolidated CI
+> validates both runtime paths; native Windows desktop validation remains a
+> separate release gate.
 
 ## 1. Requirements
 

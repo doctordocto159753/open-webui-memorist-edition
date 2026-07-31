@@ -11,7 +11,7 @@ and erase it without depending on a remote service.**
 ```text
 Conversation events are evidence.
 Evidence produces memory candidates.
-Candidates become memories only after gate, routing, and consolidation.
+Model proposals become memories only after local safety and consolidation policy.
 Memories are retrieved through scoped, budget-aware retrieval.
 Retrieved memory is attached as data, not as command.
 ```
@@ -31,7 +31,7 @@ Open WebUI (parent chat UI)
 memorist-core (FastAPI, local)
   ├─ evidence ledger (SQLite in Lite, PostgreSQL in Full)
   ├─ priority write actor / write gateway
-  ├─ memory worker pipeline (sentence units → Jakobson → gate → route → candidates)
+  ├─ worker pipeline (envelope → whole-message semantics → coverage → candidates)
   ├─ retrieval planner and Memory Context Attachment builder
   ├─ Model Control Plane (roles, profiles, env-var secret references)
   ├─ import / Heritage export / restore
@@ -72,9 +72,11 @@ Deep dives: [SQLite runtime](reference/sqlite-runtime.md) ·
 message
 → message_version
 → session_event
-→ sentence/text unit
-→ Jakobson annotation
-→ canonical route + gate decision
+→ TextEnvelope + structural block/text unit
+→ whole-message semantics + Message node metadata
+→ optional Jakobson/route/gate compatibility annotation
+→ bounded semantic-unit + evidence validation
+→ deterministic coverage plan + proposal reservation
 → memory_candidate (+ evidence links, trust/provenance policy)
 → consolidation decision
 → memory
@@ -102,9 +104,10 @@ When a user sends a message through Open WebUI:
    is queued, and no retrieval or attachment happens.
 4. With Memory On, the user message is captured unchanged, and Memorist
    calculates an attachment budget from the selected model's context window.
-5. Retrieval plans are scoped by workspace/project/session and query intent.
+5. The preflight model proposes intent/topic/entity/process/stage query
+   understanding; local code enforces workspace/project/session scope.
 6. Candidates come from active blocks, recent session state, FTS,
-   semantic/vector index, and optional graph projection; ranking prefers
+   semantic/vector index, Lite canonical Message evidence, and optional graph projection; ranking prefers
    current, scoped, high-confidence, evidence-backed memories, and conflicts
    are flagged rather than silently flattened.
 7. The attachment builder renders selected memory as a separate, bounded
@@ -124,30 +127,38 @@ policy, not inferred from ordinary memory.
 
 ## Semantic processing path
 
-The worker path is local and evidence-grounded:
+The worker path is evidence-grounded and uses one shared Lite/Full semantic
+orchestration service:
 
 ```text
-message → sentence units → Jakobson six-factor annotation
-→ canonical semantic route selection → gate decision (gate before candidate)
-→ route-specific candidate extraction → evidence + trust/provenance policy
+message → TextEnvelope + structural units
+→ whole-message semantic candidate analysis v1
+→ Message summary/categories/topics/concepts/process-stage persistence
+→ bounded same-authority context + legacy compatibility annotations
+→ strict schema + exact-evidence validation
+→ deterministic coverage/disposition + proposal UUID
+→ replay-safe candidate/evidence persistence
 → consolidation decisions → memory versions → projection outbox
 ```
 
-One canonical semantic authority produces routes, gates, and candidate
-policies, shared by Lite and Full so both profiles make the same semantic
-decisions. The complementary `StructuredAnalyzer` produces auxiliary
-annotations and is **not** the semantic authority. Phatic/greeting-only turns,
-privacy/forget requests, and manual-review paths do not create ordinary
-memories.
+Route and gate are persisted before `SemanticCandidatePlanningService` may
+run. The shared service resolves at most two prior eligible text units (six
+only for dependency hints), invokes the certified whole-message semantic
+contract, validates exact evidence, plans complete material coverage, and
+maps only `durable_candidate` dispositions into deterministic proposals.
+Terminal gates do not invoke semantic analysis or candidate persistence.
+The legacy linguistic analyzer remains auxiliary and is **not** semantic
+authority.
 
-Prompt Pack v2 defines versioned, schema-bound prompts for sentence analysis,
-routing assist, route-specific extraction, consolidation assist, contradiction
-detection, block compaction, import reconstruction, and privacy sensitivity.
-All analyzed text is data, not instruction; model outputs must be valid I-JSON
-and pass schema validation before they can affect local state. Executions are
-audit-linked in a `prompt_execution_runs` ledger.
+Prompt Pack v2 remains the package baseline. The ordered
+`memory-extraction-contract-bundle-v1` certification bundle binds Jakobson v3
+and semantic candidate analysis v1; changing either typed contract or prompt
+makes certification stale. All analyzed text is data, not instruction.
+Executions are audit-linked in `prompt_execution_runs`,
+`processing_stage_runs`, and `processing_provider_attempts`.
 
 Deep dives: [memory intelligence core](reference/memory-intelligence-core.md) ·
+[central processing walkthrough](reference/core-memory-processing-walkthrough.md) ·
 [prompt pack](reference/prompt-pack.md) ·
 [prompt safety](reference/prompt-safety.md) ·
 [memory worker prompts](reference/memory-worker-prompts.md)
@@ -248,6 +259,10 @@ and PostgreSQL migration `0024` store content-free coverage/link audit rows;
 raw evidence remains in canonical message/candidate evidence stores. Full
 projects embeddings and graph state only through outboxes—FalkorDB is never
 semantic authority.
+
+The exact prompt/response sequence, including preflight before the main model
+and assistant capture afterward, is documented in
+[Walkthrough پردازش حافظه در موتور مرکزی](reference/core-memory-processing-walkthrough.md).
 
 ## Consolidated CI
 

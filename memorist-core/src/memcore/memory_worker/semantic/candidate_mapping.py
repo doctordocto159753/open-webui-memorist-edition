@@ -62,6 +62,48 @@ def candidate_mapping_for_route(
     )
 
 
+def candidate_mapping_for_semantic_unit(
+    unit_type: str,
+    text: str,
+    *,
+    message_uuid: str,
+    memory_kind: str | None = None,
+) -> RouteCandidateMapping | None:
+    """Map the model's semantic kind without re-parsing multilingual text.
+
+    ``unit_type`` can describe source structure (heading/list/table/code) while
+    ``memory_kind`` carries meaning. Historical 1.0 outputs have no
+    ``memory_kind``, so the old broad-unit fallback remains replay-compatible.
+    """
+
+    kind = memory_kind or unit_type
+    if kind == "Instruction" or kind == "instruction":
+        route = MemorySignalRouteType.PROMPT_INSTRUCTION
+    elif kind in {"Need", "LearningGoal"}:
+        route = MemorySignalRouteType.TEAM_OBLIGATION
+    elif kind == "Preference":
+        route = MemorySignalRouteType.USER_PREFERENCE
+    elif kind == "Constraint":
+        route = MemorySignalRouteType.TASK_CONSTRAINT
+    elif kind == "Feedback":
+        route = MemorySignalRouteType.EMOTIONAL_STANCE
+    elif kind in {
+        "Decision",
+        "ProjectArtifact",
+        "ProjectState",
+        "FactClaim",
+        "Hypothesis",
+        "Correction",
+        "Retraction",
+        "statement",
+        "explanation",
+    }:
+        route = MemorySignalRouteType.PROJECT_CONTEXT
+    else:
+        return None
+    return candidate_mapping_for_route(route, text, message_uuid=message_uuid)
+
+
 def _candidate_profile(
     route: MemorySignalRouteType,
     *,

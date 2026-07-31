@@ -168,10 +168,12 @@ def content_text(content: Any) -> str:
     return _content_text(content)
 
 
-def response_key(body: dict[str, Any], assistant_text: str) -> str:
+def response_key(
+    body: dict[str, Any], assistant_text: str, input_message_uuid: str | None = None
+) -> str:
     provider_id = body.get("id") or ""
     digest = hashlib.sha256(assistant_text.encode("utf-8")).hexdigest()
-    return f"{provider_id}:{digest}"
+    return f"{input_message_uuid or ''}:{provider_id}:{digest}"
 
 
 def safe_payload(value: dict[str, Any]) -> dict[str, Any]:

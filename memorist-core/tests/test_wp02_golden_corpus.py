@@ -108,7 +108,7 @@ def test_abstain_with_units_and_plausible_legacy_shape_are_not_false_green() -> 
     legacy = {
         "schema_version": "1.0",
         "prompt_id": "memorist.semantic_candidate_analysis",
-        "prompt_version": "1.0",
+        "prompt_version": "1.1",
         "status": "ok",
         "warnings": [],
         "items": [],
@@ -200,7 +200,7 @@ def test_planner_matches_independent_disposition_oracle(case_id: str) -> None:
     )
 
 
-def test_terminal_gate_mutation_stays_before_candidate_creation() -> None:
+def test_terminal_gate_mutation_remains_audit_only_after_semantic_analysis() -> None:
     case = case_by_id("multi-01-migration-and-preference")
     planner_input = _planner_input(case)
     rejected_authority = planner_input.authorities[0].model_copy(
@@ -210,8 +210,8 @@ def test_terminal_gate_mutation_stays_before_candidate_creation() -> None:
         planner_input.model_copy(update={"authorities": (rejected_authority,)})
     )
     unit_items = [item for item in plan.items if item.semantic_unit_id is not None]
-    assert proposals == ()
-    assert {item.disposition for item in unit_items} == {CoverageDisposition.REJECTED_BY_GATE}
+    assert len(proposals) == 2
+    assert {item.disposition for item in unit_items} == {CoverageDisposition.DURABLE_CANDIDATE}
 
 
 def test_plan_oracle_detects_post_planner_omission() -> None:

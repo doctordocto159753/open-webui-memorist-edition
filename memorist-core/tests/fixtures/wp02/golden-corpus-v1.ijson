@@ -1,6 +1,6 @@
 {
   "corpus_version": "memorist.wp02.golden_corpus.v1",
-  "semantic_contract": "memorist.semantic_candidate_analysis@1.0",
+  "semantic_contract": "memorist.semantic_candidate_analysis@1.1",
   "cases": [
     {
       "case_id": "multi-01-migration-and-preference",
@@ -10,7 +10,7 @@
       "semantic_output": {
         "schema_version": "1.0",
         "prompt_id": "memorist.semantic_candidate_analysis",
-        "prompt_version": "1.0",
+        "prompt_version": "1.1",
         "status": "ok",
         "warnings": [],
         "semantic_units": [
@@ -58,7 +58,7 @@
       "semantic_output": {
         "schema_version": "1.0",
         "prompt_id": "memorist.semantic_candidate_analysis",
-        "prompt_version": "1.0",
+        "prompt_version": "1.1",
         "status": "ok",
         "warnings": [],
         "semantic_units": [
@@ -94,7 +94,7 @@
       "semantic_output": {
         "schema_version": "1.0",
         "prompt_id": "memorist.semantic_candidate_analysis",
-        "prompt_version": "1.0",
+        "prompt_version": "1.1",
         "status": "ok",
         "warnings": [],
         "semantic_units": [
@@ -153,7 +153,7 @@
       "semantic_output": {
         "schema_version": "1.0",
         "prompt_id": "memorist.semantic_candidate_analysis",
-        "prompt_version": "1.0",
+        "prompt_version": "1.1",
         "status": "ok",
         "warnings": [],
         "semantic_units": [
@@ -189,7 +189,7 @@
       "semantic_output": {
         "schema_version": "1.0",
         "prompt_id": "memorist.semantic_candidate_analysis",
-        "prompt_version": "1.0",
+        "prompt_version": "1.1",
         "status": "ok",
         "warnings": [],
         "semantic_units": [
@@ -225,7 +225,7 @@
       "semantic_output": {
         "schema_version": "1.0",
         "prompt_id": "memorist.semantic_candidate_analysis",
-        "prompt_version": "1.0",
+        "prompt_version": "1.1",
         "status": "ok",
         "warnings": [],
         "semantic_units": [
@@ -273,7 +273,7 @@
       "semantic_output": {
         "schema_version": "1.0",
         "prompt_id": "memorist.semantic_candidate_analysis",
-        "prompt_version": "1.0",
+        "prompt_version": "1.1",
         "status": "ok",
         "warnings": [],
         "semantic_units": [
@@ -309,7 +309,7 @@
       "semantic_output": {
         "schema_version": "1.0",
         "prompt_id": "memorist.semantic_candidate_analysis",
-        "prompt_version": "1.0",
+        "prompt_version": "1.1",
         "status": "ok",
         "warnings": [],
         "semantic_units": [
@@ -345,7 +345,7 @@
       "semantic_output": {
         "schema_version": "1.0",
         "prompt_id": "memorist.semantic_candidate_analysis",
-        "prompt_version": "1.0",
+        "prompt_version": "1.1",
         "status": "ok",
         "warnings": [],
         "semantic_units": [
@@ -381,7 +381,7 @@
       "semantic_output": {
         "schema_version": "1.0",
         "prompt_id": "memorist.semantic_candidate_analysis",
-        "prompt_version": "1.0",
+        "prompt_version": "1.1",
         "status": "ok",
         "warnings": [],
         "semantic_units": [
@@ -443,7 +443,7 @@
       "semantic_output": {
         "schema_version": "1.0",
         "prompt_id": "memorist.semantic_candidate_analysis",
-        "prompt_version": "1.0",
+        "prompt_version": "1.1",
         "status": "ok",
         "warnings": [],
         "semantic_units": [
@@ -525,7 +525,7 @@
       "semantic_output": {
         "schema_version": "1.0",
         "prompt_id": "memorist.semantic_candidate_analysis",
-        "prompt_version": "1.0",
+        "prompt_version": "1.1",
         "status": "ok",
         "warnings": [],
         "semantic_units": [
@@ -579,7 +579,7 @@
       "semantic_output": {
         "schema_version": "1.0",
         "prompt_id": "memorist.semantic_candidate_analysis",
-        "prompt_version": "1.0",
+        "prompt_version": "1.1",
         "status": "ok",
         "warnings": [],
         "semantic_units": [

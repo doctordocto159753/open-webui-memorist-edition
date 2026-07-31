@@ -4,36 +4,41 @@ This document explains how a chat turn becomes reusable, inspectable context in
 Memorist — the full path from message capture to the "Memory used" display —
 and where the user's consent boundaries sit.
 
+For a code-grounded prompt/response trace with concrete records and Lite/Full
+adapters, read
+[Walkthrough پردازش حافظه در موتور مرکزی](reference/core-memory-processing-walkthrough.md).
+
 The one-line thesis:
 
 ```text
 Jakobson analysis is not memory. A candidate is not truth.
-Memory is a versioned, evidence-linked claim that must earn its way
-through gate, route, trust, and consolidation before it can be recalled.
+Memory is a versioned, evidence-linked claim. Messages remain retrievable
+evidence before promotion; local trust and consolidation govern durable claims.
 ```
 
 ## Pipeline overview
 
 ```text
 1. capture           raw user/assistant message, unchanged, as evidence
-2. unitization       deterministic sentence units with exact offsets
-3. Jakobson analysis six-factor communication annotation per sentence
-4. canonical route   persisted server-owned route
-5. gate decision     persisted server-owned gate (always before candidate)
-6. bounded context   2 prior units, or 6 only for dependency hints
-7. semantic v1       one whole-message model call with strict local validation
+2. envelope          structural blocks/units with exact offsets
+3. bounded context   2 prior units, or 6 only for dependency hints
+4. semantic v1       one whole-message model call with strict local validation
+5. Message semantics summary/categories/topics/concepts/entity/process-stage
+6. compatibility     optional Jakobson/route/gate audit annotations
 8. coverage plan     one deterministic disposition for every accepted unit
 9. proposal          deterministic UUIDv5, privacy/provenance bounded
 10. persistence      crash-safe proposal/candidate link in SQLite or PostgreSQL
 11. review paths     privacy/forget/manual-review handled outside ordinary memory
 12. consolidation    candidates become versioned canonical memories
-13. retrieval        scoped, budget-aware, rank-fused candidate selection
+13. retrieval        scoped canonical-memory and Message-evidence selection
 14. attachment       bounded Memory Context Attachment, provenance-tagged
 15. display          read-only, redacted "Memory used" panel in chat
 ```
 
 Consent wraps the whole machine: the per-chat **Memory On / Memory Off**
-switch is enforced server-side before step 1.
+switch is enforced server-side before step 1. Recall and learning are distinct:
+preflight can use already-consolidated memory and processed Message evidence;
+the current user and assistant messages become eligible only for later turns.
 
 ## 1–2. Capture and unitization
 
@@ -60,16 +65,14 @@ a teammate, the user themselves) and what it refers to. An instruction aimed at
 the AI and an obligation describing a team process are different memories even
 when the words look similar.
 
-Jakobson analysis is an annotation lens, not memory. The complementary
+Jakobson analysis is an optional annotation lens, not memory. The complementary
 `StructuredAnalyzer` produces auxiliary structured annotations and is **not**
-the semantic authority — the canonical semantic contract owns routing and
-gating.
+the semantic authority; the whole-message semantic contract owns interpretation.
 
-## 5–6. Canonical route selection and the gate
+## 5–6. Message semantics and compatibility annotations
 
-A single canonical semantic authority maps annotations to **memory signal
-routes** — shared by Lite and Full so both profiles make identical semantic
-decisions:
+Legacy annotation code still maps communication annotations to **memory signal
+routes** for audit and replay compatibility:
 
 | Dominant function | Example signal | Route |
 | --- | --- | --- |
@@ -80,26 +83,26 @@ decisions:
 | emotive | preference, frustration | `user_preference`, `emotional_stance` |
 | phatic | greeting/contact only | `ignore` |
 
-The **gate decides before any candidate is constructed** ("gate before
-candidate"). Signals that should never become ordinary memory are stopped
-here:
+These route/gate labels do not stop ordinary messages before semantic analysis.
+Hard boundaries remain local and stop before provider transfer:
 
-- phatic/greeting-only turns create no memory;
-- privacy requests, forget requests, and manual-review paths are routed to
-  their own workflows, never to ordinary memory;
-- weak or out-of-scope signals are dropped with a recorded reason.
+- Memory Off;
+- invalid user/workspace/project/session ownership;
+- deleted, redacted, quarantined or malformed source evidence;
+- forbidden secret/privacy transfer.
 
 ## 6–10. Semantic coverage, candidate construction, and persistence
 
-Only `analyze` and `analyze_high_confidence` gates enter the shared
-`SemanticCandidatePlanningService`; terminal gates skip the semantic provider.
+Every ordinary meaningful message enters the shared
+`SemanticCandidatePlanningService`; terminal legacy labels do not skip the provider.
 Lite and Full send the same whole-message prompt and a bounded same-user,
 same-session, same-workspace/project context manifest. Memory attachments,
 system prompts, hidden/deleted versions, tool output, and cross-session text are
 never semantic context.
 
-The model proposes units, references, relations, durability, polarity, and
-epistemic status. Local code retains authority over exact evidence, gate/route,
+The model proposes Message summary/categories/topics/concepts, units,
+references, relations, durability, lifecycle, polarity, and epistemic status.
+Local code retains authority over exact evidence, source/privacy/scope,
 privacy, provenance, disposition, UUID identity, and persistence. Every accepted
 unit receives exactly one of `durable_candidate`, `context_only`,
 `transient_instruction`, `unresolved_reference`, `rejected_by_gate`,
@@ -217,6 +220,7 @@ project artifacts remain `assistant_claim` evidence with an explicit
 ## Going deeper
 
 - [reference/memory-engine-architecture.md](reference/memory-engine-architecture.md) — full essay-form architecture of the memory engine
+- [reference/core-memory-processing-walkthrough.md](reference/core-memory-processing-walkthrough.md) — exact inlet, model, outlet, worker, persistence, and next-turn retrieval sequence
 - [reference/memory-intelligence-core.md](reference/memory-intelligence-core.md) — Jakobson layer data flow
 - [reference/concept-glossary.md](reference/concept-glossary.md) — frozen terminology
 - [reference/memory-control-contract.md](reference/memory-control-contract.md) — authenticated control-plane contract

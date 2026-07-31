@@ -67,7 +67,7 @@ def wp02_downstream_semantic_model(monkeypatch: pytest.MonkeyPatch) -> None:
         output = {
             "schema_version": "1.0",
             "prompt_id": "memorist.semantic_candidate_analysis",
-            "prompt_version": "1.0",
+            "prompt_version": "1.1",
             "status": "ok" if units else "abstain",
             "warnings": [],
             "semantic_units": units,

@@ -34,7 +34,7 @@ The base contains both required predecessors:
   `validate_semantic_evidence`, and the final WP01 model/local authority
   boundary.
 
-Current versions and migration heads:
+Operation 0 baseline versions and migration heads (historical freeze input):
 
 | Surface | Current value |
 | --- | --- |
@@ -50,6 +50,13 @@ Current versions and migration heads:
 | Normalization | `memorist.text.normalization.v1` |
 
 No WP02 migration number is reserved by this note.
+
+The implemented WP02 baseline now uses SQLite head
+`0038_message_first_semantics.sql`, PostgreSQL head
+`0025_message_first_semantics.sql`, and `role-contract-manifest-v3`.
+The table above is retained to make the contract-freeze provenance auditable;
+it is not the current runtime/version status. Prompt Pack `2.0` and Jakobson
+`3.0` intentionally remained unchanged.
 
 ## Actual runtime trace
 
@@ -110,10 +117,10 @@ captured Message/job
      -> persist canonical memory_signal_routes
      -> persist memory_gate_decisions
      -> legacy linguistic-analysis SQL adapter
-     -> gated_candidate_adapter.record_candidates
-        -> re-read persisted gates
-        -> select a persisted authoritative route
-        -> shared build_candidate_draft
+     -> whole-message semantic candidate planning
+        -> persist exact semantic-span source authority where needed
+        -> validate model meaning and exact evidence
+        -> apply local source/privacy/scope ceilings
         -> persist PostgreSQL memory_candidates and candidate_evidence
      -> privacy/high-confidence candidate stages
      -> PostgreSQL memory/version/evidence persistence
@@ -121,11 +128,10 @@ captured Message/job
      -> graph_projection_outbox
 ```
 
-Full currently records a legacy `linguistic_analyses` row for every unit after
-the gates are persisted; unlike Lite, it does not filter this legacy adapter to
-gate-eligible units. Candidate creation remains gated because
-`gated_candidate_adapter` re-reads the persisted gate and the shared candidate
-policy fails closed.
+Full records legacy `linguistic_analyses`, route, and gate rows for compatibility
+and audit after unitization. Candidate creation is instead authorized by the
+validated whole-message semantic contract plus deterministic source, privacy,
+scope, consent, and provenance ceilings.
 
 ### Shared authority and duplication
 
@@ -133,10 +139,10 @@ Shared semantic authority already exists in:
 
 - `memory_worker.jakobson_runtime` for strict Jakobson execution, one repair,
   fallback, and provider-attempt audit;
-- `memory_worker.semantic.authority` for authoritative route selection;
-- `memory_worker.semantic.gate_policy` for analysis/candidate/memory permission;
-- `memory_worker.semantic.candidate_mapping` for the existing route-to-candidate
-  mapping;
+- `memory_worker.semantic.authority` for legacy route selection and audit;
+- `memory_worker.semantic.gate_policy` for legacy compatibility annotations;
+- `memory_worker.semantic.candidate_mapping` for semantic-kind mapping with
+  historical route fallback;
 - `memory_worker.semantic.candidate_service` for the runtime-neutral draft;
 - `memory_worker.semantic.provenance_policy` for source ceilings; and
 - `memcore.textsemantics` for the deterministic envelope and evidence integrity.
@@ -165,32 +171,33 @@ existing immutable capture
   -> current text units
   -> Jakobson v3
   -> persisted canonical route
-  -> persisted deterministic gate
-  -> bounded-context resolver
-  -> semantic_candidate_analysis v1
+  -> structural envelope + bounded-context resolver
+  -> whole-message semantic_candidate_analysis v1.1
+  -> persisted legacy route/gate annotations
   -> strict typed/schema validation
   -> WP01 evidence validation
+  -> exact semantic-span source authority persistence where needed
   -> deterministic coverage planner
   -> existing candidate service
   -> canonical candidate persistence
   -> consolidation
 ```
 
-The current pipelines make this safer than the older architecture sketch that
-placed semantic analysis before gate: both already persist route and gate before
-their candidate adapters.
+Schema 27 preserves the authority boundary introduced in schema 26: legacy route/gate records remain
+durable audit and replay lineage, but ordinary classifications cannot prevent
+the model from seeing the whole meaningful message.
 
 The invariant is exact:
 
-1. `discard` and `retain_raw_only` do not call semantic candidate analysis and
-   cannot create a proposal.
-2. `manual_review` may call semantic analysis for review evidence but cannot
-   create an automatic proposal.
-3. `analyze` and `analyze_high_confidence` may proceed, subject to persisted
-   route, privacy, provenance, and sensitivity policy.
-4. Every adapter re-reads the persisted gate and route immediately before
-   candidate persistence. A model-returned gate or route field is forbidden.
-5. A gate or route change invalidates the coverage plan and proposal identity.
+1. `discard`, `retain_raw_only`, and `manual_review` are compatibility labels,
+   not pre-semantic vetoes.
+2. Memory Off, invalid ownership/scope/source, deleted/redacted/quarantined
+   evidence, and forbidden privacy/secret transfer still block locally.
+3. Every adapter rechecks source integrity, privacy and scope before candidate
+   persistence. Provider output cannot execute a write.
+4. Historical proposal identities retain legacy route/gate values in their
+   frozen vector, but changing those annotations alone does not invalidate a
+   completed semantic replay.
 
 Strict structure, semantic binding, and evidence integrity share the existing
 single repair budget. The sequence is:
@@ -228,7 +235,7 @@ Strict contract identity:
 ```text
 schema version: 1.0
 prompt id:      memorist.semantic_candidate_analysis
-prompt version: 1.0
+prompt version: 1.1
 stage:          semantic_candidate_analysis
 model role:     memory_extraction
 ```
@@ -241,7 +248,7 @@ coverage outcomes, not model authority.
 | --- | --- | --- | --- | --- |
 | `schema_version` | literal `"1.0"` | Model echo; strict-bound | Prompt audit | Contract metadata only |
 | `prompt_id` | fixed string | Model echo; strict-bound | Prompt audit | Contract metadata only |
-| `prompt_version` | literal `"1.0"` | Model echo; strict-bound | Prompt audit | Contract metadata only |
+| `prompt_version` | literal `"1.1"` | Model echo; strict-bound | Prompt audit | Contract metadata only |
 | `status` | `ok \| abstain` | Model; closed enum | Prompt audit | Non-authoritative; fallback policy is local |
 | `warnings` | list of strings | Model; sanitized and bounded | Prompt audit only | Explicitly non-authoritative |
 | `semantic_units` | list of `SemanticUnit` | Model; strict and evidence validated | Validated prompt audit; referenced by coverage | Validated proposal only |
@@ -262,7 +269,8 @@ is `retain_raw_only`.
 | `raw_end` | strict positive integer | Model; range/order validated | Coverage item and candidate evidence span | Evidence coordinate only |
 | `evidence` | string | Model; must equal current raw slice byte-for-byte | Existing prompt/candidate evidence records | Evidence only |
 | `proposition` | string | Model; no local rewriting or spelling correction | Prompt audit; candidate object only after policy | Validated proposal only |
-| `unit_type` | closed enum | Model; strict-bound | Coverage/candidate metadata | Validated proposal only |
+| `unit_type` | closed structural/semantic enum | Model; strict-bound | Coverage/candidate metadata | Validated proposal only |
+| `memory_kind` | closed semantic enum or null | Model; strict-bound | Coverage/candidate mapping | Validated proposal only |
 | `durability` | closed enum | Model; strict-bound; planner may downgrade | Coverage/candidate metadata | Never overrides gate/policy |
 | `polarity` | closed enum | Model; evidence validated | Candidate/version when a proposal is accepted | Validated proposal only |
 | `epistemic_status` | closed enum | Model; strict-bound | Candidate metadata/coverage audit | Validated proposal only |
@@ -270,22 +278,24 @@ is `retain_raw_only`.
 Closed enums:
 
 ```text
-unit_type:        statement | instruction | question | explanation
+unit_type:        statement | instruction | question | explanation | heading | list_item | table_row | code_block | fragment
+memory_kind:      Need | Instruction | Preference | Decision | ProjectArtifact | ProjectState | FactClaim | Hypothesis | Constraint | Question | LearningGoal | Feedback | Correction | Retraction
 durability:       durable | transient | context_only | unknown
 polarity:         affirmed | negated | unknown
 epistemic_status: asserted | hedged | hypothetical | questioned | unknown
 ```
 
-These axes deliberately do not create a universal candidate ontology.
-Candidate type, subject, and predicate remain outputs of the existing
-authoritative route mapping. A question is not a durable user fact merely
+The versioned `memory_kind` maps to the existing candidate ontology without
+re-parsing multilingual text. Historical outputs without `memory_kind` may use
+the legacy route mapping as a compatibility fallback. A question is not a durable user fact merely
 because it is well-formed. `hedged` is not negation and does not change the
 existing confidence formula.
 
 Semantic units must be ordered by `(raw_start, raw_end)`, non-overlapping, and
-fully contained in the current raw message. A unit spanning incompatible
-current text-unit, gate, or route boundaries cannot be assigned one authority
-record and therefore becomes `needs_review` or `unsupported`.
+fully contained in the current raw message. When one semantic proposition spans
+multiple canonical sentence units, runtime persists a deterministic hash-bound
+`fragment` text unit for that exact span. Missing route/gate/Jakobson lineage
+does not by itself downgrade the unit.
 
 ## `SemanticReference`
 
@@ -591,7 +601,7 @@ Jakobson v3 remains immutable. WP02 adds:
 
 ```text
 prompt id:      memorist.semantic_candidate_analysis
-prompt version: 1.0
+prompt version: 1.1
 stage:          semantic_candidate_analysis
 role:           memory_extraction
 ```
@@ -605,7 +615,7 @@ When prompt/certification work lands, the role manifest becomes
 ```text
 bundle id: memory-extraction-contract-bundle-v1
 1. memorist.jakobson_sentence_analysis @ 3.0
-2. memorist.semantic_candidate_analysis @ 1.0
+2. memorist.semantic_candidate_analysis @ 1.1
 ```
 
 The bundle hash is SHA-256 over canonical I-JSON containing the bundle ID,
@@ -658,8 +668,8 @@ projection only.
 
 The frozen semantic prompt/contract, ordered memory-extraction certification
 bundle, pure deterministic coverage planner, and content-free coverage replay
-stores are implemented. SQLite migration `0037_semantic_coverage_audit.sql`
-and PostgreSQL migration `0024_semantic_coverage_audit.sql` add only audit
+stores are implemented. SQLite migration `0038_message_first_semantics.sql`
+and PostgreSQL migration `0025_message_first_semantics.sql` add message semantics and audit
 metadata, hashes, offsets, dispositions, and lineage IDs.
 
 At the Operations 1-3 checkpoint these components were deliberately
@@ -705,19 +715,18 @@ System content, tool output, stale units, and cross-session or cross-scope
 records are excluded. Runtime context text remains in its canonical source
 records and is not copied into the coverage audit tables.
 
-If any persisted unit has a terminal `discard` or `retain_raw_only` gate, the
-message is failed closed before semantic model execution so gated material is
-never sent to that stage. `manual_review` may be analyzed but the coverage
-policy prevents automatic candidate creation. A deterministic or failed
-semantic execution produces an auditable abstention/zero-candidate plan; it
-never falls back into the legacy candidate extractor.
+Every ordinary meaningful message reaches whole-message semantic analysis.
+Only hard consent, source-integrity, scope and privacy boundaries short-circuit
+the provider. A deterministic or failed semantic execution produces an
+auditable abstention/zero-candidate or partial outcome and never falls back into
+the legacy candidate extractor.
 
 Remote provider attempts are still reserved before I/O. A completed semantic
 prompt execution is replayed from its validated audit output. Proposal UUIDs
 remain candidate UUIDs, candidate links are reserved before writes, and the
-final SQLite/PostgreSQL transaction locks and re-reads the persisted
-gate/route authority. Existing candidate/evidence rows from a recoverable
+final SQLite/PostgreSQL transaction locks and re-reads source/privacy authority.
+Existing candidate/evidence rows from a recoverable
 pre-link crash are verified and linked rather than duplicated.
 A restart may reuse a completed plan only after all durable links are complete
-and their persisted gate/route rows still authorize automatic creation;
-authority mutation makes replay fail closed.
+and their source/privacy bindings remain valid; hard-authority mutation makes
+replay fail closed.

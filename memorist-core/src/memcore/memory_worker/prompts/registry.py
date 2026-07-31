@@ -20,10 +20,14 @@ from memcore.memory_worker.prompts.versions import (
     JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
     JAKOBSON_SENTENCE_ANALYSIS_STAGE,
     JAKOBSON_SENTENCE_ANALYSIS_V3_VERSION,
+    PREFLIGHT_PLANNING_PROMPT_ID,
+    PREFLIGHT_PLANNING_V2_VERSION,
+    PREFLIGHT_PLANNING_VERSION,
     PROMPT_PACK_ID,
     PROMPT_PACK_VERSION,
     SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID,
     SEMANTIC_CANDIDATE_ANALYSIS_STAGE,
+    SEMANTIC_CANDIDATE_ANALYSIS_V1_VERSION,
     SEMANTIC_CANDIDATE_ANALYSIS_VERSION,
 )
 from memcore.model_control.security import sanitize_error_message
@@ -175,13 +179,17 @@ class PromptExecutionRepository:
         raw_output = (
             _redact_secrets(dict(raw_output_value)) if raw_output_value is not None else None
         )
+        # Validate the model's real output, then redact for storage. Validating
+        # the redacted copy makes redaction itself a validation failure: the
+        # preflight contract requires an integer ``items[].estimated_tokens``,
+        # whose key matches the "token" secret marker.
+        if validated_output_value is not None:
+            validate_prompt_output(prompt_id, prompt_version, dict(validated_output_value))
         validated_output = (
             _redact_secrets(dict(validated_output_value))
             if validated_output_value is not None
             else None
         )
-        if validated_output is not None:
-            validate_prompt_output(prompt_id, prompt_version, validated_output)
         output_for_hash = validated_output or raw_output or {"status": status}
         values = {
             "prompt_execution_uuid": new_uuid(),
@@ -377,7 +385,7 @@ def _definition(
     *,
     requires_evidence: bool = True,
     blocking_path_allowed: bool = False,
-    default_timeout_ms: int = 8000,
+    default_timeout_ms: int = 120000,
     is_legacy: bool = False,
     version: str = PROMPT_VERSION,
 ) -> PromptDefinition:
@@ -409,7 +417,13 @@ def _redact_secrets(value: Any) -> Any:
         redacted: dict[str, Any] = {}
         for key, item in value.items():
             key_text = str(key)
-            if any(marker in key_text.lower() for marker in secret_markers):
+            # The markers are substrings, so ordinary contract fields such as
+            # ``estimated_tokens`` and ``max_input_tokens`` match too. A
+            # credential is always a string, so redacting non-string scalars
+            # only destroys audit data without protecting anything.
+            if any(marker in key_text.lower() for marker in secret_markers) and _may_hold_secret(
+                item
+            ):
                 redacted[key_text] = "[REDACTED]"
             else:
                 redacted[key_text] = _redact_secrets(item)
@@ -419,12 +433,54 @@ def _redact_secrets(value: Any) -> Any:
     return value
 
 
+def _may_hold_secret(value: Any) -> bool:
+    """True when a secret-named field could actually carry a credential.
+
+    Strings and containers can; numbers, booleans and ``None`` cannot.
+    """
+
+    return not isinstance(value, bool | int | float) and value is not None
+
+
 PROMPT_LIST = [
     _definition(
         SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID,
         SEMANTIC_CANDIDATE_ANALYSIS_STAGE,
         [ModelRole.MEMORY_EXTRACTION],
-        "Bounded semantic analysis after persisted route and gate authority.",
+        "Immutable historical whole-message semantic-analysis contract.",
+        "semantic_candidate_analysis_v1_legacy.md",
+        [
+            "current_message_uuid",
+            "current_message_version_uuid",
+            "current_raw_text",
+            "text_envelope",
+            "bounded_context_items",
+            "boundary",
+            "contract_versions",
+        ],
+        {
+            "schema_name": "memorist_semantic_candidate_analysis_v1_legacy",
+            "canonical_collections": ["semantic_units", "references", "relations"],
+            "required_top_level": [
+                "schema_version",
+                "prompt_id",
+                "prompt_version",
+                "status",
+                "warnings",
+                "semantic_units",
+                "references",
+                "relations",
+            ],
+        },
+        default_timeout_ms=120000,
+        version=SEMANTIC_CANDIDATE_ANALYSIS_V1_VERSION,
+        is_legacy=True,
+    ),
+    _definition(
+        SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID,
+        SEMANTIC_CANDIDATE_ANALYSIS_STAGE,
+        [ModelRole.MEMORY_EXTRACTION],
+        "Whole-message semantic analysis before legacy route/gate promotion policy.",
         "semantic_candidate_analysis_v1.md",
         [
             "current_message_uuid",
@@ -444,12 +500,24 @@ PROMPT_LIST = [
                 "prompt_version",
                 "status",
                 "warnings",
+                "intent",
+                "primary_topic",
+                "secondary_topic",
+                "one_line_summary",
+                "message_categories",
+                "concept_tags",
+                "entities",
+                "process_references",
+                "epistemic_status",
+                "temporal_status",
+                "importance",
+                "explicit_memory_request",
                 "semantic_units",
                 "references",
                 "relations",
             ],
         },
-        default_timeout_ms=8000,
+        default_timeout_ms=120000,
         version=SEMANTIC_CANDIDATE_ANALYSIS_VERSION,
     ),
     _definition(
@@ -477,7 +545,7 @@ PROMPT_LIST = [
                 "overall_summary",
             ],
         },
-        default_timeout_ms=8000,
+        default_timeout_ms=120000,
     ),
     _definition(
         JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
@@ -504,7 +572,7 @@ PROMPT_LIST = [
                 "overall_summary",
             ],
         },
-        default_timeout_ms=8000,
+        default_timeout_ms=120000,
         version=JAKOBSON_SENTENCE_ANALYSIS_V3_VERSION,
     ),
     _definition(
@@ -578,7 +646,28 @@ PROMPT_LIST = [
         {"required_item_keys": ["recommended_operation", "temporal_handling"]},
     ),
     _definition(
-        "memorist.preflight_planning",
+        PREFLIGHT_PLANNING_PROMPT_ID,
+        "preflight_planning",
+        [ModelRole.PREFLIGHT],
+        "Immutable historical preflight attachment-planning contract.",
+        "preflight_planning_v2_legacy.md",
+        [
+            "current_user_message",
+            "main_chat_model",
+            "attachment_budget",
+            "active_blocks",
+            "retrieval_candidates",
+            "conflicts",
+            "security_warnings",
+        ],
+        {"required_item_keys": ["attachment_mode", "estimated_tokens"]},
+        blocking_path_allowed=True,
+        default_timeout_ms=60000,
+        version=PREFLIGHT_PLANNING_V2_VERSION,
+        is_legacy=True,
+    ),
+    _definition(
+        PREFLIGHT_PLANNING_PROMPT_ID,
         "preflight_planning",
         [ModelRole.PREFLIGHT],
         "Bounded pre-main-chat planning for Memory Context Attachment.",
@@ -594,7 +683,8 @@ PROMPT_LIST = [
         ],
         {"required_item_keys": ["attachment_mode", "estimated_tokens"]},
         blocking_path_allowed=True,
-        default_timeout_ms=1000,
+        default_timeout_ms=60000,
+        version=PREFLIGHT_PLANNING_VERSION,
     ),
     _definition(
         "memorist.block_compaction",

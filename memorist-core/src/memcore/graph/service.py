@@ -158,6 +158,21 @@ class GraphProjectionService:
                         """,
                         (row["memory_uuid"],),
                     )
+                cursor.execute(_ACTIVE_MESSAGE_GRAPH_ROWS_SQL)
+                for row in _rows_to_dicts(cursor):
+                    projector.project_message_semantics(_message_graph_record(cursor, row))
+                    projected += 1
+                    cursor.execute(
+                        """
+                        UPDATE graph_projection_outbox
+                        SET status = 'projected', last_error_sanitized = NULL,
+                            updated_at = now()
+                        WHERE source_type = 'message_semantics'
+                          AND source_uuid = %s
+                          AND status IN ('pending', 'retry')
+                        """,
+                        (row["semantic_analysis_uuid"],),
+                    )
             connection.commit()
         except Exception as error:
             connection.rollback()
@@ -263,6 +278,81 @@ WHERE mem.status = 'active'
   AND msg.visibility = 'visible'
 ORDER BY mem.memory_uuid, mv.version_number DESC
 """
+
+_ACTIVE_MESSAGE_GRAPH_ROWS_SQL = """
+SELECT analysis.semantic_analysis_uuid, analysis.message_uuid,
+       analysis.workspace_uuid, analysis.project_uuid, analysis.session_uuid,
+       analysis.source_role, analysis.status, analysis.one_line_summary,
+       analysis.summary_intent, analysis.primary_topic, analysis.secondary_topic
+FROM message_semantic_analyses analysis
+JOIN messages message ON message.message_uuid = analysis.message_uuid
+WHERE analysis.status IN ('succeeded', 'partial')
+  AND analysis.erased_at IS NULL
+  AND analysis.raw_text_hash = message.content_hash
+  AND message.is_deleted = false
+  AND message.visibility = 'visible'
+  AND message.redaction_status = 'none'
+  AND (
+    analysis.message_version_uuid IS NULL
+    OR analysis.message_version_uuid = (
+      SELECT version.message_version_uuid
+      FROM message_versions version
+      WHERE version.message_uuid = message.message_uuid
+      ORDER BY version.version_number DESC LIMIT 1
+    )
+  )
+ORDER BY analysis.created_at, analysis.semantic_analysis_uuid
+"""
+
+
+def _message_graph_record(cursor: Any, row: dict[str, Any]) -> dict[str, Any]:
+    analysis_uuid = row["semantic_analysis_uuid"]
+    cursor.execute(
+        "SELECT category FROM message_semantic_categories "
+        "WHERE semantic_analysis_uuid = %s ORDER BY category",
+        (analysis_uuid,),
+    )
+    row["categories"] = [item[0] for item in cursor.fetchall()]
+    cursor.execute(
+        """
+        SELECT concept.canonical_label
+        FROM message_concept_tags tag
+        JOIN canonical_concepts concept ON concept.concept_uuid = tag.concept_uuid
+        WHERE tag.semantic_analysis_uuid = %s ORDER BY tag.tag_ordinal
+        """,
+        (analysis_uuid,),
+    )
+    row["concepts"] = [item[0] for item in cursor.fetchall()]
+    cursor.execute(
+        "SELECT canonical_name FROM message_entity_references "
+        "WHERE semantic_analysis_uuid = %s ORDER BY canonical_name",
+        (analysis_uuid,),
+    )
+    row["entities"] = [item[0] for item in cursor.fetchall()]
+    cursor.execute(
+        "SELECT process_label, stage_ordinal FROM message_process_references "
+        "WHERE semantic_analysis_uuid = %s ORDER BY process_label, stage_ordinal",
+        (analysis_uuid,),
+    )
+    row["processes"] = [
+        {"process_label": item[0], "stage_ordinal": item[1]} for item in cursor.fetchall()
+    ]
+    cursor.execute(
+        "SELECT semantic_unit_uuid, memory_kind, epistemic_status, lifecycle_status "
+        "FROM message_semantic_units WHERE semantic_analysis_uuid = %s "
+        "ORDER BY unit_ordinal",
+        (analysis_uuid,),
+    )
+    row["units"] = [
+        {
+            "semantic_unit_uuid": item[0],
+            "memory_kind": item[1],
+            "epistemic_status": item[2],
+            "lifecycle_status": item[3],
+        }
+        for item in cursor.fetchall()
+    ]
+    return row
 
 
 def _rows_to_dicts(cursor: Any) -> list[dict[str, Any]]:

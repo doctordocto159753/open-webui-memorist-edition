@@ -67,7 +67,6 @@ from memcore.validators.ijson import canonical_hash_ijson
 
 SEMANTIC_ORCHESTRATION_VERSION = "memorist.semantic_candidate.orchestration.v1"
 SEMANTIC_PRIVACY_POLICY_VERSION = "wp02-privacy-ceiling-v1"
-_TERMINAL_GATES = {"discard", "retain_raw_only"}
 
 
 def _assert_current_scope_eligible(scope: CurrentContextScope) -> None:
@@ -162,7 +161,7 @@ class SemanticCandidateRuntimeAdapter(BoundedContextSource, Protocol):
         candidate: MemoryCandidate,
         evidence: CandidateEvidence,
         payload_hash: str,
-        authority: CandidateAuthorityBinding,
+        authority: CandidateAuthorityBinding | None,
     ) -> dict[str, Any]: ...
 
 
@@ -196,7 +195,7 @@ class SemanticCandidatePlanningResult:
 
 
 class SemanticCandidatePlanningService:
-    """Execute the frozen gate-before-semantic-before-candidate sequence."""
+    """Execute whole-message semantics before legacy promotion annotations."""
 
     def __init__(
         self,
@@ -265,27 +264,25 @@ class SemanticCandidatePlanningService:
                 for authority in authorities
             )
 
-        terminal_short_circuit = any(
-            authority.gate_decision in _TERMINAL_GATES for authority in authorities
-        )
-        privacy_short_circuit = (
-            any(
-                not authority.privacy_storage_allowed
-                or authority.privacy_ceiling in {"sensitive", "secret"}
-                for authority in authorities
-            )
-            or classify_sensitivity(scope.raw_text) is not SensitivityClass.NORMAL
+        # Routes, gates, and Jakobson annotations remain durable compatibility
+        # records, but ordinary legacy classifications no longer prevent the
+        # whole message from reaching model-led semantic analysis.
+        terminal_short_circuit = False
+        # A sensitive span is a transfer boundary, not a whole-message semantic
+        # veto. Local/deterministic processing can still classify the safe spans
+        # and the coverage policy will independently fail closed for each
+        # sensitive unit. Only a remote provider is prevented from seeing the
+        # message when any part crosses the remote-transfer ceiling.
+        privacy_short_circuit = _remote_semantic_transfer_forbidden(
+            request.profile,
+            authorities,
+            scope.raw_text,
         )
         prompt_execution_uuid: str | None = None
         stage_execution_uuid: str | None = None
         called_provider = False
         fallback_used = False
-        if terminal_short_circuit:
-            semantic_output = SemanticAnalysisV1Output.model_validate(
-                semantic_abstention("terminal_gate_before_semantic_analysis")
-            )
-            semantic_status = "skipped_by_gate"
-        elif privacy_short_circuit:
+        if privacy_short_circuit:
             # Do not duplicate sensitive current-message content in a remote
             # semantic call or its replay/audit output. The canonical message
             # remains the sole content-bearing record and coverage fails closed.
@@ -311,6 +308,21 @@ class SemanticCandidatePlanningService:
             semantic_input.model_dump(mode="json"),
             semantic_output.model_dump(mode="json"),
         )
+        self._fence_and_revalidate(request, raw_text_hash=envelope.raw_text_hash)
+        ensure_span_authorities = getattr(
+            self.adapter,
+            "ensure_semantic_span_authorities",
+            None,
+        )
+        if ensure_span_authorities is not None:
+            authorities = tuple(
+                ensure_span_authorities(
+                    scope=scope,
+                    processing_run_uuid=request.processing_run_uuid,
+                    semantic_output=semantic_output,
+                    authorities=authorities,
+                )
+            )
         planner_input = CoveragePlannerInput(
             message_uuid=scope.message_uuid,
             message_version_uuid=scope.message_version_uuid,
@@ -551,7 +563,7 @@ def _candidate_authority_binding(
     processing_run_uuid: str,
     proposal: CandidateProposal,
     authority: PersistedUnitAuthority,
-) -> CandidateAuthorityBinding:
+) -> CandidateAuthorityBinding | None:
     if any(
         value is None
         for value in (
@@ -563,7 +575,7 @@ def _candidate_authority_binding(
             authority.route_status,
         )
     ):
-        raise ValueError("durable proposal requires complete persisted authority")
+        return None
     return CandidateAuthorityBinding(
         processing_run_uuid=processing_run_uuid,
         text_unit_uuid=proposal.text_unit_uuid,
@@ -593,6 +605,27 @@ def _planner_role(value: str) -> Literal["user", "assistant", "tool", "system"]:
     if value in {"user", "assistant", "tool", "system"}:
         return cast(Literal["user", "assistant", "tool", "system"], value)
     return "system"
+
+
+def _remote_semantic_transfer_forbidden(
+    profile: Mapping[str, Any],
+    authorities: Sequence[PersistedUnitAuthority],
+    raw_text: str,
+) -> bool:
+    provider_type = str(profile.get("provider_type") or profile.get("provider") or "deterministic")
+    remote_provider = provider_type in {"openai_compatible", "openai_compatible_llm"} and not bool(
+        profile.get("endpoint_is_local") or profile.get("is_local")
+    )
+    if not remote_provider:
+        return False
+    return (
+        any(
+            not authority.privacy_storage_allowed
+            or authority.privacy_ceiling in {"sensitive", "secret"}
+            for authority in authorities
+        )
+        or classify_sensitivity(raw_text) is not SensitivityClass.NORMAL
+    )
 
 
 def _capability_mode(profile: Mapping[str, Any]) -> str:

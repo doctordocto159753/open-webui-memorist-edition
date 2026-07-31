@@ -46,7 +46,8 @@ def test_prompt_registry_v2_lists_all_prompts() -> None:
 
     assert prompt_ids >= REQUIRED_V2_PROMPTS
     # The pack remains v2.0 while its contract-first runtime prompts have their
-    # own immutable versions: Jakobson v3 and semantic-candidate v1.
+    # own immutable versions: Jakobson v3, semantic-candidate v1.1 and
+    # preflight v2.1; historical semantic/preflight definitions remain replayable.
     assert all(
         prompt.prompt_version == PROMPT_VERSION
         for prompt in prompts
@@ -57,7 +58,10 @@ def test_prompt_registry_v2_lists_all_prompts() -> None:
             )
             or (
                 prompt.prompt_id == "memorist.semantic_candidate_analysis"
-                and prompt.prompt_version == "1.0"
+                and prompt.prompt_version in {"1.0", "1.1"}
+            )
+            or (
+                prompt.prompt_id == "memorist.preflight_planning" and prompt.prompt_version == "2.1"
             )
         )
     )
@@ -67,9 +71,11 @@ def test_prompt_registry_v2_lists_all_prompts() -> None:
     )
     assert any(
         prompt.prompt_id == "memorist.semantic_candidate_analysis"
-        and prompt.prompt_version == "1.0"
+        and prompt.prompt_version == "1.1"
         for prompt in prompts
     )
+    assert get_prompt("memorist.semantic_candidate_analysis", "1.0").metadata.is_legacy is True
+    assert get_prompt("memorist.preflight_planning", "2.0").metadata.is_legacy is True
     assert all(prompt.public_dict()["prompt_pack_id"] == PROMPT_PACK_ID for prompt in prompts)
     assert get_prompt("memorist.jakobson_sentence_analysis").stage == "jakobson_sentence_analysis"
     assert get_prompt("memorist.unit_analysis").metadata.is_legacy is True

@@ -16,7 +16,7 @@ from memcore.model_control.schemas import UsageEventCreate
 from memcore.models import ModelRole, PreflightResponse, PreflightStatus, new_uuid, utc_now
 from memcore.openwebui.model_scheduling import resolve_scoped_model_identity
 from memcore.preflight import PreflightRequest, PreflightService
-from memcore.repositories import JobRepository, MessageRepository
+from memcore.repositories import JobRepository, MessageRepository, MessageVersionRepository
 from memcore.repositories.retrieval import RetrievalRepository
 from memcore.retrieval.runner import RetrievalRunner
 from memcore.security import optional_memorist_actor
@@ -279,6 +279,19 @@ def assistant_response_completed(request: AssistantResponseCompletedRequest) -> 
             )
         )
         if existing is not None:
+            stored_attachment = existing.get("attachment_uuid")
+            assistant = messages.get_message(str(existing["assistant_message_uuid"]))
+            if (
+                assistant is None
+                or assistant.content_hash != content_hash
+                or stored_attachment != request.attachment_uuid
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "assistant response identity reused with different content or attachment"
+                    ),
+                )
             connection.rollback()
             connection._atomic_depth = 0
             return {
@@ -293,6 +306,13 @@ def assistant_response_completed(request: AssistantResponseCompletedRequest) -> 
             creator_type="memory_augmented_model",
             raw_text=request.assistant_text,
             raw_payload=request.raw_payload,
+        )
+        MessageVersionRepository(connection).create_version(
+            assistant_message.message_uuid,
+            raw_text=request.assistant_text,
+            raw_payload=request.raw_payload,
+            change_reason="initial_assistant_capture",
+            created_by="assistant",
         )
         link = retrieval_repository.record_assistant_response_link(
             input_message_uuid=request.input_message_uuid,
@@ -728,6 +748,21 @@ def _assistant_response_completed_full(
                 (request.input_message_uuid, content_hash),
             ).fetchone()
         if existing is not None:
+            assistant = connection.execute(
+                "SELECT content_hash FROM messages WHERE message_uuid = ?",
+                (existing["assistant_message_uuid"],),
+            ).fetchone()
+            if (
+                assistant is None
+                or assistant["content_hash"] != content_hash
+                or existing["attachment_uuid"] != request.attachment_uuid
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "assistant response identity reused with different content or attachment"
+                    ),
+                )
             return {
                 "assistant_message_uuid": existing["assistant_message_uuid"],
                 "response_link_uuid": existing["response_link_uuid"],
@@ -746,9 +781,9 @@ def _assistant_response_completed_full(
             """
             INSERT INTO messages (
                 message_uuid, session_uuid, turn_index, role, creator_type, raw_text,
-                raw_payload_ijson, processing_status, visibility, is_deleted,
+                raw_payload_ijson, content_hash, processing_status, visibility, is_deleted,
                 created_at, updated_at, schema_version
-            ) VALUES (?, ?, ?, 'assistant', 'memory_augmented_model', ?, ?, 'pending',
+            ) VALUES (?, ?, ?, 'assistant', 'memory_augmented_model', ?, ?, ?, 'pending',
                       'visible', false, ?, ?, 1)
             """,
             (
@@ -757,8 +792,26 @@ def _assistant_response_completed_full(
                 int(next_turn["next_turn"]),
                 request.assistant_text,
                 dump_ijson(request.raw_payload) if request.raw_payload else None,
+                content_hash,
                 now,
                 now,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO message_versions (
+                message_version_uuid, message_uuid, version_number, raw_text,
+                raw_payload_ijson, change_reason, created_by, created_at,
+                content_hash, schema_version
+            ) VALUES (?, ?, 1, ?, ?, 'initial_assistant_capture', 'assistant', ?, ?, 1)
+            """,
+            (
+                new_uuid(),
+                assistant_message_uuid,
+                request.assistant_text,
+                dump_ijson(request.raw_payload) if request.raw_payload else None,
+                now,
+                content_hash,
             ),
         )
         response_link_uuid = new_uuid()

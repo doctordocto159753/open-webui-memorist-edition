@@ -115,6 +115,27 @@ ALLOWED_DIRECT_WRITE_PATHS = {
     "memcore/security/actor.py": (
         "actor middleware writes bounded nonce records for replay protection"
     ),
+    "memcore/memory_worker/attempt_audit.py": (
+        "append-only provider attempt reservations must survive the same fenced "
+        "boundary that guards the paid call"
+    ),
+    "memcore/memory_worker/message_semantics.py": (
+        "message semantic records are written from deterministic UUIDv5 identities "
+        "inside the worker's processing transaction"
+    ),
+    "memcore/memory_worker/semantic/runtime_adapters.py": (
+        "shared WP02 orchestration adapters own the SQLite/PostgreSQL mechanics for "
+        "one serialized semantic stage"
+    ),
+    "memcore/memory_worker/postgres/semantic_coverage.py": (
+        "PostgreSQL coverage/replay persistence runs inside the Full worker transaction"
+    ),
+    "memcore/repositories/semantic_coverage.py": (
+        "SQLite coverage commands are executed through the single write actor"
+    ),
+    "memcore/preflight.py": (
+        "preflight persists one bounded audited retrieval plan row for the run it owns"
+    ),
 }
 
 

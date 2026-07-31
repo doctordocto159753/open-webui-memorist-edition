@@ -15,7 +15,7 @@ class PromptMetadata(BaseModel):
     requires_evidence: bool = True
     allows_remote_provider: bool = True
     blocking_path_allowed: bool = False
-    default_timeout_ms: int = Field(default=8000, ge=1)
+    default_timeout_ms: int = Field(default=120000, ge=1)
     is_legacy: bool = False
 
     @property

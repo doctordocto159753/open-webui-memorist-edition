@@ -176,7 +176,7 @@ class ProviderAttemptAuditRepository:
         attempt_index: int,
         error: OpenAICompatibleProviderError,
         *,
-        latency_ms: int = 0,
+        latency_ms: int | None = None,
     ) -> None:
         self._finalize(
             attempt_index,
@@ -190,7 +190,7 @@ class ProviderAttemptAuditRepository:
             validation_issues=[{"path": "(transport)", "code": error.category}],
             input_tokens=0,
             output_tokens=0,
-            latency_ms=latency_ms,
+            latency_ms=error.latency_ms if latency_ms is None else latency_ms,
         )
 
     def count(self) -> int:

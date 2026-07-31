@@ -396,7 +396,13 @@ Memorist نه فقط RAG است، نه فقط memory blocks، نه فقط graph 
 
 ---
 
-## 16. مسیر پیشنهادی تا Public Beta
+## 16. مسیر اولیه تا Public Beta (تاریخی)
+
+این بخش roadmap اولیه‌ی whitepaper است و وضعیت runtime جاری را بیان نمی‌کند.
+نسخه، schema و مسیر پیاده‌سازی فعلی در
+[معماری موتور حافظه](memory-engine-architecture.fa.md) و
+[walkthrough مرکزی](../reference/core-memory-processing-walkthrough.md) ثبت
+شده‌اند.
 
 1. clean source package؛
 2. GitHub-ready README؛

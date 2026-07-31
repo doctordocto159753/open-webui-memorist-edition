@@ -1,6 +1,54 @@
 # Release Notes
 
-## v0.2.0-beta.3 — fenced processing-runtime closure (current)
+## Message-first model-led semantic repair (Draft PR #56)
+
+- Ordinary `discard`, `retain_raw_only`, and `manual_review` legacy annotations
+  no longer veto whole-message model analysis; hard consent, scope, source and
+  privacy boundaries remain local and fail closed.
+- Active semantic analysis is `memorist.semantic_candidate_analysis@1.1` and
+  active retrieval planning is `memorist.preflight_planning@2.1`; immutable
+  `1.0` and `2.0` prompt assets remain registered for historical replay.
+- Storage schema 26 adds Message summaries, categories, topics, canonical
+  concept aliases, entity/process-stage references, exact-span semantic units,
+  retrieval plans and explicit semantic job outcomes for SQLite/PostgreSQL.
+- Storage schema 27 removes the invalid global uniqueness constraint on a
+  normalized alias, so the same surface form can belong to distinct canonical
+  concepts without forcing a merge.
+- Full projects the Message topology into rebuildable FalkorDB. Lite retrieval
+  and Full both use scoped Message evidence and persist the audited model
+  retrieval plan alongside canonical-memory and graph retrieval provenance.
+- Prompt-execution audit records are now validated before secret redaction.
+  Redaction matches secret markers as substrings, so it rewrote the
+  contract-required integer `items[].estimated_tokens` as `[REDACTED]` and then
+  failed its own contract. Every preflight planning call therefore recorded an
+  error, failed open, and discarded the model's query understanding, leaving
+  `model_retrieval_plans` empty in every Lite and Full configuration.
+  Redaction also no longer replaces non-string scalars, so numeric audit fields
+  such as `estimated_tokens`, `max_input_tokens` and `output_tokens` survive
+  replay while credential-bearing values are still removed.
+- Preflight defaults to 60 seconds; background processing roles default to 120
+  seconds with env overrides. Processing input/context settings default to
+  100,000 tokens, but provider-side budget enforcement remains incomplete.
+- Multi-sentence semantic spans receive deterministic persisted fragment
+  authority with exact raw offsets before candidate evidence is written.
+- Assistant completion capture now creates immutable initial versions and
+  rejects provider-response identity reuse with different content/attachment.
+
+## v0.2.0-beta.3 — WP02 semantic candidate authority (current development baseline)
+
+- One shared Lite/Full semantic orchestration service performs whole-message
+  model analysis; persisted route/gate rows are compatibility annotations.
+- The ordered memory-extraction certification bundle binds Jakobson v3 and
+  semantic candidate analysis v1.
+- Deterministic material coverage, UUIDv5 proposal identity, and replay-safe
+  SQLite/PostgreSQL proposal/candidate audit persistence are present.
+- Storage schema is `27`: SQLite migration `0039` and PostgreSQL migration
+  `0026` add ambiguity-safe concept aliases after the schema-26 message-first
+  migrations.
+- See `docs/reference/core-memory-processing-walkthrough.md` for the exact
+  prompt/response sequence.
+
+The fenced processing-runtime closure below remains part of this beta line.
 
 This candidate closes the processing-node failure boundaries found during the
 independent audit of PR #49:

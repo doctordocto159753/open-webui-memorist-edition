@@ -220,7 +220,7 @@ def _seed_authority(connection: sqlite3.Connection) -> None:
           created_at, schema_version
         ) VALUES (
           '00000000-0000-4000-8000-000000000009',
-          'memorist.semantic_candidate_analysis', '1.0',
+          'memorist.semantic_candidate_analysis', '1.1',
           'semantic_candidate_analysis', 'memory_extraction', 'deterministic',
           'test',
           '00000000-0000-4000-8000-000000000001',
@@ -247,7 +247,7 @@ def _plan() -> tuple[CoveragePlan, CandidateProposal, CoveragePersistenceBinding
         {
             "schema_version": "1.0",
             "prompt_id": "memorist.semantic_candidate_analysis",
-            "prompt_version": "1.0",
+            "prompt_version": "1.1",
             "status": "ok",
             "warnings": [],
             "semantic_units": [
@@ -411,7 +411,7 @@ def test_sqlite_fresh_upgrade_repeated_and_content_free_schema(tmp_path: Path) -
     latest = connection.execute(
         "SELECT migration_id FROM schema_migrations ORDER BY migration_id DESC LIMIT 1"
     ).fetchone()[0]
-    assert latest == "0037_semantic_coverage_audit.sql"
+    assert latest == "0039_ambiguous_concept_aliases.sql"
 
 
 @pytest.mark.skipif(not os.getenv("MEMORIST_POSTGRES_DSN"), reason="requires real PostgreSQL")
@@ -504,6 +504,21 @@ def test_postgres_populated_0023_to_0024_upgrade_is_additive_and_repeatable(
         }
         assert "'primary'::text" in str(evidence_defaults["evidence_role"])
         assert "'supporting'::text" in str(evidence_defaults["support_type"])
+        connection.execute(
+            "INSERT INTO canonical_concepts (concept_uuid, canonical_label) VALUES "
+            "('concept-a', 'adaptive bitrate control'), "
+            "('concept-b', 'activity based costing')"
+        )
+        connection.execute(
+            "INSERT INTO concept_aliases (concept_uuid, alias, normalized_alias) VALUES "
+            "('concept-a', 'ABC', 'abc'), ('concept-b', 'ABC', 'abc')"
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM concept_aliases WHERE normalized_alias = 'abc'"
+            ).fetchone()[0]
+            == 2
+        )
         assert (
             connection.execute(
                 """
@@ -513,7 +528,7 @@ def test_postgres_populated_0023_to_0024_upgrade_is_additive_and_repeatable(
             LIMIT 1
             """
             ).fetchone()[0]
-            == "0024_semantic_coverage_audit.sql"
+            == "0026_ambiguous_concept_aliases.sql"
         )
     finally:
         connection.rollback()
@@ -891,7 +906,7 @@ def _seed_postgres(connection: Any) -> None:
           output_hash, status, warnings_ijson, created_at
         ) VALUES (
           '00000000-0000-4000-8000-000000000009',
-          'memorist.semantic_candidate_analysis', '1.0',
+          'memorist.semantic_candidate_analysis', '1.1',
           'semantic_candidate_analysis', 'memory_extraction', 'deterministic',
           'test', '00000000-0000-4000-8000-000000000001',
           '00000000-0000-4000-8000-000000000002',

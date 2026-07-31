@@ -26,6 +26,7 @@ Open WebUI Filter
   -> PostgreSQL canonical ledger
        - sessions/messages/text_units
        - Jakobson runs/annotations/routes
+       - gate decisions/semantic coverage/proposal links
        - candidates/evidence/memories/versions
        - durable jobs and projection/erasure outboxes
   -> FalkorDB rebuildable graph projection
@@ -93,12 +94,11 @@ The report is written to:
 - `release/artifacts/full-mode-certification-report.ijson`
 - `release/artifacts/full-mode-certification-report.md`
 
-Skipped or manual-only gates do not count as passed. Full Mode can be
-beta-supported only when all required external gates pass: PostgreSQL canonical
-smoke, PostgreSQL job/outbox concurrency, scheduler preemption, import under
-live traffic, FalkorDB projection, FalkorDB rebuild, graph retrieval, graph-down
-fallback, graph forget/residue, SQLite-to-PostgreSQL migration, and full compose
-smoke.
+Skipped or manual-only gates do not count as passed. Full validation includes
+PostgreSQL canonical smoke, job/outbox concurrency, shared WP02 semantic
+parity and replay, scheduler preemption, import under live traffic, FalkorDB
+projection/rebuild/retrieval/fallback/forget, SQLite-to-PostgreSQL migration,
+and full compose smoke.
 
 ## Compose
 
@@ -113,9 +113,9 @@ available:
 python release/tests/full_compose_smoke.py
 ```
 
-Set `MEMORIST_FULL_COMPOSE_SMOKE=false` only when intentionally skipping the
-gate. The authoritative report passed 11/11 with Docker available and no skips;
-a future report with unavailable/skipped gates must fail certification.
+Set `MEMORIST_FULL_COMPOSE_SMOKE=false` only when intentionally skipping a
+local diagnostic run. Authoritative CI/certification must fail when a required
+external gate is unavailable or skipped.
 
 ## Import and reconstruction runtime
 

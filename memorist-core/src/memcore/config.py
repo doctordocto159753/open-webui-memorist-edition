@@ -15,6 +15,17 @@ RuntimeProfile = Literal["lite", "full", "dev"]
 CanonicalStoreKind = Literal["sqlite", "postgres"]
 HotSchedulerBackend = Literal["disabled", "in_memory"]
 
+BUILT_IN_PREFLIGHT_TIMEOUT_MS = 60_000
+BUILT_IN_PROCESSING_NODE_TIMEOUT_MS = 120_000
+_PROCESSING_TIMEOUT_FIELDS = {
+    "memory_extraction": "memory_extraction_timeout_ms",
+    "high_confidence_extraction": "high_confidence_extraction_timeout_ms",
+    "privacy_sensitivity": "privacy_sensitivity_timeout_ms",
+    "block_compaction": "block_compaction_timeout_ms",
+    "import_reconstruction": "import_reconstruction_timeout_ms",
+    "embedding": "embedding_timeout_ms",
+}
+
 SECRET_KEY_PARTS = ("key", "token", "secret", "password", "credential")
 REDACTED_VALUE = "[redacted]"
 
@@ -56,8 +67,30 @@ class Settings(BaseSettings):
     enable_user_profile_projection: bool = False
     enable_forgetting_pipeline: bool = False
     preflight_enabled: bool = True
-    preflight_timeout_ms: int = Field(default=500, ge=1)
-    preflight_model_timeout_ms: int = Field(default=800, ge=1)
+    preflight_timeout_ms: int = Field(default=BUILT_IN_PREFLIGHT_TIMEOUT_MS, ge=1_000, le=300_000)
+    # Retained as a compatibility alias for older callers. New provider calls
+    # use preflight_timeout_ms so MEMORIST_PREFLIGHT_TIMEOUT_MS is authoritative.
+    preflight_model_timeout_ms: int = Field(
+        default=BUILT_IN_PREFLIGHT_TIMEOUT_MS, ge=1_000, le=300_000
+    )
+    processing_node_default_timeout_ms: int = Field(
+        default=BUILT_IN_PROCESSING_NODE_TIMEOUT_MS, ge=1_000, le=900_000
+    )
+    memory_extraction_timeout_ms: int | None = Field(default=None, ge=1_000, le=900_000)
+    high_confidence_extraction_timeout_ms: int | None = Field(default=None, ge=1_000, le=900_000)
+    privacy_sensitivity_timeout_ms: int | None = Field(default=None, ge=1_000, le=900_000)
+    block_compaction_timeout_ms: int | None = Field(default=None, ge=1_000, le=900_000)
+    import_reconstruction_timeout_ms: int | None = Field(default=None, ge=1_000, le=900_000)
+    embedding_timeout_ms: int | None = Field(default=None, ge=1_000, le=900_000)
+    processing_context_limit_tokens: int = Field(default=100_000, ge=1_024, le=2_000_000)
+    processing_max_input_tokens: int = Field(default=100_000, ge=1_024, le=2_000_000)
+    preflight_max_output_tokens: int = Field(default=4_096, ge=1, le=131_072)
+    memory_extraction_max_output_tokens: int = Field(default=16_384, ge=1, le=131_072)
+    consolidation_max_output_tokens: int = Field(default=8_192, ge=1, le=131_072)
+    privacy_max_output_tokens: int = Field(default=4_096, ge=1, le=131_072)
+    block_compaction_max_output_tokens: int = Field(default=8_192, ge=1, le=131_072)
+    embedding_max_input_tokens: int = Field(default=100_000, ge=1, le=2_000_000)
+    embedding_max_batch_tokens: int = Field(default=100_000, ge=1, le=2_000_000)
     provider_test_timeout_ms: int = Field(default=15_000, ge=250, le=60_000)
     preflight_fail_open: bool = True
     default_turn_policy: TurnPolicySetting = "full"
@@ -219,6 +252,30 @@ class Settings(BaseSettings):
             "profile_warnings": self.profile_warnings(),
         }
 
+    def processing_timeout_ms(self, role: str) -> int:
+        """Resolve role override, then the shared processing-node default."""
+
+        field_name = _PROCESSING_TIMEOUT_FIELDS.get(role)
+        override = getattr(self, field_name, None) if field_name is not None else None
+        return int(override or self.processing_node_default_timeout_ms)
+
+    def processing_input_limit_tokens(
+        self,
+        *,
+        certified_context_window: int | None = None,
+        provider_limit: int | None = None,
+        role_safety_limit: int | None = None,
+    ) -> int:
+        """Resolve an input/context ceiling without treating it as output tokens."""
+
+        limits = [self.processing_context_limit_tokens, self.processing_max_input_tokens]
+        limits.extend(
+            value
+            for value in (certified_context_window, provider_limit, role_safety_limit)
+            if value is not None and value > 0
+        )
+        return min(limits)
+
 
 @lru_cache
 def get_settings() -> Settings:
@@ -275,6 +332,26 @@ def get_effective_config(settings: Settings) -> dict[str, Any]:
             "unknown_model_context_window": settings.unknown_model_context_window,
             "attachment_safety_margin_tokens": settings.attachment_safety_margin_tokens,
             "fail_open": settings.preflight_fail_open,
+        },
+        "processing_nodes": {
+            "default_timeout_ms": settings.processing_node_default_timeout_ms,
+            "effective_timeouts_ms": {
+                role: settings.processing_timeout_ms(role) for role in _PROCESSING_TIMEOUT_FIELDS
+            },
+            "context_limit_tokens": settings.processing_context_limit_tokens,
+            "max_input_tokens": settings.processing_max_input_tokens,
+            "effective_default_input_limit_tokens": settings.processing_input_limit_tokens(),
+            "max_output_tokens": {
+                "preflight": settings.preflight_max_output_tokens,
+                "memory_extraction": settings.memory_extraction_max_output_tokens,
+                "consolidation": settings.consolidation_max_output_tokens,
+                "privacy": settings.privacy_max_output_tokens,
+                "block_compaction": settings.block_compaction_max_output_tokens,
+            },
+            "embedding": {
+                "max_input_tokens": settings.embedding_max_input_tokens,
+                "max_batch_tokens": settings.embedding_max_batch_tokens,
+            },
         },
         "imports": {
             "batch_size": settings.import_batch_size,

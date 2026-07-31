@@ -930,7 +930,7 @@ def _analysis(
         {
             "schema_version": "1.0",
             "prompt_id": "memorist.semantic_candidate_analysis",
-            "prompt_version": "1.0",
+            "prompt_version": "1.1",
             "status": "ok",
             "warnings": [],
             "semantic_units": units,

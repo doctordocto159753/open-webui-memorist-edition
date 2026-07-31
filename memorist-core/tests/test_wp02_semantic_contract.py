@@ -298,7 +298,19 @@ def test_untrusted_template_markers_remain_literal_payload_data(
     abstain = {
         "schema_version": "1.0",
         "prompt_id": "memorist.semantic_candidate_analysis",
-        "prompt_version": "1.0",
+        "prompt_version": "1.1",
+        "intent": "unknown",
+        "primary_topic": "unknown",
+        "secondary_topic": "unknown",
+        "one_line_summary": "unknown > unknown > unknown",
+        "message_categories": [],
+        "concept_tags": [],
+        "entities": [],
+        "process_references": [],
+        "epistemic_status": "unknown",
+        "temporal_status": "unknown",
+        "importance": 0.0,
+        "explicit_memory_request": False,
         "status": "abstain",
         "warnings": [],
         "semantic_units": [],
@@ -356,7 +368,7 @@ def test_model_warning_text_is_content_free_before_audit_or_diagnostics(
 
 def test_memory_extraction_bundle_orders_both_contracts_without_changing_jakobson() -> None:
     bundle = memory_extraction_contract_bundle()
-    assert bundle["bundle_id"] == "memory-extraction-contract-bundle-v1"
+    assert bundle["bundle_id"] == "memory-extraction-contract-bundle-v2"
     assert [item["typed_contract_hash"] for item in bundle["prompts"]] == [
         JAKOBSON_V3_CONTRACT.contract_hash,
         SEMANTIC_CANDIDATE_V1_CONTRACT.contract_hash,
@@ -365,6 +377,7 @@ def test_memory_extraction_bundle_orders_both_contracts_without_changing_jakobso
         JAKOBSON_V3_CONTRACT.contract_hash
         == "279c5809d7270717aba91b2f90e80590256a0d5c236b664a620688f2dc1078eb"
     )
-    assert get_prompt("memorist.semantic_candidate_analysis", "1.0").model_role.value == (
+    assert get_prompt("memorist.semantic_candidate_analysis", "1.1").model_role.value == (
         "memory_extraction"
     )
+    assert get_prompt("memorist.semantic_candidate_analysis", "1.0").metadata.is_legacy is True

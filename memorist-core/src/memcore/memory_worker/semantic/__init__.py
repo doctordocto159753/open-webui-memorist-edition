@@ -8,6 +8,7 @@ from memcore.memory_worker.semantic.candidate_mapping import (
     ROUTE_CANDIDATE_MAPPING_VERSION,
     RouteCandidateMapping,
     candidate_mapping_for_route,
+    candidate_mapping_for_semantic_unit,
 )
 from memcore.memory_worker.semantic.candidate_service import (
     CANDIDATE_SERVICE_VERSION,
@@ -77,6 +78,7 @@ __all__ = [
     "SemanticFactorMatch",
     "build_candidate_draft",
     "candidate_mapping_for_route",
+    "candidate_mapping_for_semantic_unit",
     "candidate_policy_for_gate_and_route",
     "classify_deterministic_function",
     "decide_candidate_provenance",

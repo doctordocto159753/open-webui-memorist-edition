@@ -134,38 +134,46 @@ def test_full_postgres_import_runtime_end_to_end(
         hot_scheduler="in_memory",
     )
     archive = tmp_path / "chatgpt.zip"
+    # Import is idempotent on both the source platform's identifiers and the
+    # message content fingerprint, so fixed IDs and fixed text make this test
+    # pass only against a virgin database: a rerun maps zero new messages. Keep
+    # both unique per run so the assertions below describe this import rather
+    # than the database's age.
+    external_suffix = uuid4().hex
+    user_node = f"u-{external_suffix}"
+    assistant_node = f"a-{external_suffix}"
     export = [
         {
-            "id": "conv-full-pg",
+            "id": f"conv-full-pg-{external_suffix}",
             "title": "Full PostgreSQL import",
             "create_time": 1700000000,
             "mapping": {
-                "root": {"id": "root", "message": None, "parent": None, "children": ["u"]},
-                "u": {
-                    "id": "u",
+                "root": {"id": "root", "message": None, "parent": None, "children": [user_node]},
+                user_node: {
+                    "id": user_node,
                     "parent": "root",
-                    "children": ["a"],
+                    "children": [assistant_node],
                     "message": {
-                        "id": "u",
+                        "id": user_node,
                         "author": {"role": "user"},
                         "create_time": 1700000001,
                         "content": {
                             "content_type": "text",
-                            "parts": ["I prefer graph databases."],
+                            "parts": [f"I prefer graph databases. ({external_suffix})"],
                         },
                     },
                 },
-                "a": {
-                    "id": "a",
-                    "parent": "u",
+                assistant_node: {
+                    "id": assistant_node,
+                    "parent": user_node,
                     "children": [],
                     "message": {
-                        "id": "a",
+                        "id": assistant_node,
                         "author": {"role": "assistant"},
                         "create_time": 1700000002,
                         "content": {
                             "content_type": "text",
-                            "parts": ["Got it: Ada likes graph databases."],
+                            "parts": [f"Got it: Ada likes graph databases. ({external_suffix})"],
                         },
                     },
                 },
@@ -1086,12 +1094,23 @@ def test_full_postgres_restart_recovers_expired_claim_and_finishes(
         restarted.stop()
 
     with import_connection(settings) as connection:
+        # Restricted to this run's own identities. A database-wide GROUP BY also
+        # collapses every unrelated NULL identity hash into one bucket, so it
+        # reports a false duplicate as soon as any other test has run here.
         duplicates = connection.execute(
             """
-            SELECT processing_identity_hash, COUNT(*) AS copies
-            FROM memory_processing_runs
-            GROUP BY processing_identity_hash HAVING COUNT(*) > 1
-            """
+            SELECT run.processing_identity_hash, COUNT(*) AS copies
+            FROM memory_processing_runs run
+            WHERE run.processing_identity_hash IS NOT NULL
+              AND run.processing_identity_hash IN (
+                SELECT status.processing_identity_hash
+                FROM import_message_processing_status status
+                WHERE status.import_run_uuid = ?
+                  AND status.processing_identity_hash IS NOT NULL
+              )
+            GROUP BY run.processing_identity_hash HAVING COUNT(*) > 1
+            """,
+            (run_uuid,),
         ).fetchall()
         statuses = connection.execute(
             """

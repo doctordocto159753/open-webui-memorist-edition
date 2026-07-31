@@ -1,73 +1,104 @@
 # Memory Intelligence Core
 
-The Memory Intelligence Core is the first semantic layer of Memorist. It converts raw message evidence into sentence-level communication annotations before any memory candidate is accepted.
+The Memory Intelligence Core turns immutable message evidence into persisted
+first-class Message semantics, compatibility annotations, complete semantic
+coverage, and replay-safe memory candidates. Lite and Full use the same semantic
+orchestration; their storage adapters differ.
 
-## Core Statement
-
-Jakobson analysis is not memory. It is the first communication-aware annotation layer that routes later memory extraction.
-
-## Data Flow
+## Current data flow
 
 ```text
 messages.raw_text
-  -> SentenceSegmenter
-  -> text_units(unit_type='sentence', offsets, stable hash)
-  -> memorist.jakobson_sentence_analysis v2.0
-  -> jakobson_analysis_runs
-  -> jakobson_sentence_annotations
-  -> SignalRouter
-  -> memory_signal_routes
-  -> candidate extraction input adapter
-  -> memory_candidates + candidate_evidence(annotation_uuid, route_uuid)
-  -> consolidation
-  -> graph_projection_outbox(jakobson_annotations_ready)
+  -> TextEnvelope v3
+  -> text_units(exact offsets and hashes)
+  -> bounded same-authority context (2 units, or 6 for dependency hints)
+  -> memorist.semantic_candidate_analysis v1.1
+  -> Message summary/categories/topics/concepts/entities/process-stage
+  -> optional memorist.jakobson_sentence_analysis v3.0 compatibility annotation
+  -> strict schema + semantic binding + WP01 exact-evidence validation
+  -> deterministic CoveragePlan
+  -> deterministic CandidateProposal UUIDv5
+  -> memory_candidates + candidate_evidence
+  -> consolidation -> memories + memory_versions
+  -> rebuildable FTS/embedding/graph projections
 ```
 
-## Why Function Scores Were Not Enough
+The `memory-extraction-contract-bundle-v1` certification bundle contains
+Jakobson v3 and semantic candidate v1 in that order. One configured profile
+must pass both contracts. Prompt Pack remains version `2.0`; adding the
+semantic contract does not rewrite historical prompt versions.
 
-The legacy `memorist.unit_analysis` prompt produced aggregate function scores. That path is retained only as a derived compatibility summary. It is not precise enough to route graph-memory extraction. A single workflow message can contain product policy, AI instructions, process facts, terminology rules, and preferences. Prompt Pack v2 makes `memorist.jakobson_sentence_analysis` the central semantic lens, stores one annotation per sentence, and routes later extractor prompts from those sentence annotations.
+## Authority boundaries
 
-## Stored Six Factors
+The model may return message intent/topics/summary/categories/concepts,
+entities/process stages, semantic propositions, references, relations,
+durability, lifecycle, polarity, and epistemic status. It does not
+own:
+
+- exact evidence acceptance;
+- consent/scope/source/privacy policy;
+- privacy or provenance ceilings;
+- coverage disposition;
+- proposal/candidate identity;
+- persistence, consolidation, or graph authority.
+
+Legacy `discard`, `retain_raw_only`, and `manual_review` values remain auditable
+but do not stop ordinary whole-message semantic execution. Candidate adapters
+re-read source integrity, privacy and scope immediately before transactional
+persistence.
+
+## Jakobson annotation
+
+Each text unit records the six communication factors:
 
 | Factor | Purpose |
 | --- | --- |
-| `sender_addresser` | who appears to speak, ask, instruct, evaluate, or express |
-| `receiver_addressee` | who the sentence targets |
-| `message` | what the full sentence communicates |
-| `context_referent` | what topic, fact, process, event, or object it refers to |
-| `code` | language, register, genre, terminology, and shared code |
-| `contact_channel` | implied communication channel or relation |
+| `sender_addresser` | apparent speaker or actor |
+| `receiver_addressee` | addressed receiver |
+| `message` | communicated content |
+| `context_referent` | referenced topic, process, object, or event |
+| `code` | language, register, genre, and shared terminology |
+| `contact_channel` | communication channel or relation |
 
-## Function-to-Route Examples
+Jakobson is an optional annotation lens, not memory. Legacy aggregate
+linguistic analysis, route and gate are auxiliary and cannot override
+whole-message semantic coverage.
 
-| Function | Example | Route |
-| --- | --- | --- |
-| `conative` | "AI must preserve the user prompt." | `prompt_instruction` |
-| `conative` | "Product Team must log decisions in Jira." | `workflow_policy`, `team_obligation` |
-| `referential` | "Jira is the project tracker." | `jira_configuration` |
-| `metalingual` | "By route I mean extraction dispatch." | `terminology_rule` |
-| `emotive` | "I prefer concise answers." | `user_preference` |
-| `poetic` | "Precise memory, precise decisions." | `style_policy` |
-| `phatic` | "Hello." | `ignore` |
+## Complete semantic coverage
 
-## Evidence Lineage
+`SemanticCandidatePlanningService` invokes semantic v1 once for the whole
+eligible message. It resolves prior context only from the same trusted user,
+session, workspace, and project. System/tool records, current/future turns,
+deleted/hidden/redacted versions, sensitive text, stale spans, attachments,
+and cross-boundary records are excluded.
 
-Every route-aware candidate input includes:
+Every accepted unit receives exactly one closed disposition:
 
-```json
-{
-  "message_uuid": "...",
-  "unit_uuid": "...",
-  "annotation_uuid": "...",
-  "route_uuid": "...",
-  "quote": "...",
-  "char_start": 0,
-  "char_end": 0
-}
-```
+`durable_candidate`, `context_only`, `transient_instruction`,
+`unresolved_reference`, `rejected_by_gate`, `needs_review`, or `unsupported`.
 
-This keeps downstream memory candidates auditable and prevents assistant speculation or unsupported interpretation from becoming memory.
+Material omitted by the model is represented explicitly as
+`unsupported/uncovered_material`. An ambiguous reference remains unresolved.
+Only `durable_candidate` creates one proposal.
 
-## Graph Projection Preparation
+## Evidence and replay
 
-Step 1 does not require a graph backend. It creates `jakobson_annotations_ready` outbox events and normalized columns so later Full Mode can project sentence annotations into graph nodes and edges without reprocessing raw text.
+Exact raw spans link proposals to text units and messages. Proposal identity is
+UUIDv5 over canonical contract, message, semantic closure, route/gate,
+authority, span, and disposition material; timestamps, execution IDs, provider
+metadata, warnings, confidence hints, and model IDs are excluded.
+
+Coverage plan, reservation, candidate, evidence, and link persistence is
+idempotent. A restart with the same identity returns the existing linked
+candidate; a different payload hash is an identity conflict.
+
+## Projections
+
+SQLite or PostgreSQL is canonical. FTS, embeddings, active blocks, attachments,
+and FalkorDB are rebuildable projections or delivery artifacts. They may help
+retrieval but cannot create or upgrade semantic authority.
+
+For field-level contracts, read
+[Semantic candidate authority](semantic-candidate-authority.md). For an
+end-to-end example, read
+[Walkthrough پردازش حافظه در موتور مرکزی](core-memory-processing-walkthrough.md).

@@ -1,6 +1,11 @@
 # memorist-core
 
-FastAPI service foundation for the local-first Memorist runtime. The current supported baseline is SQLite Lite with sentence-level Jakobson memory intelligence, Model Control Plane backend/runtime integration, and Memory Worker Prompt Pack v2 implemented as development baselines. PostgreSQL canonical Full Mode foundations, FalkorDB projection scaffolding, durable PostgreSQL job/outbox DDL, hot scheduler lanes, and SQLite-to-PostgreSQL migration tooling remain experimental preview paths until external Full gates pass.
+FastAPI service for the local-first Memorist runtime. The current
+`0.2.0-beta.3` / schema `25` baseline supports SQLite Lite and PostgreSQL Full
+with one shared Jakobson v3 + semantic candidate v1 authority path. Full uses
+durable PostgreSQL jobs/outboxes and FalkorDB as a rebuildable graph
+projection; PostgreSQL remains canonical. Prompt Pack v2 and the Model Control
+Plane provide versioned role contracts and effective-profile audit.
 
 ## Run locally
 
@@ -122,7 +127,20 @@ Phase 7 adds local Open WebUI session resolution, idempotent message capture, sa
 
 ## Memory Worker prompt pack
 
-The worker prompt pack lives in `src/memcore/memory_worker/prompts/`. Prompt Pack v2 is implemented as the current schema-bound prompt contract baseline. It registers versioned system prompts for sentence-level Jakobson analysis, legacy aggregate unit analysis, candidate extraction, consolidation assistance, preflight planning, block compaction, import reconstruction, contradiction detection, and privacy sensitivity. `memorist.jakobson_sentence_analysis` is the primary semantic prompt for the Memory Intelligence Core / Jakobson Pipeline. `memorist.unit_analysis` is retained only as aggregate/legacy compatibility.
+The worker prompt pack lives in `src/memcore/memory_worker/prompts/`. Prompt
+Pack v2 remains the schema-bound package baseline. The ordered
+`memory-extraction-contract-bundle-v1` requires one profile to pass
+`memorist.jakobson_sentence_analysis` v3.0 and
+`memorist.semantic_candidate_analysis` v1.1. Jakobson produces communication
+annotations; the whole-message semantic contract feeds deterministic coverage
+planning. Persisted Jakobson/route/gate records remain compatibility audit data
+and cannot veto ordinary messages before semantic analysis.
+
+Schema 26 adds canonical Message semantics: a three-part summary, multi-valued
+base categories, intent/topics, up to five canonical concepts with aliases,
+entities, process/stage references, exact-span semantic units and explicit
+semantic job outcomes. Lite and Full share this contract; Full also projects
+the message topology to rebuildable FalkorDB nodes.
 
 ## Daily-use hardening
 

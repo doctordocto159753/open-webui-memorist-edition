@@ -44,6 +44,11 @@ MEMORIST_ENV_KEYS = (
     "MEMORIST_ENABLE_FORGETTING_PIPELINE",
     "MEMORIST_PREFLIGHT_ENABLED",
     "MEMORIST_PREFLIGHT_TIMEOUT_MS",
+    "MEMORIST_PREFLIGHT_MODEL_TIMEOUT_MS",
+    "MEMORIST_PROCESSING_NODE_DEFAULT_TIMEOUT_MS",
+    "MEMORIST_MEMORY_EXTRACTION_TIMEOUT_MS",
+    "MEMORIST_PROCESSING_CONTEXT_LIMIT_TOKENS",
+    "MEMORIST_PROCESSING_MAX_INPUT_TOKENS",
     "MEMORIST_RETRIEVAL_MODE",
     "MEMORIST_ATTACHMENT_TOKEN_BUDGET",
     "MEMORIST_FAIL_OPEN",
@@ -234,8 +239,8 @@ def test_effective_config_endpoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
         },
         "preflight": {
             "enabled": True,
-            "timeout_ms": 500,
-            "model_timeout_ms": 800,
+            "timeout_ms": 60_000,
+            "model_timeout_ms": 60_000,
             "retrieval_mode": "standard",
             "attachment_token_budget": REDACTED_VALUE,
             "attachment_max_tokens": REDACTED_VALUE,
@@ -246,6 +251,25 @@ def test_effective_config_endpoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
             "unknown_model_context_window": 8192,
             "attachment_safety_margin_tokens": REDACTED_VALUE,
             "fail_open": True,
+        },
+        "processing_nodes": {
+            "default_timeout_ms": 120_000,
+            "effective_timeouts_ms": {
+                "memory_extraction": 120_000,
+                "high_confidence_extraction": 120_000,
+                "privacy_sensitivity": 120_000,
+                "block_compaction": 120_000,
+                "import_reconstruction": 120_000,
+                "embedding": 120_000,
+            },
+            "context_limit_tokens": REDACTED_VALUE,
+            "max_input_tokens": REDACTED_VALUE,
+            "effective_default_input_limit_tokens": REDACTED_VALUE,
+            "max_output_tokens": REDACTED_VALUE,
+            "embedding": {
+                "max_input_tokens": REDACTED_VALUE,
+                "max_batch_tokens": REDACTED_VALUE,
+            },
         },
         "imports": {
             "batch_size": 100,
@@ -274,6 +298,28 @@ def test_effective_config_endpoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
             "preflight_persist_max_wait_ms": 250,
         },
     }
+
+
+def test_processing_timeout_resolution_and_input_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    clear_memorist_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MEMORIST_PROCESSING_NODE_DEFAULT_TIMEOUT_MS", "130000")
+    monkeypatch.setenv("MEMORIST_MEMORY_EXTRACTION_TIMEOUT_MS", "140000")
+
+    settings = Settings()
+
+    assert settings.processing_timeout_ms("memory_extraction") == 140_000
+    assert settings.processing_timeout_ms("embedding") == 130_000
+    assert (
+        settings.processing_input_limit_tokens(
+            certified_context_window=80_000,
+            provider_limit=90_000,
+            role_safety_limit=70_000,
+        )
+        == 70_000
+    )
 
 
 def test_effective_config_redacts_secret_keys(

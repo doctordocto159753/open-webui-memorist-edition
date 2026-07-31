@@ -411,6 +411,10 @@ def test_lite_attempt_audit_is_reserved_finalized_and_idempotent(
     assert replay.fallback_reason == "provider_attempt_already_completed"
     assert replay.parse_status == "completed"
     assert (
-        connection.execute("SELECT COUNT(*) FROM processing_provider_attempts").fetchone()[0] == 2
+        connection.execute(
+            "SELECT COUNT(*) FROM processing_provider_attempts "
+            "WHERE prompt_id = 'memorist.jakobson_sentence_analysis'"
+        ).fetchone()[0]
+        == 2
     )
     connection.close()
