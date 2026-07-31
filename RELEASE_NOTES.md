@@ -17,6 +17,15 @@
 - Full projects the Message topology into rebuildable FalkorDB. Lite retrieval
   and Full both use scoped Message evidence and persist the audited model
   retrieval plan alongside canonical-memory and graph retrieval provenance.
+- Prompt-execution audit records are now validated before secret redaction.
+  Redaction matches secret markers as substrings, so it rewrote the
+  contract-required integer `items[].estimated_tokens` as `[REDACTED]` and then
+  failed its own contract. Every preflight planning call therefore recorded an
+  error, failed open, and discarded the model's query understanding, leaving
+  `model_retrieval_plans` empty in every Lite and Full configuration.
+  Redaction also no longer replaces non-string scalars, so numeric audit fields
+  such as `estimated_tokens`, `max_input_tokens` and `output_tokens` survive
+  replay while credential-bearing values are still removed.
 - Preflight defaults to 60 seconds; background processing roles default to 120
   seconds with env overrides. Processing input/context settings default to
   100,000 tokens, but provider-side budget enforcement remains incomplete.

@@ -179,13 +179,17 @@ class PromptExecutionRepository:
         raw_output = (
             _redact_secrets(dict(raw_output_value)) if raw_output_value is not None else None
         )
+        # Validate the model's real output, then redact for storage. Validating
+        # the redacted copy makes redaction itself a validation failure: the
+        # preflight contract requires an integer ``items[].estimated_tokens``,
+        # whose key matches the "token" secret marker.
+        if validated_output_value is not None:
+            validate_prompt_output(prompt_id, prompt_version, dict(validated_output_value))
         validated_output = (
             _redact_secrets(dict(validated_output_value))
             if validated_output_value is not None
             else None
         )
-        if validated_output is not None:
-            validate_prompt_output(prompt_id, prompt_version, validated_output)
         output_for_hash = validated_output or raw_output or {"status": status}
         values = {
             "prompt_execution_uuid": new_uuid(),
@@ -413,7 +417,13 @@ def _redact_secrets(value: Any) -> Any:
         redacted: dict[str, Any] = {}
         for key, item in value.items():
             key_text = str(key)
-            if any(marker in key_text.lower() for marker in secret_markers):
+            # The markers are substrings, so ordinary contract fields such as
+            # ``estimated_tokens`` and ``max_input_tokens`` match too. A
+            # credential is always a string, so redacting non-string scalars
+            # only destroys audit data without protecting anything.
+            if any(marker in key_text.lower() for marker in secret_markers) and _may_hold_secret(
+                item
+            ):
                 redacted[key_text] = "[REDACTED]"
             else:
                 redacted[key_text] = _redact_secrets(item)
@@ -421,6 +431,15 @@ def _redact_secrets(value: Any) -> Any:
     if isinstance(value, list):
         return [_redact_secrets(item) for item in value]
     return value
+
+
+def _may_hold_secret(value: Any) -> bool:
+    """True when a secret-named field could actually carry a credential.
+
+    Strings and containers can; numbers, booleans and ``None`` cannot.
+    """
+
+    return not isinstance(value, bool | int | float) and value is not None
 
 
 PROMPT_LIST = [

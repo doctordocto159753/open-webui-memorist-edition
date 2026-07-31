@@ -32,11 +32,38 @@ class FakeClient:
     last_policy_chat_id: str | None = None
     last_session_conversation_id: str | None = None
     last_config: Any | None = None
+    outcomes: list[dict[str, Any]] = []
 
     def __init__(self, _config: object) -> None:
         FakeClient.last_config = _config
         self.fail = os.getenv("FAKE_MEMORIST_FAIL") == "1"
         self.status_text = os.getenv("FAKE_PREFLIGHT_STATUS", "attached")
+
+    def record_integration_outcome(
+        self,
+        *,
+        user_id: str,
+        workspace_uuid: str,
+        stage: str,
+        outcome: str,
+        degraded_reason: str | None = None,
+        detail_sanitized: str | None = None,
+    ) -> dict[str, Any]:
+        # Interface parity with the production ``MemoristClient``. Without this
+        # method the filter's best-effort audit call raises ``AttributeError``,
+        # is swallowed as "outcome audit unavailable", and every outcome row in
+        # this suite silently goes unasserted.
+        FakeClient.outcomes.append(
+            {
+                "user_id": user_id,
+                "workspace_uuid": workspace_uuid,
+                "stage": stage,
+                "outcome": outcome,
+                "degraded_reason": degraded_reason,
+                "detail_sanitized": detail_sanitized,
+            }
+        )
+        return {"status": "recorded"}
 
     def resolve_session(
         self,
@@ -135,6 +162,7 @@ def test_preflight_attached_preserves_user_and_inserts_separate_context(
 ) -> None:
     monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
     monkeypatch.setenv("FAKE_PREFLIGHT_STATUS", "attached")
+    FakeClient.outcomes = []
     body = {
         "id": "response-1",
         "conversation_id": "chat-1",
@@ -150,14 +178,29 @@ def test_preflight_attached_preserves_user_and_inserts_separate_context(
     assert "safe memory" in result["messages"][1]["content"]
     assert "&lt;/memory_context_attachment&gt;" in result["messages"][1]["content"]
     assert result["metadata"]["memorist_delivered_attachment_uuid"] == "attachment-1"
+    # The audit trail must actually reach Core, not be swallowed as "unavailable".
+    assert [(row["stage"], row["outcome"]) for row in FakeClient.outcomes] == [
+        ("capture", "ok"),
+        ("recall", "ok"),
+    ]
+    assert {row["user_id"] for row in FakeClient.outcomes} == {"user-1"}
+    assert {row["workspace_uuid"] for row in FakeClient.outcomes} == {"workspace-1"}
 
 
 def test_preflight_unavailable_fails_open_and_sanitizes_error(monkeypatch) -> None:
     monkeypatch.setenv("FAKE_MEMORIST_FAIL", "1")
+    FakeClient.outcomes = []
     body = {"messages": [{"role": "user", "content": "hello"}]}
     result = _module().Filter().inlet(body, {"id": "user-1", "workspace_id": "workspace-1"})
     assert result["messages"][-1]["content"] == "hello"
     assert result["metadata"]["memorist_last_error"] == "[redacted]"
+    assert len(FakeClient.outcomes) == 1
+    failure = FakeClient.outcomes[0]
+    assert failure["stage"] == "session"
+    assert failure["outcome"] == "failed_open"
+    assert failure["degraded_reason"] == "session_failed"
+    # The sanitized detail must not carry the raw provider error text.
+    assert failure["detail_sanitized"] == "[redacted]"
 
 
 def test_review_without_frontend_cancels_and_outlet_captures_without_attribution(
@@ -270,6 +313,7 @@ def test_private_resolves_no_session_and_creates_no_capture_or_preflight(
 ) -> None:
     monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
     FakeClient.session_calls = FakeClient.capture_calls = FakeClient.preflight_calls = 0
+    FakeClient.outcomes = []
     body = {
         "memorist": {"turn_policy": "private"},
         "messages": [{"role": "user", "content": "secret"}],
@@ -279,6 +323,11 @@ def test_private_resolves_no_session_and_creates_no_capture_or_preflight(
 
     assert result["metadata"]["memorist_private"] is True
     assert FakeClient.session_calls == FakeClient.capture_calls == FakeClient.preflight_calls == 0
+    assert [(row["stage"], row["outcome"]) for row in FakeClient.outcomes] == [
+        ("policy", "private")
+    ]
+    # The private turn is audited without echoing any of the private content.
+    assert all(row["detail_sanitized"] is None for row in FakeClient.outcomes)
 
 
 def test_missing_trusted_user_skips_all_memorist_work_for_every_policy(
@@ -302,6 +351,7 @@ def test_missing_trusted_user_skips_all_memorist_work_for_every_policy(
 def test_no_recall_captures_without_preflight(monkeypatch) -> None:
     monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
     FakeClient.session_calls = FakeClient.capture_calls = FakeClient.preflight_calls = 0
+    FakeClient.outcomes = []
     body = {
         "memorist": {"turn_policy": "no_recall"},
         "messages": [{"role": "user", "content": "remember this"}],
@@ -312,6 +362,11 @@ def test_no_recall_captures_without_preflight(monkeypatch) -> None:
     assert FakeClient.session_calls == 1
     assert FakeClient.capture_calls == 1
     assert FakeClient.preflight_calls == 0
+    # Capture still happens; recall is explicitly audited as suppressed, not as ok.
+    assert [(row["stage"], row["outcome"]) for row in FakeClient.outcomes] == [
+        ("recall", "no_recall"),
+        ("capture", "ok"),
+    ]
 
 
 def test_regeneration_no_recall_reuses_input_without_session_capture_or_preflight(
@@ -344,6 +399,7 @@ def test_regeneration_no_recall_reuses_input_without_session_capture_or_prefligh
 def test_assistant_response_captured_and_duplicate_deduped(monkeypatch) -> None:
     monkeypatch.delenv("FAKE_MEMORIST_FAIL", raising=False)
     FakeClient.assistant_calls = 0
+    FakeClient.outcomes = []
     filter_instance = _module().Filter()
     body = {
         "id": "provider-1",
@@ -358,6 +414,10 @@ def test_assistant_response_captured_and_duplicate_deduped(monkeypatch) -> None:
     assert filter_instance.outlet(body, None) == body
     assert filter_instance.outlet(body, None) == body
     assert FakeClient.assistant_calls == 1
+    # The deduped second outlet must not produce a second audit row either.
+    assert [(row["stage"], row["outcome"]) for row in FakeClient.outcomes] == [
+        ("chat_outlet", "ok")
+    ]
 
 
 def test_valves_override_runtime_config(monkeypatch) -> None:

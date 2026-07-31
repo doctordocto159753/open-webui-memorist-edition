@@ -420,6 +420,10 @@ claim مشخص را با lineage دستیار promote کند.
   requestها هنوز کامل نیست و output budgets صرفاً جداگانه پیکربندی می‌شوند.
 - attempt success، parse/schema failure، repair، timeout و transport failure
   elapsed latency واقعی ثبت می‌کنند.
+- audit record هر prompt execution پیش از redaction اعتبارسنجی می‌شود. redaction
+  فقط مقدارهای رشته‌ای/ساختاری با نام secret-مانند را حذف می‌کند و مقدارهای عددی
+  قراردادی مانند `items[].estimated_tokens`، `max_input_tokens` و `output_tokens`
+  را دست‌نخورده نگه می‌دارد، بنابراین replay همان contract را برآورده می‌کند.
 
 ## محدودیت‌های صادقانه‌ی این نسخه
 

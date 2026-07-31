@@ -533,9 +533,20 @@ def test_full_openwebui_filter_inlet_outlet_use_postgres(
     filter_module = importlib.import_module("filter.memorist_memory_filter")
     schemas = importlib.import_module("shared.schemas")
 
+    recorded_outcomes: list[dict[str, Any]] = []
+
     class PostgresRouteClient:
         def __init__(self, _config: object) -> None:
             pass
+
+        def record_integration_outcome(self, **kwargs: Any) -> object:
+            # Interface parity with the production ``MemoristClient``. Without it
+            # the filter's best-effort audit call raises ``AttributeError`` and is
+            # swallowed as "outcome audit unavailable", so the Full path's audit
+            # calls would go unasserted here. Persistence of these rows is covered
+            # against the real endpoint in test_trusted_actor_authentication.
+            recorded_outcomes.append(dict(kwargs))
+            return {"status": "recorded"}
 
         def resolve_turn_policy(self, **kwargs: Any) -> object:
             raw_control = kwargs.get("request_control")
@@ -690,10 +701,22 @@ def test_full_openwebui_filter_inlet_outlet_use_postgres(
     )
     assert "memorist_last_error" not in outlet["metadata"]
     filter_session_uuid = inlet["metadata"]["memorist_session_uuid"]
+    # The Full filter path must emit its audit trail rather than silently
+    # swallowing it, and the outlet must record the assistant turn exactly once.
+    assert [(row["stage"], row["outcome"]) for row in recorded_outcomes] == [
+        ("capture", "ok"),
+        ("recall", "ok"),
+        ("chat_outlet", "ok"),
+    ]
+    assert {row["user_id"] for row in recorded_outcomes} == {"filter-user"}
     with memory_control_connection(full_settings) as connection:
+        # Scoped to this session: a database-wide count on the raw text passes
+        # only against a virgin database and silently accumulates across runs.
         assert (
             connection.execute(
-                "SELECT count(*) FROM messages WHERE raw_text = 'filter assistant answer'"
+                "SELECT count(*) FROM messages "
+                "WHERE raw_text = 'filter assistant answer' AND session_uuid = ?",
+                (filter_session_uuid,),
             ).fetchone()[0]
             == 1
         )
@@ -993,9 +1016,26 @@ def test_full_graph_outage_is_explicit_and_never_changes_store(
             "WHERE input_message_uuid = ? AND event_type = 'full_retrieval_completed'",
             (ids["message"],),
         ).fetchone()
+        planning = connection.execute(
+            "SELECT status, error_sanitized FROM prompt_execution_runs "
+            "WHERE message_uuid = ? AND prompt_id = 'memorist.preflight_planning'",
+            (ids["message"],),
+        ).fetchone()
+        plan = connection.execute(
+            "SELECT user_uuid, workspace_uuid, input_message_uuid "
+            "FROM model_retrieval_plans WHERE retrieval_run_uuid = ?",
+            (response.retrieval_run_uuid,),
+        ).fetchone()
     assert run["graph_status"] == "degraded"
     assert run["degraded_reason"] == "falkordb_unavailable"
     assert audit["degraded_reason"] == "falkordb_unavailable"
+    # A graph outage degrades expansion only. The Full planning stage must still
+    # record its execution and persist the accepted plan under resolved scope.
+    assert planning is not None
+    assert planning["status"] != "error", planning["error_sanitized"]
+    assert plan is not None, "Full preflight did not persist the accepted retrieval plan"
+    assert plan["workspace_uuid"] == ids["workspace"]
+    assert plan["input_message_uuid"] == ids["message"]
     assert not Path(full_settings.db_path).exists()
 
 

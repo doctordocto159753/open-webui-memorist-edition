@@ -225,6 +225,15 @@ def test_persian_eleven_stage_plan_legacy_gate_does_not_veto_semantic_analysis(
         workspace_uuid=workspace.workspace_uuid,
         project_uuid=project.project_uuid,
     )
+    # Production always resolves a trusted actor before preflight; without one the
+    # planning stage cannot attribute its plan and skips persistence entirely.
+    for session_uuid in (source_session.session_uuid, recall_session.session_uuid):
+        connection.execute(
+            "INSERT INTO memorist_session_actors "
+            "(session_uuid, user_uuid, workspace_uuid, created_at) VALUES (?, ?, ?, ?)",
+            (session_uuid, "persian-user", workspace.workspace_uuid, utc_now()),
+        )
+    connection.commit()
     query = messages.create_message(
         recall_session.session_uuid,
         role="user",
@@ -237,10 +246,35 @@ def test_persian_eleven_stage_plan_legacy_gate_does_not_veto_semantic_analysis(
             input_message_uuid=query.message_uuid,
             retrieval_mode="standard",
             token_budget=1400,
+            user_uuid="persian-user",
         )
     )
 
     assert response.rendered_attachment is not None
     assert response.attachment_uuid is not None
     assert response.retrieval_run_uuid is not None
+    # The Lite preflight planning stage must record its execution and persist the
+    # accepted plan under locally resolved scope. Both were silently lost while
+    # the audit record was validated after secret redaction.
+    planning = connection.execute(
+        """
+        SELECT status, error_sanitized FROM prompt_execution_runs
+        WHERE message_uuid = ? AND prompt_id = 'memorist.preflight_planning'
+        """,
+        (query.message_uuid,),
+    ).fetchone()
+    assert planning is not None
+    assert planning["status"] != "error", planning["error_sanitized"]
+    plan = connection.execute(
+        """
+        SELECT user_uuid, workspace_uuid, project_uuid, input_message_uuid, requested_operation
+        FROM model_retrieval_plans WHERE retrieval_run_uuid = ?
+        """,
+        (response.retrieval_run_uuid,),
+    ).fetchone()
+    assert plan is not None, "Lite preflight did not persist the accepted retrieval plan"
+    assert plan["user_uuid"] == "persian-user"
+    assert plan["workspace_uuid"] == workspace.workspace_uuid
+    assert plan["project_uuid"] == project.project_uuid
+    assert plan["input_message_uuid"] == query.message_uuid
     connection.close()
