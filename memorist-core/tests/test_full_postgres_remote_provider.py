@@ -268,10 +268,13 @@ def test_full_postgres_remote_provider_background_worker_e2e(
             "memory_extraction",
         }
         with import_connection(settings) as verification_connection:
-            assert verification_connection.execute(
-                "SELECT COUNT(*) FROM message_semantic_analyses "
-                "WHERE source_role IN ('user', 'assistant')"
-            ).fetchone()[0] >= 1
+            assert (
+                verification_connection.execute(
+                    "SELECT COUNT(*) FROM message_semantic_analyses "
+                    "WHERE source_role IN ('user', 'assistant')"
+                ).fetchone()[0]
+                >= 1
+            )
         assert all(item["import_run_uuid"] == run_uuid for item in prompts)
         assert all(item["job_uuid"] for item in prompts)
         assert provider_credential not in database_rendering

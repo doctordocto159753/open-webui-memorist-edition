@@ -68,19 +68,21 @@ def test_lite_one_profile_runs_both_contracts_and_restart_is_idempotent(
             (message_uuid,),
         ).fetchone()
         assert analysis is not None
-        assert analysis["one_line_summary"] == (
-            "preference > answer style > concise responses"
+        assert analysis["one_line_summary"] == ("preference > answer style > concise responses")
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM message_semantic_categories WHERE semantic_analysis_uuid = ?",
+                (analysis["semantic_analysis_uuid"],),
+            ).fetchone()[0]
+            == 1
         )
-        assert connection.execute(
-            "SELECT COUNT(*) FROM message_semantic_categories "
-            "WHERE semantic_analysis_uuid = ?",
-            (analysis["semantic_analysis_uuid"],),
-        ).fetchone()[0] == 1
-        assert connection.execute(
-            "SELECT COUNT(*) FROM message_concept_tags "
-            "WHERE semantic_analysis_uuid = ?",
-            (analysis["semantic_analysis_uuid"],),
-        ).fetchone()[0] == 2
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM message_concept_tags WHERE semantic_analysis_uuid = ?",
+                (analysis["semantic_analysis_uuid"],),
+            ).fetchone()[0]
+            == 2
+        )
         candidate = connection.execute("SELECT * FROM memory_candidates").fetchone()
         link = connection.execute("SELECT * FROM semantic_candidate_links").fetchone()
         assert candidate is not None and link is not None

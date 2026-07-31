@@ -769,8 +769,7 @@ class PostgresMemoryWorkerPipeline:
             JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID, PROMPT_PACK_VERSION, input_payload
         )
         timeout_ms = int(
-            profile.get("timeout_ms")
-            or self.settings.processing_timeout_ms("memory_extraction")
+            profile.get("timeout_ms") or self.settings.processing_timeout_ms("memory_extraction")
         )
         provider = OpenAICompatibleMemoryExtractionProvider.from_profile(
             profile, timeout_ms=timeout_ms

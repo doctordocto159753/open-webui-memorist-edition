@@ -130,7 +130,7 @@ def test_terminal_gate_is_legacy_annotation_and_semantic_model_still_runs(
     result = SemanticCandidatePlanningService(adapter).execute(
         SemanticCandidatePlanningRequest(
             message_uuid=adapter.scope.message_uuid,
-                processing_run_uuid="00000000-0000-4000-8000-000000000100",
+            processing_run_uuid="00000000-0000-4000-8000-000000000100",
             profile={
                 "provider_type": "openai_compatible_llm",
                 "model_name": "must-not-run",
@@ -173,7 +173,7 @@ def test_one_legacy_terminal_unit_does_not_veto_meaningful_sibling(
     result = SemanticCandidatePlanningService(adapter).execute(
         SemanticCandidatePlanningRequest(
             message_uuid=adapter.scope.message_uuid,
-                processing_run_uuid="00000000-0000-4000-8000-000000000100",
+            processing_run_uuid="00000000-0000-4000-8000-000000000100",
             profile={
                 "provider_type": "openai_compatible_llm",
                 "model_name": "must-not-run",

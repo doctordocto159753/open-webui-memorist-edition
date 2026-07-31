@@ -95,8 +95,8 @@ def persist_message_semantics(
           source_authority, contract_hash, raw_text_hash, status, semantic_outcome,
           summary_intent, primary_topic, secondary_topic, one_line_summary,
           epistemic_status, temporal_status, importance, explicit_memory_request,
-          {'warnings_jsonb' if postgres else 'warnings_ijson'}, created_at, updated_at
-        ) VALUES ({', '.join([placeholder] * 24)}, {warnings_cast}, {placeholder}, {placeholder})
+          {"warnings_jsonb" if postgres else "warnings_ijson"}, created_at, updated_at
+        ) VALUES ({", ".join([placeholder] * 24)}, {warnings_cast}, {placeholder}, {placeholder})
         """,
         analysis_values,
     )
@@ -140,7 +140,7 @@ def persist_message_semantics(
               semantic_unit_uuid, semantic_analysis_uuid, semantic_unit_id, unit_ordinal,
               raw_start, raw_end, evidence_hash, proposition_text, unit_type, memory_kind,
               durability, polarity, epistemic_status, lifecycle_status, created_at
-            ) VALUES ({', '.join([placeholder] * 15)})
+            ) VALUES ({", ".join([placeholder] * 15)})
             """,
             (
                 unit_uuid,
@@ -189,7 +189,7 @@ def persist_message_semantics(
           processing_run_uuid, job_uuid, outcome, reason_code, called_provider,
           provider_output_valid, fallback_used, candidate_count, memory_count,
           latency_ms, created_at
-        ) VALUES ({', '.join([placeholder] * 14)})
+        ) VALUES ({", ".join([placeholder] * 14)})
         """,
         (
             job_outcome_uuid,
@@ -301,17 +301,13 @@ def _normalize_label(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
-def _analysis_status(
-    output: SemanticAnalysisV1Output, outcome: ContractExecutionOutcome
-) -> str:
+def _analysis_status(output: SemanticAnalysisV1Output, outcome: ContractExecutionOutcome) -> str:
     if outcome.fallback_used:
         return "failed_open"
     return "succeeded" if output.status == "ok" else "abstained"
 
 
-def _semantic_outcome(
-    output: SemanticAnalysisV1Output, outcome: ContractExecutionOutcome
-) -> str:
+def _semantic_outcome(output: SemanticAnalysisV1Output, outcome: ContractExecutionOutcome) -> str:
     if outcome.fallback_used:
         return "succeeded_with_failed_open_stage"
     if output.status == "abstain":

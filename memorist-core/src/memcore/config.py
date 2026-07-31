@@ -67,9 +67,7 @@ class Settings(BaseSettings):
     enable_user_profile_projection: bool = False
     enable_forgetting_pipeline: bool = False
     preflight_enabled: bool = True
-    preflight_timeout_ms: int = Field(
-        default=BUILT_IN_PREFLIGHT_TIMEOUT_MS, ge=1_000, le=300_000
-    )
+    preflight_timeout_ms: int = Field(default=BUILT_IN_PREFLIGHT_TIMEOUT_MS, ge=1_000, le=300_000)
     # Retained as a compatibility alias for older callers. New provider calls
     # use preflight_timeout_ms so MEMORIST_PREFLIGHT_TIMEOUT_MS is authoritative.
     preflight_model_timeout_ms: int = Field(
@@ -79,9 +77,7 @@ class Settings(BaseSettings):
         default=BUILT_IN_PROCESSING_NODE_TIMEOUT_MS, ge=1_000, le=900_000
     )
     memory_extraction_timeout_ms: int | None = Field(default=None, ge=1_000, le=900_000)
-    high_confidence_extraction_timeout_ms: int | None = Field(
-        default=None, ge=1_000, le=900_000
-    )
+    high_confidence_extraction_timeout_ms: int | None = Field(default=None, ge=1_000, le=900_000)
     privacy_sensitivity_timeout_ms: int | None = Field(default=None, ge=1_000, le=900_000)
     block_compaction_timeout_ms: int | None = Field(default=None, ge=1_000, le=900_000)
     import_reconstruction_timeout_ms: int | None = Field(default=None, ge=1_000, le=900_000)
