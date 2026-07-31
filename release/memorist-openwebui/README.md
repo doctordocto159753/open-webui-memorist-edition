@@ -1,7 +1,7 @@
 # Memorist OpenWebUI Local Package
 
 Package version: `0.2.0-beta.3`
-Status: beta development candidate; storage schema `26`.
+Status: beta development candidate; storage schema `27`.
 
 This self-contained package runs Open WebUI with Memorist Core. Lite uses SQLite.
 Full uses PostgreSQL as the only canonical memory store and FalkorDB as a

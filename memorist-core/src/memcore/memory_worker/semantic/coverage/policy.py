@@ -29,11 +29,6 @@ def disposition_for_unit(
         authority is None
         or authority_count != 1
         or authority.conflicting_authority
-        or authority.gate_decision_uuid is None
-        or authority.route_uuid is None
-        or authority.annotation_uuid is None
-        or authority.route_type is None
-        or authority.route_status is None
         or not authority.privacy_storage_allowed
         or authority.privacy_ceiling in {"sensitive", "secret"}
     ):
@@ -47,14 +42,6 @@ def disposition_for_unit(
                 reasons.append("conflicting_persisted_authority")
             if authority.privacy_ceiling != "normal" or not authority.privacy_storage_allowed:
                 reasons.append("privacy_or_sensitivity_ceiling")
-            if (
-                authority.gate_decision_uuid is None
-                or authority.route_uuid is None
-                or authority.annotation_uuid is None
-                or authority.route_type is None
-                or authority.route_status is None
-            ):
-                reasons.append("incomplete_authority_lineage")
         return DispositionDecision(
             CoverageDisposition.NEEDS_REVIEW,
             tuple(dict.fromkeys(reasons or ["authority_requires_review"])),

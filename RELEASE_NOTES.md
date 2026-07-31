@@ -5,15 +5,23 @@
 - Ordinary `discard`, `retain_raw_only`, and `manual_review` legacy annotations
   no longer veto whole-message model analysis; hard consent, scope, source and
   privacy boundaries remain local and fail closed.
+- Active semantic analysis is `memorist.semantic_candidate_analysis@1.1` and
+  active retrieval planning is `memorist.preflight_planning@2.1`; immutable
+  `1.0` and `2.0` prompt assets remain registered for historical replay.
 - Storage schema 26 adds Message summaries, categories, topics, canonical
   concept aliases, entity/process-stage references, exact-span semantic units,
   retrieval plans and explicit semantic job outcomes for SQLite/PostgreSQL.
+- Storage schema 27 removes the invalid global uniqueness constraint on a
+  normalized alias, so the same surface form can belong to distinct canonical
+  concepts without forcing a merge.
 - Full projects the Message topology into rebuildable FalkorDB. Lite retrieval
-  can use scoped Message evidence when no canonical memory claim exists; Full
-  message-evidence query integration remains incomplete in this Draft.
+  and Full both use scoped Message evidence and persist the audited model
+  retrieval plan alongside canonical-memory and graph retrieval provenance.
 - Preflight defaults to 60 seconds; background processing roles default to 120
   seconds with env overrides. Processing input/context settings default to
   100,000 tokens, but provider-side budget enforcement remains incomplete.
+- Multi-sentence semantic spans receive deterministic persisted fragment
+  authority with exact raw offsets before candidate evidence is written.
 - Assistant completion capture now creates immutable initial versions and
   rejects provider-response identity reuse with different content/attachment.
 
@@ -25,8 +33,9 @@
   semantic candidate analysis v1.
 - Deterministic material coverage, UUIDv5 proposal identity, and replay-safe
   SQLite/PostgreSQL proposal/candidate audit persistence are present.
-- Storage schema is `26`: SQLite migration `0038` and PostgreSQL migration
-  `0025`.
+- Storage schema is `27`: SQLite migration `0039` and PostgreSQL migration
+  `0026` add ambiguity-safe concept aliases after the schema-26 message-first
+  migrations.
 - See `docs/reference/core-memory-processing-walkthrough.md` for the exact
   prompt/response sequence.
 

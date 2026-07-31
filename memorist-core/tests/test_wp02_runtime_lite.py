@@ -400,7 +400,7 @@ def _semantic_output(input_payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": "1.0",
         "prompt_id": "memorist.semantic_candidate_analysis",
-        "prompt_version": "1.0",
+        "prompt_version": "1.1",
         "status": "ok",
         "warnings": [],
         "intent": "preference",

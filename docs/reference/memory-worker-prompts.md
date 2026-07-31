@@ -20,7 +20,7 @@ Each accepted candidate item must carry evidence with `annotation_uuid`, `route_
 
 ## Semantic candidate analysis v1
 
-`memorist.semantic_candidate_analysis@1.0` is a separate whole-message prompt;
+`memorist.semantic_candidate_analysis@1.1` is a separate whole-message prompt;
 it does not modify Prompt Pack `2.0` or historical Jakobson contracts. It sees
 the current raw message, `TextEnvelope` v3, and at most two prior eligible text
 units (six only when non-authoritative dependency hints request expansion).

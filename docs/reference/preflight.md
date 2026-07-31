@@ -4,8 +4,10 @@ Preflight is the send-time path that decides whether Memorist should attach memo
 
 ```text
 current message
--> retrieval plan
+-> memorist.preflight_planning@2.1
+-> persisted audited retrieval plan
 -> local candidate generation
+-> canonical Memory and scoped Message Evidence fusion
 -> ranking and safety filtering
 -> token budget decision
 -> Memory Context Attachment
@@ -14,6 +16,12 @@ current message
 ## Failure Behavior
 
 The integration is fail-open by default. If preflight times out, the writer queue is under pressure, or attachment creation is not useful for the current model context, Open WebUI receives the original request without memory context.
+
+The managed integration default is 60 seconds. `MEMORIST_PREFLIGHT_TIMEOUT_MS`
+can override it. Lite and Full use the same typed planning contract and persist
+the accepted plan in `model_retrieval_plans`; Full stores canonical retrieval
+and Message Evidence provenance in PostgreSQL and may add rebuildable graph
+signals from FalkorDB.
 
 Preflight can return degraded statuses such as:
 

@@ -23,7 +23,7 @@ class MemoristIntegrationConfig:
     core_url: str = "http://localhost:8777"
     enabled: bool = True
     preflight_enabled: bool = True
-    preflight_timeout_ms: int = 1200
+    preflight_timeout_ms: int = 60_000
     capture_timeout_ms: int = 2500
     control_timeout_ms: int = 15_000
     provider_test_timeout_ms: int = 60_000
@@ -64,7 +64,7 @@ def load_config() -> MemoristIntegrationConfig:
         core_url=os.getenv("MEMORIST_CORE_URL", "http://localhost:8777"),
         enabled=_bool_env("MEMORIST_ENABLED", True),
         preflight_enabled=_bool_env("MEMORIST_PREFLIGHT_ENABLED", True),
-        preflight_timeout_ms=_int_env("MEMORIST_PREFLIGHT_TIMEOUT_MS", 1200),
+        preflight_timeout_ms=_int_env("MEMORIST_PREFLIGHT_TIMEOUT_MS", 60_000),
         capture_timeout_ms=_int_env("MEMORIST_CAPTURE_TIMEOUT_MS", 2500),
         control_timeout_ms=_int_env("MEMORIST_CONTROL_TIMEOUT_MS", 15_000),
         provider_test_timeout_ms=_int_env("MEMORIST_PROVIDER_TEST_TIMEOUT_MS", 60_000),

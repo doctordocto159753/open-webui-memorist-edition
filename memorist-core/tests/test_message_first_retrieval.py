@@ -19,6 +19,31 @@ from memcore.storage.sqlite import connect
 from memcore.validators.ijson import dump_ijson
 
 
+def test_ambiguous_alias_does_not_merge_distinct_concepts(tmp_path: Path) -> None:
+    connection = connect(tmp_path / "ambiguous-alias.sqlite")
+    apply_migrations(connection)
+    now = utc_now()
+    connection.executemany(
+        "INSERT INTO canonical_concepts (concept_uuid, canonical_label, created_at) "
+        "VALUES (?, ?, ?)",
+        [
+            ("concept-a", "adaptive bitrate control", now),
+            ("concept-b", "activity based costing", now),
+        ],
+    )
+    connection.executemany(
+        "INSERT INTO concept_aliases (concept_uuid, alias, normalized_alias) "
+        "VALUES (?, 'ABC', 'abc')",
+        [("concept-a",), ("concept-b",)],
+    )
+    rows = connection.execute(
+        "SELECT concept_uuid FROM concept_aliases WHERE normalized_alias = 'abc' "
+        "ORDER BY concept_uuid"
+    ).fetchall()
+    assert [row[0] for row in rows] == ["concept-a", "concept-b"]
+    connection.close()
+
+
 def test_scf_stage_three_uses_alias_ordinal_and_message_evidence(tmp_path: Path) -> None:
     connection = connect(tmp_path / "scf.sqlite")
     apply_migrations(connection)

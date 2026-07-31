@@ -10,8 +10,9 @@ from memcore.models import ScoredMemoryItem
 class MessageEvidenceRetriever:
     """Execute a model-proposed plan against scoped canonical message semantics."""
 
-    def __init__(self, connection: Any) -> None:
+    def __init__(self, connection: Any, *, postgres: bool = False) -> None:
         self.connection = connection
+        self.postgres = postgres
 
     def retrieve(
         self,
@@ -46,18 +47,25 @@ class MessageEvidenceRetriever:
             if isinstance(value, str) and value.strip()
         }
         stage_ordinal = query_understanding.get("stage_ordinal")
-        rows = self.connection.execute(
-            """
+        aggregate = (
+            "STRING_AGG(DISTINCT {value}::text, ',')"
+            if self.postgres
+            else "GROUP_CONCAT(DISTINCT {value})"
+        )
+        deleted_predicate = (
+            "message.is_deleted = FALSE" if self.postgres else "message.is_deleted = 0"
+        )
+        sql = """
             SELECT analysis.semantic_analysis_uuid, analysis.message_uuid,
                    analysis.message_version_uuid, analysis.one_line_summary,
                    analysis.primary_topic, analysis.secondary_topic,
                    analysis.source_authority, analysis.epistemic_status,
                    analysis.temporal_status, analysis.importance, analysis.created_at,
                    message.raw_text,
-                   GROUP_CONCAT(DISTINCT alias.normalized_alias) AS concept_aliases,
-                   GROUP_CONCAT(DISTINCT process.process_label) AS process_labels,
-                   GROUP_CONCAT(DISTINCT process.stage_ordinal) AS stage_ordinals,
-                   GROUP_CONCAT(DISTINCT entity.canonical_name) AS entity_names
+                   {concept_aliases} AS concept_aliases,
+                   {process_labels} AS process_labels,
+                   {stage_ordinals} AS stage_ordinals,
+                   {entity_names} AS entity_names
             FROM message_semantic_analyses analysis
             JOIN messages message ON message.message_uuid = analysis.message_uuid
             JOIN sessions source_session ON source_session.session_uuid = message.session_uuid
@@ -71,13 +79,13 @@ class MessageEvidenceRetriever:
             WHERE analysis.message_uuid <> ?
               AND analysis.status IN ('succeeded', 'partial')
               AND analysis.erased_at IS NULL
-              AND message.is_deleted = 0
+              AND {deleted_predicate}
               AND message.visibility = 'visible'
               AND message.redaction_status = 'none'
               AND source_session.workspace_uuid = ?
               AND (
                 source_session.project_uuid = ?
-                OR (? IS NULL AND source_session.project_uuid IS NULL)
+                OR (CAST(? AS TEXT) IS NULL AND source_session.project_uuid IS NULL)
               )
               AND analysis.user_uuid = ?
               AND analysis.raw_text_hash = message.content_hash
@@ -90,10 +98,18 @@ class MessageEvidenceRetriever:
                   ORDER BY version.version_number DESC LIMIT 1
                 )
               )
-            GROUP BY analysis.semantic_analysis_uuid
+            GROUP BY analysis.semantic_analysis_uuid, message.raw_text
             ORDER BY analysis.created_at DESC
             LIMIT 100
-            """,
+            """.format(
+            concept_aliases=aggregate.format(value="alias.normalized_alias"),
+            process_labels=aggregate.format(value="process.process_label"),
+            stage_ordinals=aggregate.format(value="process.stage_ordinal"),
+            entity_names=aggregate.format(value="entity.canonical_name"),
+            deleted_predicate=deleted_predicate,
+        )
+        rows = self.connection.execute(
+            sql,
             (
                 input_message_uuid,
                 scope["workspace_uuid"],
@@ -124,10 +140,21 @@ class MessageEvidenceRetriever:
             score += min(0.05, float(row["importance"] or 0) * 0.05)
             ranked.append((score, row))
         ranked.sort(key=lambda pair: pair[0], reverse=True)
-        return [_to_scored(row, score) for score, row in ranked[:limit]]
+        scope_type = "project" if scope["project_uuid"] else "workspace"
+        scope_uuid = scope["project_uuid"] or scope["workspace_uuid"]
+        return [
+            _to_scored(row, score, scope_type=scope_type, scope_uuid=scope_uuid)
+            for score, row in ranked[:limit]
+        ]
 
 
-def _to_scored(row: Any, score: float) -> ScoredMemoryItem:
+def _to_scored(
+    row: Any,
+    score: float,
+    *,
+    scope_type: str,
+    scope_uuid: str | None,
+) -> ScoredMemoryItem:
     current = str(row["temporal_status"]) not in {
         "historical",
         "satisfied",
@@ -140,7 +167,8 @@ def _to_scored(row: Any, score: float) -> ScoredMemoryItem:
         memory_uuid=f"message:{row['message_uuid']}",
         memory_version_uuid=f"message-version:{row['message_version_uuid'] or row['message_uuid']}",
         memory_type="message_evidence",
-        scope_type="project",
+        scope_type=scope_type,
+        scope_uuid=scope_uuid,
         normalized_text=str(row["one_line_summary"] or "message evidence"),
         current=current,
         valid_time_label=str(row["temporal_status"] or "unknown"),

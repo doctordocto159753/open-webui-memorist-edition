@@ -119,9 +119,9 @@ class CandidateProposal(_FrozenStrict):
     explicitness: str
     privacy_ceiling: Literal["normal", "sensitive", "secret"]
     status: str
-    gate_decision_uuid: Annotated[str, Field(min_length=1)]
-    route_uuid: Annotated[str, Field(min_length=1)]
-    annotation_uuid: Annotated[str, Field(min_length=1)]
+    gate_decision_uuid: Annotated[str, Field(min_length=1)] | None
+    route_uuid: Annotated[str, Field(min_length=1)] | None
+    annotation_uuid: Annotated[str, Field(min_length=1)] | None
     prompt_execution_uuid: Annotated[str, Field(min_length=1)]
     context_lineage: tuple[dict[str, Any], ...]
     reason_codes: tuple[str, ...]

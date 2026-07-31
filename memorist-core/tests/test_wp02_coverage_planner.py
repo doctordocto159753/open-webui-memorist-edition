@@ -42,7 +42,7 @@ def _analysis(
         {
             "schema_version": "1.0",
             "prompt_id": "memorist.semantic_candidate_analysis",
-            "prompt_version": "1.0",
+            "prompt_version": "1.1",
             "status": "ok",
             "warnings": warnings or [],
             "semantic_units": [
@@ -126,7 +126,7 @@ def _planner_input(
         ("discard", CoverageDisposition.DURABLE_CANDIDATE),
         ("retain_raw_only", CoverageDisposition.DURABLE_CANDIDATE),
         ("manual_review", CoverageDisposition.DURABLE_CANDIDATE),
-        (None, CoverageDisposition.NEEDS_REVIEW),
+        (None, CoverageDisposition.DURABLE_CANDIDATE),
     ],
 )
 def test_gate_precedence_is_fail_closed(gate: str | None, expected: CoverageDisposition) -> None:
@@ -144,7 +144,7 @@ def test_uncovered_material_splits_at_terminal_authority_boundaries() -> None:
         {
             "schema_version": "1.0",
             "prompt_id": "memorist.semantic_candidate_analysis",
-            "prompt_version": "1.0",
+            "prompt_version": "1.1",
             "status": "abstain",
             "warnings": ["terminal_gate"],
             "semantic_units": [],
@@ -271,7 +271,7 @@ def test_cross_boundary_and_sensitivity_require_review() -> None:
     assert proposals == ()
 
 
-def test_unknown_route_is_unsupported_and_missing_route_needs_review() -> None:
+def test_unknown_or_missing_legacy_route_does_not_veto_semantic_candidate() -> None:
     raw = "Backups stay enabled."
     unknown_plan, _ = plan_candidate_coverage(
         _planner_input(raw, authorities=(_authority(raw, route="not_a_route"),))
@@ -280,7 +280,7 @@ def test_unknown_route_is_unsupported_and_missing_route_needs_review() -> None:
     missing_plan, _ = plan_candidate_coverage(
         _planner_input(raw, authorities=(_authority(raw, route=None),))
     )
-    assert missing_plan.items[0].disposition is CoverageDisposition.NEEDS_REVIEW
+    assert missing_plan.items[0].disposition is CoverageDisposition.DURABLE_CANDIDATE
 
 
 def test_assistant_context_needs_explicit_current_user_ratification() -> None:

@@ -198,7 +198,7 @@ canonical memory.
 
 `memory_extraction` is certified as one ordered bundle:
 `memorist.jakobson_sentence_analysis` v3.0 followed by
-`memorist.semantic_candidate_analysis` v1.0. A single configured profile must
+`memorist.semantic_candidate_analysis` v1.1. A single configured profile must
 return non-empty, strict `ok` responses for both runtime-rendered contracts.
 Generic connectivity, a semantic abstention, or success on only one prompt
 cannot certify the profile. The role manifest and bundle hashes include both

@@ -5,12 +5,12 @@
 
 ```text
 نسخه‌ی توسعه: 0.2.0-beta.3
-نسخه‌ی storage schema: 26
+نسخه‌ی storage schema: 27
 SQLite migration head: 0038_message_first_semantics.sql
 PostgreSQL migration head: 0025_message_first_semantics.sql
 Prompt Pack: 2.0
 Jakobson: memorist.jakobson_sentence_analysis 3.0
-Semantic: memorist.semantic_candidate_analysis 1.0
+Semantic: memorist.semantic_candidate_analysis 1.1
 Role manifest: role-contract-manifest-v3
 ```
 

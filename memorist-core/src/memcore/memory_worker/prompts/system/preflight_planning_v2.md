@@ -1,5 +1,5 @@
 Prompt ID: memorist.preflight_planning
-Prompt Version: 2.0
+Prompt Version: 2.1
 Allowed model role: preflight
 
 Interpret the retrieval query and plan Memory Context Attachment before the main chat request.

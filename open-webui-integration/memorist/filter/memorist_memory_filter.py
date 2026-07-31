@@ -34,7 +34,7 @@ class Filter:
         debug: bool = False
         retrieval_mode: str = os.getenv("MEMORIST_RETRIEVAL_MODE", "standard")
         token_budget: int = int(os.getenv("MEMORIST_ATTACHMENT_TOKEN_BUDGET", "1800"))
-        timeout_ms: int = int(os.getenv("MEMORIST_PREFLIGHT_TIMEOUT_MS", "1200"))
+        timeout_ms: int = int(os.getenv("MEMORIST_PREFLIGHT_TIMEOUT_MS", "60000"))
 
     def __init__(self) -> None:
         self.valves = self.Valves()

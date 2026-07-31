@@ -418,6 +418,16 @@ def test_load_config_reads_current_environment(monkeypatch) -> None:
     assert loaded.preflight_timeout_ms == 3456
 
 
+def test_load_config_uses_sixty_second_preflight_default(monkeypatch) -> None:
+    config_module = importlib.import_module("shared.config")
+    monkeypatch.delenv("MEMORIST_PREFLIGHT_TIMEOUT_MS", raising=False)
+
+    loaded = config_module.load_config()
+
+    assert loaded.preflight_timeout_ms == 60_000
+    assert _module().Filter.Valves().timeout_ms == 60_000
+
+
 def test_parser_handles_temp_chat_and_model_metadata() -> None:
     parser = importlib.import_module("shared.payload_parser")
     body = {

@@ -2,7 +2,7 @@
 
 Package version: `0.2.0-beta.3`
 
-Storage schema version: `26`
+Storage schema version: `27`
 
 Current development line: **WP02 semantic candidate authority**.
 

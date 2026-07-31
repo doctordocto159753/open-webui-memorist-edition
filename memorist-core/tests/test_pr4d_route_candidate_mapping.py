@@ -8,6 +8,7 @@ from memcore.memory_worker.semantic import (
     CandidateAuthorityContext,
     CanonicalRouteReference,
     candidate_mapping_for_route,
+    candidate_mapping_for_semantic_unit,
 )
 from memcore.models import (
     CandidateStatus,
@@ -44,6 +45,26 @@ def test_route_candidate_mapper_projects_route_type_to_candidate_shape() -> None
 
 def test_route_candidate_mapper_blocks_ignore_route() -> None:
     assert candidate_mapping_for_route(MemorySignalRouteType.IGNORE, "hello") is None
+
+
+def test_structural_unit_uses_model_memory_kind_without_text_heuristics() -> None:
+    expected = {
+        "Instruction": CandidateType.INSTRUCTION,
+        "Preference": CandidateType.PREFERENCE,
+        "Decision": CandidateType.FACT,
+        "Constraint": CandidateType.CONSTRAINT,
+        "LearningGoal": CandidateType.GOAL,
+        "Feedback": CandidateType.FEEDBACK,
+    }
+    for memory_kind, candidate_type in expected.items():
+        mapping = candidate_mapping_for_semantic_unit(
+            "table_row",
+            "Ù…ØªÙ† Ø³Ø§Ø®ØªØ§Ø±ÛŒ Ø¨Ø¯ÙˆÙ† Ú©Ù„ÛŒØ¯ÙˆØ§Ú˜Ù‡ Ø§Ù†Ú¯Ù„ÛŒØ³ÛŒ",
+            message_uuid="message-structural",
+            memory_kind=memory_kind,
+        )
+        assert mapping is not None
+        assert mapping.candidate_type is candidate_type
 
 
 def test_candidate_extractor_uses_explicit_route_mapping_when_classifier_abstains() -> None:

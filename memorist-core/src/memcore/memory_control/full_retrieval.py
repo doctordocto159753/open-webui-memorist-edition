@@ -13,8 +13,29 @@ from memcore.config import Settings
 from memcore.graph.falkordb import FalkorDBClient
 from memcore.memory_control.policy import MemoristTurnPolicy
 from memcore.memory_control.repository import MemoryControlRepository
-from memcore.models import PreflightResponse, PreflightStatus, ScoredMemoryItem, new_uuid, utc_now
-from memcore.preflight import PreflightRequest
+from memcore.memory_worker.prompts.registry import validate_prompt_execution
+from memcore.memory_worker.prompts.versions import (
+    PREFLIGHT_PLANNING_PROMPT_ID,
+    PREFLIGHT_PLANNING_VERSION,
+)
+from memcore.model_control.stage_invocation import StageInvocationRequest, StageInvoker
+from memcore.model_control.storage import model_control_repository
+from memcore.models import (
+    ModelRole,
+    PreflightResponse,
+    PreflightStatus,
+    ScoredMemoryItem,
+    new_uuid,
+    utc_now,
+)
+from memcore.preflight import (
+    PreflightRequest,
+    _preflight_input_payload,
+    _query_understanding,
+    _valid_preflight_planning_output,
+    persist_model_retrieval_plan,
+)
+from memcore.retrieval.message_evidence import MessageEvidenceRetriever
 from memcore.validators.ijson import dump_ijson
 
 
@@ -92,9 +113,32 @@ class FullPostgresPreflightService:
                 now,
             ),
         )
-        canonical = self._canonical_candidates(scope, limit=30)
+        query_request = request.model_copy(
+            update={"recent_conversation_text": str(scope["raw_text"] or "")}
+        )
+        query_understanding = self._run_preflight_model(
+            query_request,
+            retrieval_run_uuid=run_uuid,
+            effective_token_budget=budget.effective_token_budget,
+            scope=scope,
+        )
+        persist_model_retrieval_plan(
+            self.connection,
+            retrieval_run_uuid=run_uuid,
+            request=query_request,
+            query_understanding=query_understanding,
+            postgres=True,
+        )
+        canonical = self._canonical_candidates(
+            scope,
+            limit=30,
+            query_understanding=query_understanding,
+        )
         active_blocks = self._active_blocks(scope)
-        graph_rows, graph_status, degraded_reason = self._graph_candidates(scope)
+        graph_rows, graph_status, degraded_reason = self._graph_candidates(
+            scope,
+            query_understanding=query_understanding,
+        )
         if graph_status == "degraded" and not self.settings.allow_full_graph_degraded:
             self.connection.execute(
                 """
@@ -113,6 +157,15 @@ class FullPostgresPreflightService:
             self.connection.commit()
             raise RuntimeError(f"Full graph retrieval unavailable: {degraded_reason or 'unknown'}")
         selected = self._validate_and_merge(scope, canonical, graph_rows)
+        message_evidence = MessageEvidenceRetriever(
+            self.connection,
+            postgres=True,
+        ).retrieve(
+            session_uuid=request.session_uuid,
+            input_message_uuid=request.input_message_uuid,
+            query_understanding=query_understanding,
+        )
+        selected = _merge_scored_items(selected, message_evidence, limit=12)
         attachment_uuid: str | None = None
         rendered: str | None = None
         token_count = 0
@@ -214,8 +267,13 @@ class FullPostgresPreflightService:
             raise PermissionError("workspace scope mismatch")
         return dict(row)
 
-    def _canonical_candidates(self, scope: dict[str, Any], limit: int) -> list[dict[str, Any]]:
-        terms = _query_terms(str(scope["raw_text"] or ""))
+    def _canonical_candidates(
+        self,
+        scope: dict[str, Any],
+        limit: int,
+        query_understanding: dict[str, object] | None = None,
+    ) -> list[dict[str, Any]]:
+        terms = _semantic_query_terms(str(scope["raw_text"] or ""), query_understanding)
         predicates = " OR ".join("lower(mv.normalized_text) LIKE ?" for _ in terms) or "TRUE"
         params: list[Any] = [f"%{term}%" for term in terms]
         params.extend(
@@ -253,7 +311,10 @@ class FullPostgresPreflightService:
         return [dict(row) for row in rows]
 
     def _graph_candidates(
-        self, scope: dict[str, Any]
+        self,
+        scope: dict[str, Any],
+        *,
+        query_understanding: dict[str, object] | None = None,
     ) -> tuple[list[dict[str, str]], str, str | None]:
         if self.settings.graph_backend != "falkordb":
             return [], "degraded", "graph_backend_disabled"
@@ -266,12 +327,59 @@ class FullPostgresPreflightService:
         try:
             rows = client.query_memory_versions(
                 workspace_uuid=str(scope["workspace_uuid"]),
-                terms=_query_terms(str(scope["raw_text"] or "")),
+                terms=_semantic_query_terms(
+                    str(scope["raw_text"] or ""),
+                    query_understanding,
+                ),
                 limit=10,
             )
             return rows, "healthy", None
         except Exception as error:
             return [], "degraded", f"graph_query_failed:{type(error).__name__}"
+
+    def _run_preflight_model(
+        self,
+        request: PreflightRequest,
+        *,
+        retrieval_run_uuid: str,
+        effective_token_budget: int,
+        scope: dict[str, Any],
+    ) -> dict[str, object] | None:
+        payload = _preflight_input_payload(request, effective_token_budget)
+
+        def validate(output: dict[str, Any]) -> None:
+            validate_prompt_execution(
+                PREFLIGHT_PLANNING_PROMPT_ID,
+                PREFLIGHT_PLANNING_VERSION,
+                payload,
+                output,
+            )
+
+        result = StageInvoker(
+            self.connection,
+            model_control_repository(self.connection, self.settings),
+            postgres=True,
+        ).invoke_structured(
+            StageInvocationRequest(
+                role=ModelRole.PREFLIGHT,
+                stage="preflight_planning",
+                source_type="retrieval_run",
+                source_uuid=retrieval_run_uuid,
+                workspace_uuid=str(scope["workspace_uuid"]),
+                project_uuid=(str(scope["project_uuid"]) if scope["project_uuid"] else None),
+                session_uuid=request.session_uuid,
+                message_uuid=request.input_message_uuid,
+                prompt_id=PREFLIGHT_PLANNING_PROMPT_ID,
+                prompt_version=PREFLIGHT_PLANNING_VERSION,
+                timeout_ms=self.settings.preflight_timeout_ms,
+                input_payload=payload,
+            ),
+            validator=validate,
+            deterministic_output=lambda _payload: _valid_preflight_planning_output(
+                "ok", effective_token_budget
+            ),
+        )
+        return _query_understanding(result.output or {})
 
     def _active_blocks(self, scope: dict[str, Any]) -> list[dict[str, Any]]:
         rows = self.connection.execute(
@@ -526,6 +634,34 @@ class FullPostgresPreflightService:
         )
         for rank, item in enumerate(selected, start=1):
             trace = item.debug_score_trace or {}
+            if item.memory_type == "message_evidence":
+                source_uuid = item.memory_uuid.removeprefix("message:")
+                self.connection.execute(
+                    """
+                    INSERT INTO memorist_retrieval_sources (
+                        retrieval_source_uuid, retrieval_run_uuid, attachment_uuid,
+                        source_type, source_uuid, workspace_uuid, provenance_ijson,
+                        created_at, schema_version
+                    ) VALUES (?, ?, ?, 'message_semantics', ?, ?, ?, ?, 1)
+                    ON CONFLICT (retrieval_run_uuid, source_type, source_uuid) DO NOTHING
+                    """,
+                    (
+                        new_uuid(),
+                        run_uuid,
+                        attachment_uuid,
+                        source_uuid,
+                        scope["workspace_uuid"],
+                        dump_ijson(
+                            {
+                                "canonical_store": "postgres",
+                                "source": "message_semantics",
+                                "message_version_ref": item.memory_version_uuid,
+                            }
+                        ),
+                        now,
+                    ),
+                )
+                continue
             self.connection.execute(
                 """
                 INSERT INTO retrieval_candidates (
@@ -596,13 +732,13 @@ class FullPostgresPreflightService:
                 ("memory_signal_route", "memory_signal_route_uuid"),
                 ("memory_candidate", "memory_candidate_uuid"),
             ):
-                source_uuid = trace.get(key)
-                if source_uuid:
+                graph_source_uuid = trace.get(key)
+                if graph_source_uuid:
                     self._insert_source(
                         run_uuid,
                         attachment_uuid,
                         source_type,
-                        str(source_uuid),
+                        str(graph_source_uuid),
                         scope,
                         item,
                         now,
@@ -677,6 +813,41 @@ def _query_terms(query: str) -> list[str]:
             if len(term) >= 3
         )
     )[:8]
+
+
+def _semantic_query_terms(
+    raw_query: str,
+    query_understanding: dict[str, object] | None,
+) -> list[str]:
+    semantic_values: list[str] = []
+    if query_understanding:
+        for key in ("primary_topic", "secondary_topic", "process_label"):
+            value = query_understanding.get(key)
+            if isinstance(value, str):
+                semantic_values.append(value)
+        entities = query_understanding.get("entities")
+        if isinstance(entities, list):
+            semantic_values.extend(str(value) for value in entities if isinstance(value, str))
+    return list(
+        dict.fromkeys(
+            term for value in [*semantic_values, raw_query] for term in _query_terms(value)
+        )
+    )[:12]
+
+
+def _merge_scored_items(
+    canonical: list[ScoredMemoryItem],
+    message_evidence: list[ScoredMemoryItem],
+    *,
+    limit: int,
+) -> list[ScoredMemoryItem]:
+    merged: dict[tuple[str, str], ScoredMemoryItem] = {}
+    for item in [*canonical, *message_evidence]:
+        key = (item.memory_uuid, item.memory_version_uuid)
+        current = merged.get(key)
+        if current is None or item.final_score > current.final_score:
+            merged[key] = item
+    return sorted(merged.values(), key=lambda item: item.final_score, reverse=True)[:limit]
 
 
 def _confidence_label(value: float) -> str:

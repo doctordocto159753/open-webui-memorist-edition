@@ -86,6 +86,16 @@ def plan_candidate_coverage(
             )
         ):
             authority = authority.model_copy(update={"conflicting_authority": True})
+        semantic_mapping = (
+            candidate_mapping_for_semantic_unit(
+                unit.unit_type,
+                unit.proposition,
+                message_uuid=planner_input.message_uuid,
+                memory_kind=unit.memory_kind,
+            )
+            if unit.memory_kind is not None
+            else None
+        )
         legacy_mapping = (
             candidate_mapping_for_route(
                 authority.route_type,
@@ -95,11 +105,15 @@ def plan_candidate_coverage(
             if authority is not None
             else None
         )
-        mapping = legacy_mapping or candidate_mapping_for_semantic_unit(
+        # The versioned whole-message semantic contract is authoritative for
+        # meaning. Legacy routes are compatibility evidence, never a veto or
+        # semantic override.
+        historical_unit_mapping = candidate_mapping_for_semantic_unit(
             unit.unit_type,
             unit.proposition,
             message_uuid=planner_input.message_uuid,
         )
+        mapping = semantic_mapping or legacy_mapping or historical_unit_mapping
         unresolved = any(
             analysis.references[index].status != "resolved" for index in unit_reference_indexes
         ) or _dependency_hint_without_reference(
@@ -155,18 +169,18 @@ def plan_candidate_coverage(
                     raw_start=unit.raw_start,
                     raw_end=unit.raw_end,
                     route_type=(
-                        str(authority.route_type)
-                        if legacy_mapping is not None
-                        else mapping.route_type.value
+                        mapping.route_type.value
+                        if semantic_mapping is not None
+                        else str(authority.route_type)
                     ),
                     route_status=(
-                        str(authority.route_status)
-                        if legacy_mapping is not None
-                        else mapping.status.value
+                        mapping.status.value
+                        if semantic_mapping is not None
+                        else str(authority.route_status)
                     ),
                     # Preserve historical proposal identities while treating
                     # the gate as audit metadata rather than semantic veto.
-                    gate_decision=str(authority.gate_decision),
+                    gate_decision=str(authority.gate_decision or "semantic_model_led"),
                     source_authority=provenance.source_authority.value,
                     coverage_disposition=CoverageDisposition.DURABLE_CANDIDATE.value,
                 )
@@ -190,9 +204,9 @@ def plan_candidate_coverage(
                     explicitness=provenance.explicitness.value,
                     privacy_ceiling=authority.privacy_ceiling,
                     status=provenance.status.value,
-                    gate_decision_uuid=str(authority.gate_decision_uuid),
-                    route_uuid=str(authority.route_uuid),
-                    annotation_uuid=str(authority.annotation_uuid),
+                    gate_decision_uuid=authority.gate_decision_uuid,
+                    route_uuid=authority.route_uuid,
+                    annotation_uuid=authority.annotation_uuid,
                     prompt_execution_uuid=str(planner_input.semantic_prompt_execution_uuid),
                     context_lineage=_context_lineage(
                         planner_input,

@@ -8,12 +8,13 @@ Current baseline:
 
 ```text
 development release: 0.2.0-beta.3
-storage schema: 26
+storage schema: 27
 SQLite migration head: 0038_message_first_semantics.sql
 PostgreSQL migration head: 0025_message_first_semantics.sql
 Prompt Pack: 2.0
 Jakobson: memorist.jakobson_sentence_analysis 3.0
-Semantic analysis: memorist.semantic_candidate_analysis 1.0
+Semantic analysis: memorist.semantic_candidate_analysis 1.1
+Preflight planning: memorist.preflight_planning 2.1
 role manifest: role-contract-manifest-v3
 ```
 
@@ -164,14 +165,16 @@ capture
 -> existing candidate service
 ```
 
-`discard` and `retain_raw_only` stop before semantic provider execution and
-candidate creation. `manual_review` cannot create automatic candidates.
-Candidate adapters re-read persisted authority immediately before persistence.
+Legacy `discard`, `retain_raw_only`, and `manual_review` values remain audit
+annotations; they do not veto the whole-message semantic contract. Candidate
+adapters re-read persisted source, scope, privacy, and any available legacy
+lineage immediately before persistence.
 
-The model may propose semantic units, propositions, references, relations,
-durability, polarity, and epistemic status. Deterministic code owns route,
-gate, privacy, provenance, evidence acceptance, coverage disposition, identity,
-and writes.
+The model may propose semantic units, structural unit type, memory kind,
+propositions, references, relations, durability, polarity, and epistemic
+status. Deterministic code owns privacy, provenance, evidence acceptance,
+coverage disposition, identity, and writes. Route/gate/Jakobson values are
+optional compatibility metadata, not semantic authority.
 
 ## Complete coverage and deterministic identity
 
@@ -229,11 +232,13 @@ Consolidation is deterministic and idempotent for a candidate UUID.
 
 ## Retrieval and attachment
 
-The deterministic retrieval planner derives query intent and allowed scopes
-from the current message/session. Hybrid generation can use canonical keys,
-active constraints, recent state, FTS, embeddings, and optional graph
-projection. Deterministic scoring records authority, confidence, time, and
-conflict contributions; safe reranking cannot bypass scope.
+The versioned Preflight `2.1` model proposes bounded query understanding; local
+code enforces user/workspace/project scope and persists the plan for audit.
+Hybrid generation can use canonical memory, exact Message Evidence, active
+constraints, FTS, embeddings, and optional graph projection. Lite and Full use
+the same model-led query fields and scope rules. Deterministic scoring records
+authority, confidence, time, and conflict contributions; safe reranking cannot
+bypass scope.
 
 Selection may abstain. The attachment builder applies a dynamic token budget,
 escapes delimiters, marks instruction-like content, records provenance, and

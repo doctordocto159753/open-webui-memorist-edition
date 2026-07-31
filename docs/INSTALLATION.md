@@ -4,7 +4,7 @@ This guide covers running Memorist locally: the Windows-first one-click
 release path, the cross-platform script path, and first-run configuration.
 Developer setup from source lives in [DEVELOPMENT.md](DEVELOPMENT.md).
 
-> **Status:** `0.2.0-beta.3` beta development candidate, storage schema `26`.
+> **Status:** `0.2.0-beta.3` beta development candidate, storage schema `27`.
 > **Lite** uses SQLite. **Full** uses PostgreSQL with FalkorDB as a rebuildable
 > graph projection. Consolidated CI validates both runtime paths and Product
 > E2E on hosted runners; native Windows desktop validation remains separate.
@@ -255,9 +255,9 @@ stage succeeds again.
 - Remote semantic quality depends on the profiles and models you configure.
 
 For failures, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
-# Schema 26 upgrade
+# Schema 27 upgrade
 
-Normal startup applies additive migrations through storage schema `26`.
+Normal startup applies additive migrations through storage schema `27`.
 Schema 24 introduced provider-attempt fencing; schema 25 adds content-free
 semantic coverage and candidate-link audit tables (`0037` SQLite / `0024`
 PostgreSQL). Existing canonical message and memory rows are preserved. Back up
@@ -266,3 +266,6 @@ upgrade step.
 Schema 26 adds message-level semantics, concept aliases, process/stage
 references, semantic outcomes and retrieval plans (`0038` SQLite / `0025`
 PostgreSQL) without duplicating raw message text.
+Schema 27 removes the global uniqueness assumption for normalized concept
+aliases. Distinct, disambiguated concepts may share an acronym; identity still
+comes from the canonical concept label, never from alias text alone.

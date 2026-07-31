@@ -67,16 +67,37 @@ def candidate_mapping_for_semantic_unit(
     text: str,
     *,
     message_uuid: str,
+    memory_kind: str | None = None,
 ) -> RouteCandidateMapping | None:
-    """Map the model's broad unit type when legacy routing has no useful route.
+    """Map the model's semantic kind without re-parsing multilingual text.
 
-    This is deliberately small: it does not infer meaning from text. The model
-    has already classified the unit and supplied its proposition and evidence.
+    ``unit_type`` can describe source structure (heading/list/table/code) while
+    ``memory_kind`` carries meaning. Historical 1.0 outputs have no
+    ``memory_kind``, so the old broad-unit fallback remains replay-compatible.
     """
 
-    if unit_type == "instruction":
+    kind = memory_kind or unit_type
+    if kind == "Instruction" or kind == "instruction":
         route = MemorySignalRouteType.PROMPT_INSTRUCTION
-    elif unit_type in {"statement", "explanation"}:
+    elif kind in {"Need", "LearningGoal"}:
+        route = MemorySignalRouteType.TEAM_OBLIGATION
+    elif kind == "Preference":
+        route = MemorySignalRouteType.USER_PREFERENCE
+    elif kind == "Constraint":
+        route = MemorySignalRouteType.TASK_CONSTRAINT
+    elif kind == "Feedback":
+        route = MemorySignalRouteType.EMOTIONAL_STANCE
+    elif kind in {
+        "Decision",
+        "ProjectArtifact",
+        "ProjectState",
+        "FactClaim",
+        "Hypothesis",
+        "Correction",
+        "Retraction",
+        "statement",
+        "explanation",
+    }:
         route = MemorySignalRouteType.PROJECT_CONTEXT
     else:
         return None

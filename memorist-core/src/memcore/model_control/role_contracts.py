@@ -11,14 +11,16 @@ from memcore.memory_worker.prompts.registry import get_prompt
 from memcore.memory_worker.prompts.versions import (
     JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
     JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
+    PREFLIGHT_PLANNING_PROMPT_ID,
+    PREFLIGHT_PLANNING_VERSION,
     SEMANTIC_CANDIDATE_ANALYSIS_PROMPT_ID,
     SEMANTIC_CANDIDATE_ANALYSIS_VERSION,
 )
 from memcore.model_control.runtime_contracts import runtime_contract_for_role
 from memcore.models import ModelRole
 
-ROLE_CONTRACT_MANIFEST_VERSION = "role-contract-manifest-v3"
-MEMORY_EXTRACTION_BUNDLE_ID = "memory-extraction-contract-bundle-v1"
+ROLE_CONTRACT_MANIFEST_VERSION = "role-contract-manifest-v4"
+MEMORY_EXTRACTION_BUNDLE_ID = "memory-extraction-contract-bundle-v2"
 
 _ROLE_PROMPTS: dict[ModelRole, tuple[str, str] | None] = {
     ModelRole.MAIN_CHAT_OBSERVED: None,
@@ -26,7 +28,7 @@ _ROLE_PROMPTS: dict[ModelRole, tuple[str, str] | None] = {
         JAKOBSON_SENTENCE_ANALYSIS_PROMPT_ID,
         JAKOBSON_SENTENCE_ANALYSIS_ACTIVE_VERSION,
     ),
-    ModelRole.PREFLIGHT: ("memorist.preflight_planning", "2.0"),
+    ModelRole.PREFLIGHT: (PREFLIGHT_PLANNING_PROMPT_ID, PREFLIGHT_PLANNING_VERSION),
     ModelRole.EMBEDDING: None,
     ModelRole.IMPORT_RECONSTRUCTION: ("memorist.import_reconstruction", "2.0"),
     ModelRole.HIGH_CONFIDENCE_EXTRACTION: None,

@@ -108,7 +108,7 @@ def test_abstain_with_units_and_plausible_legacy_shape_are_not_false_green() -> 
     legacy = {
         "schema_version": "1.0",
         "prompt_id": "memorist.semantic_candidate_analysis",
-        "prompt_version": "1.0",
+        "prompt_version": "1.1",
         "status": "ok",
         "warnings": [],
         "items": [],

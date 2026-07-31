@@ -131,7 +131,7 @@ The worker prompt pack lives in `src/memcore/memory_worker/prompts/`. Prompt
 Pack v2 remains the schema-bound package baseline. The ordered
 `memory-extraction-contract-bundle-v1` requires one profile to pass
 `memorist.jakobson_sentence_analysis` v3.0 and
-`memorist.semantic_candidate_analysis` v1.0. Jakobson produces communication
+`memorist.semantic_candidate_analysis` v1.1. Jakobson produces communication
 annotations; the whole-message semantic contract feeds deterministic coverage
 planning. Persisted Jakobson/route/gate records remain compatibility audit data
 and cannot veto ordinary messages before semantic analysis.

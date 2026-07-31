@@ -12,7 +12,7 @@ messages.raw_text
   -> TextEnvelope v3
   -> text_units(exact offsets and hashes)
   -> bounded same-authority context (2 units, or 6 for dependency hints)
-  -> memorist.semantic_candidate_analysis v1.0
+  -> memorist.semantic_candidate_analysis v1.1
   -> Message summary/categories/topics/concepts/entities/process-stage
   -> optional memorist.jakobson_sentence_analysis v3.0 compatibility annotation
   -> strict schema + semantic binding + WP01 exact-evidence validation

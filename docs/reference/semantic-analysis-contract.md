@@ -99,7 +99,8 @@ No absence-of-negation rule may silently mean `affirmed` in canonical memory.
 ## Strict typed output: semantic candidate analysis v1
 
 WP02 implements the closed `memorist.semantic_candidate_analysis` contract,
-version `1.0`, schema name `memorist_semantic_candidate_analysis_v1`. Pydantic
+version `1.1`, schema name `memorist_semantic_candidate_analysis_v1`. Historical
+version `1.0` remains registered only for immutable replay. Pydantic
 strict mode rejects extra, missing, mistyped, and out-of-enum fields before the
 WP01 evidence validator runs.
 

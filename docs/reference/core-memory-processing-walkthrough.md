@@ -5,7 +5,7 @@
 می‌کند. ترتیب زیر از مسیرهای اجرایی موجود در کد استخراج شده است؛ این سند
 طرح آینده یا خلاصه‌ی مفهومیِ مستقل از implementation نیست.
 
-نسخه‌ی مستندشده: `0.2.0-beta.3`، storage schema `26`، semantic candidate
+نسخه‌ی مستندشده: `0.2.0-beta.3`، storage schema `27`، semantic candidate
 contract `1.0`.
 
 ## مثال مکالمه
@@ -287,7 +287,7 @@ message_semantic_units         exact span, kind, epistemic/lifecycle state
 message_entity_references      scoped entity links
 message_process_references     process + stage label/ordinal
 semantic_job_outcomes          semantic meaning of generic job success
-model_retrieval_plans          reserved schema; persistence is not wired yet
+model_retrieval_plans          audited Lite/Full preflight model plan
 ```
 
 نمونه‌ی artifact:
@@ -424,9 +424,9 @@ claim مشخص را با lineage دستیار promote کند.
 ## محدودیت‌های صادقانه‌ی این نسخه
 
 این pass مدل semantic پیام، Message graph، SCF retrieval و evidence fallback را
-در Lite production-integrated کرده است؛ Full projection موجود است ولی Full
-query path هنوز Message evidence را مصرف نمی‌کند. جدول retrieval plan نیز
-فعلاً reserved است و write path ندارد. consolidation موجود هنوز برای همه‌ی عملیات
+در Lite و Full production-integrated کرده است. Full همان query understanding
+مدل را audit می‌کند، `model_retrieval_plans` را می‌نویسد و Message Evidence را
+با provenance نوع `message_semantics` مصرف می‌کند. consolidation موجود هنوز برای همه‌ی عملیات
 `ADD/REINFORCE/UPDATE/SUPERSEDE/CONTRADICT/RETRACT` یک مقایسه‌ی remote مدل‌محور
 جداگانه اجرا نمی‌کند؛ policy/version history فعلی حفظ شده است. provider quota
 scheduler مشترک endpoint+credential+model نیز هنوز به‌طور کامل بین processها

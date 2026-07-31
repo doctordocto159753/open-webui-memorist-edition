@@ -14,16 +14,22 @@ from memcore.memory_worker.prompts.registry import (
     render_prompt,
     validate_prompt_execution,
 )
+from memcore.memory_worker.prompts.versions import (
+    PREFLIGHT_PLANNING_PROMPT_ID,
+    PREFLIGHT_PLANNING_VERSION,
+)
 from memcore.model_control.registry import provider_for_profile
 from memcore.model_control.repository import ModelControlRepository
 from memcore.model_control.resolution import RoleResolutionService
+from memcore.model_control.role_contracts import role_contract_manifest_hash
 from memcore.model_control.schemas import UsageEventCreate
 from memcore.model_control.security import sanitize_error_message
-from memcore.models import ModelRole, PreflightResponse, PreflightStatus
+from memcore.models import ModelRole, PreflightResponse, PreflightStatus, new_uuid, utc_now
 from memcore.repositories import RepositoryError
 from memcore.repositories.retrieval import RetrievalRepository
 from memcore.retrieval.runner import RetrievalRunner
 from memcore.storage.write_actor import get_write_actor
+from memcore.validators.ijson import dump_ijson
 
 
 class PreflightRequest(BaseModel):
@@ -150,6 +156,13 @@ class PreflightService:
                 request,
                 run.retrieval_run_uuid,
                 budget.effective_token_budget,
+            )
+            persist_model_retrieval_plan(
+                self.connection,
+                retrieval_run_uuid=run.retrieval_run_uuid,
+                request=request,
+                query_understanding=query_understanding,
+                postgres=False,
             )
             selection = retrieval_runner.execute(
                 run,
@@ -365,15 +378,15 @@ class PreflightService:
                     raise RuntimeError("preflight processing profile changed during provider call")
             raw_output = dict(output)
             validate_prompt_execution(
-                "memorist.preflight_planning",
-                "2.0",
+                PREFLIGHT_PLANNING_PROMPT_ID,
+                PREFLIGHT_PLANNING_VERSION,
                 input_payload,
                 dict(output),
             )
             latency_ms = _elapsed_ms(started)
             PromptExecutionRepository(self.connection).record_execution(
-                prompt_id="memorist.preflight_planning",
-                prompt_version="2.0",
+                prompt_id=PREFLIGHT_PLANNING_PROMPT_ID,
+                prompt_version=PREFLIGHT_PLANNING_VERSION,
                 model_role=ModelRole.PREFLIGHT,
                 provider_type=provider.provider_type,
                 model_name=provider.model_name,
@@ -420,8 +433,8 @@ class PreflightService:
             latency_ms = _elapsed_ms(started)
             with suppress(Exception):
                 PromptExecutionRepository(self.connection).record_execution(
-                    prompt_id="memorist.preflight_planning",
-                    prompt_version="2.0",
+                    prompt_id=PREFLIGHT_PLANNING_PROMPT_ID,
+                    prompt_version=PREFLIGHT_PLANNING_VERSION,
                     model_role=ModelRole.PREFLIGHT,
                     provider_type=provider.provider_type,
                     model_name=provider.model_name,
@@ -528,8 +541,8 @@ def _output_warnings(output: dict[str, object]) -> list[str]:
 def _valid_preflight_planning_output(status: str, token_budget: int) -> dict[str, object]:
     return {
         "schema_version": "1.0",
-        "prompt_id": "memorist.preflight_planning",
-        "prompt_version": "2.0",
+        "prompt_id": PREFLIGHT_PLANNING_PROMPT_ID,
+        "prompt_version": PREFLIGHT_PLANNING_VERSION,
         "status": status,
         "warnings": [] if status == "ok" else ["preflight provider disabled"],
         "query_understanding": {
@@ -583,9 +596,83 @@ def _preflight_input_payload(request: PreflightRequest, token_budget: int) -> di
 
 
 def _preflight_prompt(input_payload: dict[str, object]) -> str:
-    return render_prompt("memorist.preflight_planning", "2.0", {"PAYLOAD_IJSON": input_payload})
+    return render_prompt(
+        PREFLIGHT_PLANNING_PROMPT_ID,
+        PREFLIGHT_PLANNING_VERSION,
+        {"PAYLOAD_IJSON": input_payload},
+    )
 
 
 def _query_understanding(output: dict[str, object]) -> dict[str, object] | None:
     value = output.get("query_understanding")
     return dict(value) if isinstance(value, dict) else None
+
+
+def persist_model_retrieval_plan(
+    connection: object,
+    *,
+    retrieval_run_uuid: str,
+    request: PreflightRequest,
+    query_understanding: dict[str, object] | None,
+    postgres: bool,
+) -> None:
+    """Persist the model-produced plan as audit data, never as authority."""
+
+    if not query_understanding:
+        return
+    placeholder = "%s" if postgres else "?"
+    scope = connection.execute(  # type: ignore[attr-defined]
+        f"""
+        SELECT session.workspace_uuid, session.project_uuid, actor.user_uuid
+        FROM sessions session
+        LEFT JOIN memorist_session_actors actor
+          ON actor.session_uuid = session.session_uuid
+        WHERE session.session_uuid = {placeholder}
+        """,
+        (request.session_uuid,),
+    ).fetchone()
+    user_uuid = request.user_uuid or (
+        str(scope["user_uuid"]) if scope and scope["user_uuid"] else None
+    )
+    if scope is None or user_uuid is None:
+        return
+    entities = query_understanding.get("entities") or []
+    hints = query_understanding.get("relation_expansion_hints") or []
+    values = (
+        new_uuid(),
+        retrieval_run_uuid,
+        request.input_message_uuid,
+        user_uuid,
+        scope["workspace_uuid"],
+        scope["project_uuid"],
+        query_understanding.get("intent"),
+        query_understanding.get("primary_topic"),
+        query_understanding.get("secondary_topic"),
+        dump_ijson(entities),
+        query_understanding.get("process_label"),
+        query_understanding.get("stage_ordinal"),
+        query_understanding.get("requested_operation"),
+        query_understanding.get("requested_time"),
+        query_understanding.get("expected_answer_type"),
+        dump_ijson(hints),
+        role_contract_manifest_hash(ModelRole.PREFLIGHT),
+        utc_now(),
+    )
+    entity_column = "entities_jsonb" if postgres else "entities_ijson"
+    hints_column = "relation_hints_jsonb" if postgres else "relation_hints_ijson"
+    casts = [placeholder] * len(values)
+    if postgres:
+        casts[9] = f"{placeholder}::jsonb"
+        casts[15] = f"{placeholder}::jsonb"
+    connection.execute(  # type: ignore[attr-defined]
+        f"""
+        INSERT INTO model_retrieval_plans (
+          retrieval_plan_uuid, retrieval_run_uuid, input_message_uuid, user_uuid,
+          workspace_uuid, project_uuid, intent, primary_topic, secondary_topic,
+          {entity_column}, process_label, stage_ordinal, requested_operation,
+          requested_time, expected_answer_type, {hints_column}, contract_hash, created_at
+        ) VALUES ({", ".join(casts)})
+        ON CONFLICT (retrieval_run_uuid) DO NOTHING
+        """,
+        values,
+    )

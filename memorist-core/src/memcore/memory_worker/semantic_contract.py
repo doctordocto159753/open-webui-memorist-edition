@@ -76,7 +76,7 @@ class SemanticContextBoundary(_StrictInput):
 
 class SemanticContractVersions(_StrictInput):
     semantic_input: Literal["memorist.semantic_candidate_input.v1"]
-    semantic_prompt: Literal["1.0"]
+    semantic_prompt: Literal["1.1"]
     # Kept in v1 input identity for replay compatibility. Jakobson is a legacy
     # annotation and no longer authorizes or vetoes this whole-message call.
     jakobson: Literal["3.0"]
@@ -146,7 +146,7 @@ def build_semantic_input(
         boundary=boundary,
         contract_versions=SemanticContractVersions(
             semantic_input="memorist.semantic_candidate_input.v1",
-            semantic_prompt="1.0",
+            semantic_prompt="1.1",
             jakobson="3.0",
             text_envelope="memorist.text.envelope.v3",
             evidence_validator="memorist.text.semantic_evidence_validation.v1",

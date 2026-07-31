@@ -122,7 +122,7 @@ def persist_message_semantics(
                 f"INSERT INTO concept_aliases "
                 f"(concept_uuid, alias, normalized_alias, language) "
                 f"VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}) "
-                f"ON CONFLICT (normalized_alias) DO NOTHING",
+                f"ON CONFLICT (concept_uuid, normalized_alias) DO NOTHING",
                 (concept_uuid, alias, normalized_alias, None),
             )
         connection.execute(
